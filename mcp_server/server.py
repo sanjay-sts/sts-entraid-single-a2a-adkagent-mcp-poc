@@ -247,8 +247,4 @@ async def delete_resource(resource_id: str, ctx: Context = CurrentContext()) -> 
 
 
 if __name__ == "__main__":
-    import uvicorn
-    from fastmcp.server.http import create_http_app
-
-    app = create_http_app(mcp, path="/mcp")
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("MCP_SERVER_PORT", 8002)))
+    mcp.run(transport="sse", host="0.0.0.0", port=int(os.getenv("MCP_SERVER_PORT", 8002)))
