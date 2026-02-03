@@ -1,0 +1,33 @@
+[project]
+name = "identity-aware-agent"
+version = "1.0.0"
+description = "Identity-Aware AI Agent System with three-tier access control"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp[auth]>=2.0.0",
+    "google-adk>=0.1.0",
+    "a2a-sdk>=0.1.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "httpx>=0.26.0",
+    "PyJWT>=2.8.0",
+    "cryptography>=42.0.0",
+    "python-dotenv>=1.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

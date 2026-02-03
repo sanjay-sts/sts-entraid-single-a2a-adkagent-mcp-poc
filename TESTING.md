@@ -6,8 +6,24 @@ This document provides step-by-step instructions for setting up and testing the 
 
 - Python 3.10+
 - Node.js 18+
+- [uv](https://docs.astral.sh/uv/) - Fast Python package installer (recommended)
 - Microsoft Entra ID app registration (see [Entra ID Setup](#entra-id-app-registration-setup))
 - Google API Key for Gemini (for ADK agent)
+
+### Installing uv
+
+```bash
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Windows (winget)
+winget install --id=astral-sh.uv -e
+
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+> **Note**: `uv` is 10-100x faster than pip. If you prefer pip, see [Alternative: Using pip](#alternative-using-pip) section.
 
 ---
 
@@ -159,29 +175,33 @@ REACT_APP_A2A_SERVER_URL=http://localhost:8000
 
 ## Backend Setup
 
-### 1. Create Virtual Environment
+### 1. Create Virtual Environment and Install Dependencies
 
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
 
-# Create virtual environment
-python -m venv venv
+# Create virtual environment and install dependencies (one command)
+uv sync
 
-# Activate (Windows Command Prompt)
-venv\Scripts\activate
-
-# Activate (Windows PowerShell)
-.\venv\Scripts\Activate.ps1
-
-# Activate (Linux/macOS)
-source venv/bin/activate
+# Or step by step:
+uv venv                              # Create .venv
+uv pip install -r requirements.txt   # Install dependencies
 ```
 
-### 2. Install Dependencies
+### 2. Activate Virtual Environment
 
 ```bash
-pip install -r requirements.txt
+# Windows (Command Prompt)
+.venv\Scripts\activate
+
+# Windows (PowerShell)
+.\.venv\Scripts\Activate.ps1
+
+# Linux/macOS
+source .venv/bin/activate
 ```
+
+> **Note**: `uv` creates the virtual environment in `.venv` (not `venv`).
 
 ### 3. Start Backend Services
 
@@ -190,8 +210,11 @@ Open **3 separate terminal windows** and run each service:
 **Terminal 1 - MCP Server (port 8002):**
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
-venv\Scripts\activate
+.venv\Scripts\activate
 python mcp_server/server.py
+
+# Or run directly with uv (no activation needed):
+uv run python mcp_server/server.py
 ```
 
 Expected output:
@@ -205,8 +228,11 @@ INFO:     Uvicorn running on http://0.0.0.0:8002
 **Terminal 2 - ADK Agent (port 8001):**
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
-venv\Scripts\activate
+.venv\Scripts\activate
 python adk_agent/agent.py
+
+# Or run directly with uv (no activation needed):
+uv run python adk_agent/agent.py
 ```
 
 Expected output:
@@ -220,8 +246,11 @@ INFO:     Uvicorn running on http://0.0.0.0:8001
 **Terminal 3 - A2A Gateway (port 8000):**
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
-venv\Scripts\activate
+.venv\Scripts\activate
 python a2a_server/server.py
+
+# Or run directly with uv (no activation needed):
+uv run python a2a_server/server.py
 ```
 
 Expected output:
@@ -294,8 +323,13 @@ Ensure all backend services are running before running tests.
 
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
-venv\Scripts\activate
+
+# Option 1: With activated environment
+.venv\Scripts\activate
 pytest tests/test_access_control.py -v
+
+# Option 2: Using uv run (no activation needed)
+uv run pytest tests/test_access_control.py -v
 ```
 
 ### Test Categories
@@ -328,8 +362,12 @@ pytest tests/test_access_control.py -v
 
 **Solution**:
 ```bash
-venv\Scripts\activate
-pip install -r requirements.txt
+# Reinstall dependencies with uv
+uv sync
+
+# Or activate and install manually
+.venv\Scripts\activate
+uv pip install -r requirements.txt
 ```
 
 #### 3. "CORS error" in browser console
@@ -392,6 +430,45 @@ To test role-based access control:
 
 4. **Blocked User**: Add user's Object ID to `BLOCKED_USERS` in `.env`
    - Cannot access the agent at all (403 at gateway)
+
+---
+
+## Alternative: Using pip
+
+If you prefer to use pip instead of uv:
+
+### Create Virtual Environment
+
+```bash
+cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
+
+# Create virtual environment
+python -m venv venv
+
+# Activate (Windows Command Prompt)
+venv\Scripts\activate
+
+# Activate (Windows PowerShell)
+.\venv\Scripts\Activate.ps1
+
+# Activate (Linux/macOS)
+source venv/bin/activate
+```
+
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Run Services
+
+```bash
+# Each in a separate terminal (after activating venv)
+python mcp_server/server.py
+python adk_agent/agent.py
+python a2a_server/server.py
+```
 
 ---
 
