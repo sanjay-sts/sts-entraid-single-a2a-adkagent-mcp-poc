@@ -41,7 +41,7 @@ AGENT_CARD = {
     "version": "1.0.0",
     "defaultInputModes": ["text/plain"],
     "defaultOutputModes": ["text/plain", "application/json"],
-    "capabilities": {"streaming": True},
+    "capabilities": {"streaming": False},
     "skills": [
         {
             "id": "user_profile",
