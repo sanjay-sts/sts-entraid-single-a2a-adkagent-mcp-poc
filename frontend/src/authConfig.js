@@ -4,8 +4,8 @@ export const msalConfig = {
   auth: {
     clientId: process.env.REACT_APP_ENTRA_CLIENT_ID,
     authority: `https://login.microsoftonline.com/${process.env.REACT_APP_ENTRA_TENANT_ID}`,
-    redirectUri: 'http://localhost:3000',
-    postLogoutRedirectUri: 'http://localhost:3000',
+    redirectUri: 'http://localhost:10003',
+    postLogoutRedirectUri: 'http://localhost:10003',
   },
   cache: {
     cacheLocation: 'localStorage',

@@ -40,8 +40,8 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 
 1. Create an app registration in [Microsoft Entra admin center](https://entra.microsoft.com)
 2. Configure Single-page application redirect URIs:
-   - `http://localhost:3000`
-   - `http://localhost:3000/redirect`
+   - `http://localhost:10003`
+   - `http://localhost:10003/redirect`
 3. Add API permissions: `openid`, `profile`, `User.Read`, `Files.Read`, `Mail.Send`
 4. Enable group claims in Token configuration
 5. Create security groups for Admin, Developer, and Viewer roles
@@ -100,10 +100,10 @@ cd frontend && npm start
 ```
 
 The application will be available at:
-- Frontend: http://localhost:3000
-- A2A Gateway: http://localhost:8000
-- ADK Agent: http://localhost:8001
-- MCP Server: http://localhost:8002
+- Frontend: http://localhost:10003
+- A2A Gateway: http://localhost:10000
+- ADK Agent: http://localhost:10001
+- MCP Server: http://localhost:10002
 
 ## Testing
 

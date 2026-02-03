@@ -3,7 +3,7 @@ import { useMsal, useAccount, AuthenticatedTemplate, UnauthenticatedTemplate } f
 import { InteractionRequiredAuthError } from '@azure/msal-browser';
 import { loginRequest, graphScopes } from './authConfig';
 
-const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:8000';
+const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
 
 function App() {
   return (

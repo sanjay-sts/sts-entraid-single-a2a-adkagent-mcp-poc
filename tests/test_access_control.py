@@ -6,8 +6,8 @@ from datetime import datetime, timezone, timedelta
 import os
 
 # Test configuration
-A2A_URL = os.getenv("A2A_URL", "http://localhost:8000")
-MCP_URL = os.getenv("MCP_URL", "http://localhost:8002")
+A2A_URL = os.getenv("A2A_URL", "http://localhost:10000")
+MCP_URL = os.getenv("MCP_URL", "http://localhost:10002")
 SECRET_KEY = "test-secret"  # For local testing only
 
 # Test group IDs (should match your .env configuration)

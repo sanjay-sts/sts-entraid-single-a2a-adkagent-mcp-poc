@@ -53,8 +53,8 @@ After registration, note these values from the **Overview** page:
 2. Click **Add a platform**
 3. Select **Single-page application** (NOT "Web")
 4. Add these Redirect URIs:
-   - `http://localhost:3000`
-   - `http://localhost:3000/redirect`
+   - `http://localhost:10003`
+   - `http://localhost:10003/redirect`
 5. Click **Configure**
 
 > **Important**: If you previously configured this as a "Web" platform, you need to add it as "Single-page application" for MSAL.js to work correctly.
@@ -141,10 +141,10 @@ VIEWER_GROUP_ID=your-viewer-group-object-id
 BLOCKED_USERS=
 
 # Server Ports
-A2A_SERVER_PORT=8000
-ADK_SERVER_PORT=8001
-MCP_SERVER_PORT=8002
-FRONTEND_PORT=3000
+A2A_SERVER_PORT=10000
+ADK_SERVER_PORT=10001
+MCP_SERVER_PORT=10002
+FRONTEND_PORT=10003
 
 # Google AI API Key (for ADK agent)
 # Get from https://aistudio.google.com/app/apikey
@@ -168,7 +168,7 @@ REACT_APP_ENTRA_CLIENT_ID=your-application-client-id
 REACT_APP_ENTRA_TENANT_ID=your-directory-tenant-id
 
 # Backend Server URL
-REACT_APP_A2A_SERVER_URL=http://localhost:8000
+REACT_APP_A2A_SERVER_URL=http://localhost:10000
 ```
 
 ---
@@ -206,7 +206,7 @@ source .venv/bin/activate
 
 Open **3 separate terminal windows** and run each service:
 
-**Terminal 1 - MCP Server (port 8002):**
+**Terminal 1 - MCP Server (port 10002):**
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
 .venv\Scripts\activate
@@ -221,10 +221,10 @@ Expected output:
 INFO:     Started server process [xxxx]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8002
+INFO:     Uvicorn running on http://0.0.0.0:10002
 ```
 
-**Terminal 2 - ADK Agent (port 8001):**
+**Terminal 2 - ADK Agent (port 10001):**
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
 .venv\Scripts\activate
@@ -239,10 +239,10 @@ Expected output:
 INFO:     Started server process [xxxx]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8001
+INFO:     Uvicorn running on http://0.0.0.0:10001
 ```
 
-**Terminal 3 - A2A Gateway (port 8000):**
+**Terminal 3 - A2A Gateway (port 10000):**
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
 .venv\Scripts\activate
@@ -257,7 +257,7 @@ Expected output:
 INFO:     Started server process [xxxx]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:10000
 ```
 
 ---
@@ -279,7 +279,7 @@ cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc\frontend
 npm start
 ```
 
-This will automatically open http://localhost:3000 in your browser.
+This will automatically open http://localhost:10003 in your browser.
 
 ---
 
@@ -291,21 +291,21 @@ Test that all services are running:
 
 ```bash
 # Check A2A Gateway
-curl http://localhost:8000/health
+curl http://localhost:10000/health
 # Expected: {"status":"healthy","service":"a2a-gateway"}
 
 # Check ADK Agent
-curl http://localhost:8001/health
-# Expected: {"status":"healthy","agent":"identity-aware-agent"}
+curl http://localhost:10001/health
+# Expected: {"status":"healthy","agent":"identity_aware_agent"}
 
 # Check Agent Card (A2A discovery)
-curl http://localhost:8000/.well-known/agent.json
+curl http://localhost:10000/.well-known/agent.json
 # Expected: JSON with agent name, skills, and security schemes
 ```
 
 ### Frontend Verification
 
-1. Open http://localhost:3000
+1. Open http://localhost:10003
 2. You should see the login page with "Sign In with Microsoft" button
 3. Click the button - a Microsoft login popup should appear
 4. After login, you should see the chat interface
@@ -353,7 +353,7 @@ uv run pytest tests/test_access_control.py -v
 **Solution**:
 1. Go to App Registration > Authentication
 2. Ensure platform is **Single-page application** (not Web)
-3. Add `http://localhost:3000` as a redirect URI
+3. Add `http://localhost:10003` as a redirect URI
 
 #### 2. "Module not found" errors when starting Python services
 
@@ -373,7 +373,7 @@ uv pip install -r requirements.txt
 
 **Cause**: Frontend trying to access backend on different port.
 
-**Solution**: Ensure A2A server is running on port 8000 and `REACT_APP_A2A_SERVER_URL=http://localhost:8000` in `frontend/.env`.
+**Solution**: Ensure A2A server is running on port 10000 and `REACT_APP_A2A_SERVER_URL=http://localhost:10000` in `frontend/.env`.
 
 #### 4. "401 Unauthorized" when chatting
 
@@ -405,10 +405,10 @@ uv pip install -r requirements.txt
 
 | Service | Port | URL |
 |---------|------|-----|
-| Frontend (React) | 3000 | http://localhost:3000 |
-| A2A Gateway | 8000 | http://localhost:8000 |
-| ADK Agent | 8001 | http://localhost:8001 |
-| MCP Server | 8002 | http://localhost:8002 |
+| Frontend (React) | 10003 | http://localhost:10003 |
+| A2A Gateway | 10000 | http://localhost:10000 |
+| ADK Agent | 10001 | http://localhost:10001 |
+| MCP Server | 10002 | http://localhost:10002 |
 
 ---
 

@@ -18,8 +18,8 @@ ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 ENTRA_CLIENT_ID = os.getenv("ENTRA_CLIENT_ID")
 JWKS_URI = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys"
 ISSUER = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0"
-A2A_SERVER_PORT = int(os.getenv("A2A_SERVER_PORT", 8000))
-ADK_SERVER_URL = f"http://localhost:{os.getenv('ADK_SERVER_PORT', 8001)}"
+A2A_SERVER_PORT = int(os.getenv("A2A_SERVER_PORT", 10000))
+ADK_SERVER_URL = f"http://localhost:{os.getenv('ADK_SERVER_PORT', 10001)}"
 FRONTEND_PORT = os.getenv("FRONTEND_PORT", 3000)
 
 # Access control configuration
@@ -149,7 +149,7 @@ app = FastAPI(title="A2A Identity Gateway")
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"http://localhost:{FRONTEND_PORT}", "http://localhost:3000"],
+    allow_origins=[f"http://localhost:{FRONTEND_PORT}", "http://localhost:10003"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

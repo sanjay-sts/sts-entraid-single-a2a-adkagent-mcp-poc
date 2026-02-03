@@ -250,6 +250,6 @@ if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
         host="0.0.0.0",
-        port=int(os.getenv("MCP_SERVER_PORT", 8002)),
-        path="/mcp"  # Endpoint: http://localhost:8002/mcp
+        port=int(os.getenv("MCP_SERVER_PORT", 10002)),
+        path="/mcp"  # Endpoint: http://localhost:10002/mcp
     )

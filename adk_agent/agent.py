@@ -19,9 +19,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-MCP_SERVER_URL = f"http://localhost:{os.getenv('MCP_SERVER_PORT', 8002)}/mcp"
+MCP_SERVER_URL = f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}/mcp"
 ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
-ADK_SERVER_PORT = int(os.getenv("ADK_SERVER_PORT", 8001))
+ADK_SERVER_PORT = int(os.getenv("ADK_SERVER_PORT", 10001))
 
 
 class IdentityAwareAgent:
