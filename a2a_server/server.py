@@ -98,19 +98,20 @@ class TokenValidator:
         logger.debug("Clearing JWKS cache")
         self._jwks_cache = {}
 
-    async def _find_key(self, kid: str):
-        """Find the RSA key matching the kid from any JWKS endpoint."""
+    async def _get_all_keys(self, kid: str):
+        """Get all RSA keys matching the kid from all JWKS endpoints."""
+        keys = []
         for uri in JWKS_URIS:
             try:
                 jwks = await self.get_jwks(uri)
                 for key in jwks.get("keys", []):
                     if key.get("kid") == kid:
                         logger.debug(f"Found key {kid} in {uri}")
-                        return jwt.algorithms.RSAAlgorithm.from_jwk(key)
+                        keys.append((uri, jwt.algorithms.RSAAlgorithm.from_jwk(key)))
             except Exception as e:
                 logger.debug(f"Failed to fetch/parse JWKS from {uri}: {e}")
                 continue
-        return None
+        return keys
 
     async def validate(self, token: str) -> dict:
         """Validate token and return claims."""
@@ -127,44 +128,57 @@ class TokenValidator:
         kid = unverified_header.get("kid")
         logger.debug(f"Token kid: {kid}")
 
-        # Find the key
-        rsa_key = await self._find_key(kid)
-        if not rsa_key:
+        # Get all matching keys from all endpoints
+        keys = await self._get_all_keys(kid)
+        if not keys:
             # Clear cache and retry
             logger.debug("Key not found, clearing cache and retrying")
             self.clear_cache()
-            rsa_key = await self._find_key(kid)
+            keys = await self._get_all_keys(kid)
 
-        if not rsa_key:
+        if not keys:
             logger.error(f"Key {kid} not found in any JWKS endpoint")
             raise ValueError("Key not found in JWKS")
 
-        try:
-            # Accept both app's client ID and Microsoft Graph as valid audiences
-            valid_audiences = [
-                ENTRA_CLIENT_ID,
-                "https://graph.microsoft.com",
-                "00000003-0000-0000-c000-000000000000",  # Graph API's app ID
-            ]
-            payload = jwt.decode(
-                token,
-                rsa_key,
-                algorithms=["RS256"],
-                audience=valid_audiences,
-                issuer=VALID_ISSUERS,  # Accept multiple issuers
-            )
-            logger.info(f"Token validated successfully for user: {payload.get('preferred_username', payload.get('unique_name', payload.get('sub')))}")
-            logger.debug(f"Token claims: aud={payload.get('aud')}, iss={payload.get('iss')}, groups={payload.get('groups', [])}")
-            return payload
-        except jwt.InvalidAudienceError:
-            logger.error(f"Invalid audience: token aud={token_aud}, expected one of {valid_audiences}")
-            raise
-        except jwt.InvalidIssuerError:
-            logger.error(f"Invalid issuer: token iss={token_iss}, expected one of {VALID_ISSUERS}")
-            raise
-        except Exception as e:
-            logger.error(f"Token validation error: {type(e).__name__}: {e}")
-            raise
+        # Accept your custom API audience (tokens with api://{client-id}/access_as_user scope)
+        valid_audiences = [
+            ENTRA_CLIENT_ID,
+            f"api://{ENTRA_CLIENT_ID}",  # Custom API scope audience
+        ]
+
+        # Try each key until one works
+        last_error = None
+        for uri, rsa_key in keys:
+            try:
+                payload = jwt.decode(
+                    token,
+                    rsa_key,
+                    algorithms=["RS256"],
+                    audience=valid_audiences,
+                    issuer=VALID_ISSUERS,  # Accept multiple issuers
+                )
+                logger.info(f"Token validated successfully using key from {uri}")
+                logger.info(f"User: {payload.get('preferred_username', payload.get('unique_name', payload.get('sub')))}")
+                logger.debug(f"Token claims: aud={payload.get('aud')}, iss={payload.get('iss')}, groups={payload.get('groups', [])}")
+                return payload
+            except jwt.InvalidSignatureError as e:
+                logger.debug(f"Signature verification failed with key from {uri}, trying next...")
+                last_error = e
+                continue
+            except jwt.InvalidAudienceError:
+                logger.error(f"Invalid audience: token aud={token_aud}, expected one of {valid_audiences}")
+                raise
+            except jwt.InvalidIssuerError:
+                logger.error(f"Invalid issuer: token iss={token_iss}, expected one of {VALID_ISSUERS}")
+                raise
+            except Exception as e:
+                logger.debug(f"Validation failed with key from {uri}: {type(e).__name__}: {e}")
+                last_error = e
+                continue
+
+        # All keys failed
+        logger.error(f"Token validation failed with all {len(keys)} keys: {last_error}")
+        raise last_error or ValueError("Token validation failed")
 
 
 token_validator = TokenValidator()

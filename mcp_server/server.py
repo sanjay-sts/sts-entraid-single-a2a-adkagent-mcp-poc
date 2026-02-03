@@ -79,19 +79,20 @@ async def get_jwks(uri: str):
     return _jwks_cache[uri]
 
 
-async def find_key(kid: str):
-    """Find the RSA key matching the kid from any JWKS endpoint."""
+async def get_all_keys(kid: str):
+    """Get all RSA keys matching the kid from all JWKS endpoints."""
+    keys = []
     for uri in JWKS_URIS:
         try:
             jwks = await get_jwks(uri)
             for key in jwks.get("keys", []):
                 if key.get("kid") == kid:
                     logger.debug(f"Found key {kid} in {uri}")
-                    return jwt.algorithms.RSAAlgorithm.from_jwk(key)
+                    keys.append((uri, jwt.algorithms.RSAAlgorithm.from_jwk(key)))
         except Exception as e:
             logger.debug(f"Failed to fetch/parse JWKS from {uri}: {e}")
             continue
-    return None
+    return keys
 
 
 class TokenValidationMiddleware(Middleware):
@@ -145,34 +146,49 @@ class TokenValidationMiddleware(Middleware):
         kid = unverified_header.get("kid")
         logger.debug(f"Token kid: {kid}")
 
-        # Find matching key from any JWKS endpoint
-        rsa_key = await find_key(kid)
-        if not rsa_key:
+        # Get all matching keys from all endpoints
+        keys = await get_all_keys(kid)
+        if not keys:
             # Clear cache and retry
             global _jwks_cache
             _jwks_cache = {}
-            rsa_key = await find_key(kid)
+            keys = await get_all_keys(kid)
 
-        if not rsa_key:
+        if not keys:
             logger.error(f"Key {kid} not found in any JWKS endpoint")
             raise ValueError("Unable to find appropriate key")
 
-        # Decode and validate
-        # Accept both app's client ID and Microsoft Graph as valid audiences
+        # Accept your custom API audience (tokens with api://{client-id}/access_as_user scope)
         valid_audiences = [
             CLIENT_ID,
-            "https://graph.microsoft.com",
-            "00000003-0000-0000-c000-000000000000",  # Graph API's app ID
+            f"api://{CLIENT_ID}",  # Custom API scope audience
         ]
-        payload = jwt.decode(
-            token,
-            rsa_key,
-            algorithms=["RS256"],
-            audience=valid_audiences,
-            issuer=VALID_ISSUERS,  # Accept both v1.0 and v2.0 issuers
-        )
-        logger.debug(f"Token decoded successfully - aud: {payload.get('aud')}, iss: {payload.get('iss')}")
-        return payload
+
+        # Try each key until one works
+        last_error = None
+        for uri, rsa_key in keys:
+            try:
+                payload = jwt.decode(
+                    token,
+                    rsa_key,
+                    algorithms=["RS256"],
+                    audience=valid_audiences,
+                    issuer=VALID_ISSUERS,  # Accept both v1.0 and v2.0 issuers
+                )
+                logger.info(f"Token decoded successfully using key from {uri}")
+                return payload
+            except jwt.InvalidSignatureError as e:
+                logger.debug(f"Signature verification failed with key from {uri}, trying next...")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.debug(f"Validation failed with key from {uri}: {type(e).__name__}: {e}")
+                last_error = e
+                continue
+
+        # All keys failed
+        logger.error(f"Token validation failed with all {len(keys)} keys: {last_error}")
+        raise last_error or ValueError("Token validation failed")
 
     def _get_highest_role(self, groups: list) -> str:
         """Map user groups to highest privilege role."""
