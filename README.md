@@ -1,0 +1,1 @@
+# sts-entraid-single-a2a-adkagent-mcp-poc
