@@ -4,9 +4,6 @@ fastmcp[auth]>=2.0.0
 # Google ADK - Agent Development Kit
 google-adk>=0.1.0
 
-# A2A SDK - Agent-to-Agent Protocol
-a2a-python>=0.2.0
-
 # Web framework
 fastapi>=0.109.0
 uvicorn>=0.27.0

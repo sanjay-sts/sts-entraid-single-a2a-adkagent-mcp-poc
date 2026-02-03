@@ -1,4 +1,7 @@
-"""A2A Server acting as authenticated gateway to the ADK agent."""
+"""A2A Server acting as authenticated gateway to the ADK agent.
+
+Implements the A2A Protocol (https://github.com/a2aproject/A2A) using plain FastAPI.
+"""
 import os
 import jwt
 from typing import Optional
@@ -6,19 +9,6 @@ from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from dotenv import load_dotenv
-
-from a2a.server.apps.jsonrpc import A2AFastAPIApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-from a2a.server.context import ServerCallContext
-from a2a.types import (
-    AgentCard,
-    AgentSkill,
-    AgentCapabilities,
-    OAuth2SecurityScheme,
-    OAuthFlows,
-    AuthorizationCodeOAuthFlow,
-)
 
 # Load environment variables
 load_dotenv()
@@ -43,58 +33,59 @@ ALLOWED_GROUPS = [
 ALLOWED_GROUPS = [g for g in ALLOWED_GROUPS if g]
 
 
-# Define the Agent Card with OAuth 2.0 security
-agent_card = AgentCard(
-    name="Identity-Aware AI Agent",
-    description="An AI agent that respects user identity and enforces permissions at multiple levels.",
-    url=f"http://localhost:{A2A_SERVER_PORT}/",
-    version="1.0.0",
-    defaultInputModes=["text/plain"],
-    defaultOutputModes=["text/plain", "application/json"],
-    capabilities=AgentCapabilities(streaming=True),
-    skills=[
-        AgentSkill(
-            id="user_profile",
-            name="User Profile Access",
-            description="Access user's Microsoft profile information",
-            tags=["identity", "profile"],
-            examples=["What's my email?", "Show my profile"],
-        ),
-        AgentSkill(
-            id="file_management",
-            name="File Management",
-            description="List and manage user's OneDrive files",
-            tags=["files", "onedrive"],
-            examples=["List my files", "What's in my Documents folder?"],
-        ),
-        AgentSkill(
-            id="email",
-            name="Email Operations",
-            description="Send emails on behalf of the user (admin only)",
-            tags=["email", "communication"],
-            examples=["Send an email to team@company.com"],
-        ),
+# Define the Agent Card (A2A Protocol standard)
+AGENT_CARD = {
+    "name": "Identity-Aware AI Agent",
+    "description": "An AI agent that respects user identity and enforces permissions at multiple levels.",
+    "url": f"http://localhost:{A2A_SERVER_PORT}/",
+    "version": "1.0.0",
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain", "application/json"],
+    "capabilities": {"streaming": True},
+    "skills": [
+        {
+            "id": "user_profile",
+            "name": "User Profile Access",
+            "description": "Access user's Microsoft profile information",
+            "tags": ["identity", "profile"],
+            "examples": ["What's my email?", "Show my profile"],
+        },
+        {
+            "id": "file_management",
+            "name": "File Management",
+            "description": "List and manage user's OneDrive files",
+            "tags": ["files", "onedrive"],
+            "examples": ["List my files", "What's in my Documents folder?"],
+        },
+        {
+            "id": "email",
+            "name": "Email Operations",
+            "description": "Send emails on behalf of the user (admin only)",
+            "tags": ["email", "communication"],
+            "examples": ["Send an email to team@company.com"],
+        },
     ],
-    securitySchemes={
-        "entra_oauth": OAuth2SecurityScheme(
-            description="Microsoft Entra ID OAuth 2.0 Authorization Code Flow",
-            flows=OAuthFlows(
-                authorizationCode=AuthorizationCodeOAuthFlow(
-                    authorizationUrl=f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/authorize",
-                    tokenUrl=f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/token",
-                    scopes={
+    "securitySchemes": {
+        "entra_oauth": {
+            "type": "oauth2",
+            "description": "Microsoft Entra ID OAuth 2.0 Authorization Code Flow",
+            "flows": {
+                "authorizationCode": {
+                    "authorizationUrl": f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/authorize",
+                    "tokenUrl": f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/oauth2/v2.0/token",
+                    "scopes": {
                         "openid": "Sign in",
                         "profile": "View basic profile",
                         "User.Read": "Read user profile",
                         "Files.Read": "Read files",
                         "Mail.Send": "Send email",
                     },
-                ),
-            ),
-        ),
+                },
+            },
+        },
     },
-    security=[{"entra_oauth": ["openid", "profile", "User.Read"]}],
-)
+    "security": [{"entra_oauth": ["openid", "profile", "User.Read"]}],
+}
 
 
 class TokenValidator:
@@ -158,7 +149,7 @@ app = FastAPI(title="A2A Identity Gateway")
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"http://localhost:{FRONTEND_PORT}"],
+    allow_origins=[f"http://localhost:{FRONTEND_PORT}", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -279,7 +270,7 @@ async def ensure_session(user_claims: dict, access_token: str) -> str:
     return user_sessions[user_id]
 
 
-# A2A message handler
+# A2A message handler (JSON-RPC endpoint)
 @app.post("/")
 async def handle_a2a_request(request: Request):
     """Handle A2A JSON-RPC requests."""
@@ -355,7 +346,7 @@ async def handle_a2a_request(request: Request):
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": agent_card.model_dump()
+            "result": AGENT_CARD
         }
 
     else:
@@ -366,11 +357,11 @@ async def handle_a2a_request(request: Request):
         }
 
 
-# Agent Card endpoint
+# Agent Card endpoint (A2A discovery)
 @app.get("/.well-known/agent.json")
 async def get_agent_card():
-    """Return the Agent Card."""
-    return agent_card.model_dump()
+    """Return the Agent Card for A2A discovery."""
+    return AGENT_CARD
 
 
 # Health check endpoint
