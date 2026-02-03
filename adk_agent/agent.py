@@ -38,7 +38,7 @@ class IdentityAwareAgent:
         # Create the agent
         self.agent = Agent(
             model="gemini-2.0-flash",
-            name="identity-aware-agent",
+            name="identity_aware_agent",
             description="An agent that respects user identity and permissions",
             instruction="""You are a helpful assistant with access to the user's Microsoft account.
             Always check the user's permissions before attempting operations.
@@ -280,7 +280,7 @@ async def chat_stream(request: Request):
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "healthy", "agent": "identity-aware-agent"}
+    return {"status": "healthy", "agent": "identity_aware_agent"}
 
 
 if __name__ == "__main__":
