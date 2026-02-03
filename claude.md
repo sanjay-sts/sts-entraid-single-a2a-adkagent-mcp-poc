@@ -10,6 +10,7 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │  React Frontend │───▶│   A2A Server    │───▶│   Google ADK    │───▶│   FastMCP       │
 │  (MSAL.js)      │    │   (Gateway)     │    │   Agent         │    │   Tools         │
+│  Port: 10003    │    │   Port: 10000   │    │   Port: 10001   │    │   Port: 10002   │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
         │                      │                      │                      │
         │  Entra ID Token      │  Token Validation    │  User Context        │  Token Access
@@ -23,45 +24,97 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 
 ## Technology Stack
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Frontend | React + MSAL.js | User authentication, token acquisition |
-| Gateway | A2A Protocol (FastAPI) | Agent discovery, agent-level ACL |
-| Agent | Google ADK | LLM orchestration, tool calling |
-| Tools | FastMCP | Tool execution, token propagation |
-| Identity | Microsoft Entra ID | OAuth 2.0, group claims, scopes |
-| Resources | Microsoft Graph API | User data, files, email |
+| Component | Technology | Port | Purpose |
+|-----------|------------|------|---------|
+| Frontend | React 18 + MSAL.js 3.6 | 10003 | User authentication, token acquisition |
+| Gateway | A2A Protocol (FastAPI + a2a-sdk) | 10000 | Agent discovery, agent-level ACL, streaming |
+| Agent | Google ADK | 10001 | LLM orchestration, tool calling |
+| Tools | FastMCP | 10002 | Tool execution, token propagation |
+| Identity | Microsoft Entra ID | - | OAuth 2.0, group claims, scopes |
+| Resources | Microsoft Graph API | - | User data, files, email |
 
-## Dependencies
+## Project Structure
 
-### Python (Backend)
 ```
-fastmcp[auth]     # MCP server with authentication support
-google-adk        # Google Agent Development Kit
-a2a-sdk           # Agent-to-Agent Protocol SDK
-pyjwt             # JWT token validation
-httpx             # Async HTTP client
-uvicorn           # ASGI server
-python-dotenv     # Environment variables
+/
+├── a2a_server/
+│   └── server.py              # A2A gateway (409 lines) - auth middleware, task executor
+├── adk_agent/
+│   └── agent.py               # Google ADK agent (289 lines) - session mgmt, streaming
+├── mcp_server/
+│   └── server.py              # FastMCP tools (256 lines) - 2 middleware, 4 tools
+├── frontend/
+│   ├── src/
+│   │   ├── App.js             # React chat UI (267 lines) - token acquisition
+│   │   ├── authConfig.js      # MSAL configuration (36 lines)
+│   │   └── index.js           # MSAL provider setup (31 lines)
+│   ├── package.json           # React dependencies
+│   └── .env.example           # Frontend env template
+├── tests/
+│   ├── test_access_control.py # Access control tests (340 lines)
+│   └── conftest.py            # Pytest fixtures (51 lines)
+├── scratchpad/
+│   └── singleagent/
+│       └── single_agent_adk_mcp.md  # Implementation guide (1630 lines)
+├── .env.example               # Backend env template
+├── requirements.txt           # Python dependencies
+├── README.md                  # Setup guide
+├── TESTING.md                 # Comprehensive testing guide (482 lines)
+└── CLAUDE.md                  # This file
 ```
 
-### JavaScript (Frontend)
+## Current Status & Known Issues
+
+### Streaming Support
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| A2A Server | ✅ Enabled | `AgentCapabilities(streaming=True)` in agent card |
+| ADK Agent | ✅ Has endpoint | `/chat/stream` for SSE streaming |
+| Frontend | ⚠️ Not using stream | Uses buffered `/chat` endpoint |
+
+### Local Testing with A2A Inspector
+
+The A2A Inspector requires authentication bypass for local testing:
+
+**Issue**: POST requests to `/` return `401 Unauthorized` because:
+- A2A Inspector doesn't send Bearer tokens
+- Auth middleware requires token for all endpoints except agent card
+
+**Workaround**: Add to auth middleware allowed paths in `a2a_server/server.py:315`:
+```python
+if request.url.path in [
+    "/.well-known/agent.json",
+    "/.well-known/agent-card.json",  # Add new path
+    "/health",
+    "/docs",
+    "/openapi.json",
+]:
+    return await call_next(request)
 ```
-@azure/msal-browser   # MSAL.js core
-@azure/msal-react     # React bindings for MSAL
+
+**For full local testing bypass** (development only):
+```python
+# Add at start of auth_middleware
+if os.getenv("DISABLE_AUTH") == "true":
+    return await call_next(request)
 ```
+
+### Deprecation Warning
+
+A2A Inspector uses old endpoint `/.well-known/agent.json`. The a2a-sdk now prefers `/.well-known/agent-card.json`. Both currently work.
 
 ## Security Model
 
 ### Three-Tier Access Control
 
-| Level | Location | Mechanism | Denies Access When |
-|-------|----------|-----------|-------------------|
-| **Agent** | A2A Server | Group membership, blocklist | User blocked or not in allowed group |
-| **Tool** | FastMCP | Role-based permissions | User role lacks tool permission |
-| **Resource** | Graph API | OAuth scopes | Token missing required scope |
+| Level | Location | Mechanism | Code Location | Denies Access When |
+|-------|----------|-----------|---------------|-------------------|
+| **Agent** | A2A Server | Group membership, blocklist | `a2a_server/server.py:310-380` | User blocked or not in allowed group |
+| **Tool** | FastMCP | Role-based permissions | `mcp_server/server.py:123-154` | User role lacks tool permission |
+| **Resource** | Graph API | OAuth scopes | External | Token missing required scope |
 
-### Role Hierarchy
+### Role Hierarchy & Permissions
 
 ```
 admin      → All tools: get_user_profile, list_files, send_email, delete_resource
@@ -69,33 +122,56 @@ developer  → Subset: get_user_profile, list_files
 viewer     → Limited: get_user_profile only
 ```
 
+**Tool Permission Matrix** (defined in `mcp_server/server.py:28-33`):
+```python
+TOOL_PERMISSIONS = {
+    "get_user_profile": {"required_scopes": ["User.Read"], "allowed_roles": ["admin", "developer", "viewer"]},
+    "list_files": {"required_scopes": ["Files.Read"], "allowed_roles": ["admin", "developer"]},
+    "send_email": {"required_scopes": ["Mail.Send"], "allowed_roles": ["admin"]},
+    "delete_resource": {"required_scopes": ["Files.ReadWrite.All"], "allowed_roles": ["admin"]},
+}
+```
+
 ### Group-to-Role Mapping
 
-Roles are derived from Entra ID security group membership:
+Roles derived from Entra ID security group membership (highest privilege wins):
 - `ADMIN_GROUP_ID` → `admin`
 - `DEVELOPER_GROUP_ID` → `developer`
 - `VIEWER_GROUP_ID` → `viewer`
 
-## Project Structure
+## Data Flow
 
 ```
-/
-├── a2a_server/
-│   └── server.py          # A2A gateway with auth middleware
-├── adk_agent/
-│   └── agent.py           # Google ADK agent with MCP integration
-├── mcp_server/
-│   └── server.py          # FastMCP tools with token validation
-├── frontend/
-│   ├── src/
-│   │   ├── App.js         # Main React component with chat UI
-│   │   ├── authConfig.js  # MSAL configuration
-│   │   └── index.js       # MSAL provider setup
-│   └── .env               # Frontend environment variables
-├── tests/
-│   └── test_access_control.py  # Access control verification tests
-├── .env                   # Backend environment variables
-└── claude.md              # This file
+User         Frontend           A2A Gateway        ADK Agent          MCP Server       Graph API
+  │              │                   │                  │                   │               │
+  1: Send msg    │                   │                  │                   │               │
+  └─────────────>│                   │                  │                   │               │
+                 │ 2: acquireToken() │                  │                   │               │
+                 │ (MSAL.js)         │                  │                   │               │
+                 │                   │                  │                   │               │
+                 3: POST / + Bearer  │                  │                   │               │
+                 └──────────────────>│                  │                   │               │
+                                     │ 4: Validate JWT  │                   │               │
+                                     │ Check blocklist  │                   │               │
+                                     │ Verify groups    │                   │               │
+                                     │                  │                   │               │
+                                     5: POST /chat     │                   │               │
+                                     └─────────────────>│                   │               │
+                                                        │ 6: Store context  │               │
+                                                        │ in session state  │               │
+                                                        │                   │               │
+                                                        7: Call MCP tool   │               │
+                                                        └──────────────────>│               │
+                                                                            │ 8: Validate   │
+                                                                            │ role + scopes │
+                                                                            │               │
+                                                                            9: Graph API   │
+                                                                            └──────────────>│
+                                                                            │<──────────────│
+                                                        │<──────────────────│               │
+                                     │<─────────────────│                   │               │
+                 │<──────────────────│                  │                   │               │
+  │<─────────────│                   │                  │                   │               │
 ```
 
 ## Key Code Patterns
@@ -103,75 +179,52 @@ Roles are derived from Entra ID security group membership:
 ### FastMCP: Token Access in Tools
 
 ```python
-from fastmcp.server.dependencies import get_http_headers, CurrentContext
+# mcp_server/server.py:164-166
+from fastmcp.server.dependencies import CurrentContext
 from fastmcp.server.context import Context
 
-# Pattern 1: Direct header access
 @mcp.tool
-def my_tool():
-    headers = get_http_headers()
-    token = headers.get("authorization", "").replace("Bearer ", "")
-
-# Pattern 2: Context injection with state (preferred)
-@mcp.tool
-async def my_tool(ctx: Context = CurrentContext()):
-    user_id = await ctx.get_state("user_id")
+async def get_user_profile(ctx: Context = CurrentContext()) -> dict:
     access_token = await ctx.get_state("access_token")
+    user_id = await ctx.get_state("user_id")
 ```
 
-### FastMCP: Middleware for Validation
+### FastMCP: Middleware Chain
 
 ```python
-from fastmcp.server.middleware import Middleware, MiddlewareContext
-
-class TokenValidationMiddleware(Middleware):
-    async def on_call_tool(self, context: MiddlewareContext, call_next):
-        # Validate token, set context state
-        ctx = context.fastmcp_context
-        await ctx.set_state("user_id", validated_claims["sub"])
-        return await call_next(context)
-
-mcp.add_middleware(TokenValidationMiddleware())
+# mcp_server/server.py:159-160
+mcp.add_middleware(TokenValidationMiddleware())   # Validates JWT, extracts claims
+mcp.add_middleware(ToolAuthorizationMiddleware()) # Checks role + scopes
 ```
 
-### Google ADK: Session State for User Context
+### Google ADK: Session State
 
 ```python
-# Store user context with user: prefix for persistence
+# adk_agent/agent.py:75-79
+# Use "user:" prefix for persistence across interactions
 session.state["user:access_token"] = access_token
 session.state["user:email"] = user_info.get("email", "")
 session.state["user:role"] = determined_role
-
-# Access in tools via ToolContext
-def my_tool(tool_context: ToolContext) -> dict:
-    email = tool_context.state.get("user:email")
 ```
 
-### A2A: Agent Card with OAuth Security
+### A2A: Agent Card Configuration
 
 ```python
-from a2a.types import AgentCard, OAuth2SecurityScheme, OAuthFlows
-
+# a2a_server/server.py:257-288
 agent_card = AgentCard(
-    securitySchemes={
-        "entra_oauth": OAuth2SecurityScheme(
-            flows=OAuthFlows(
-                authorizationCode=AuthorizationCodeOAuthFlow(
-                    authorizationUrl="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
-                    tokenUrl="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
-                    scopes={"User.Read": "Read user profile", ...}
-                )
-            )
-        )
-    },
-    security=[{"entra_oauth": ["openid", "profile", "User.Read"]}]
+    name="Identity-Aware AI Agent",
+    url=f"http://localhost:{A2A_SERVER_PORT}/",
+    defaultInputModes=["text/plain"],
+    defaultOutputModes=["text/plain", "application/json"],
+    capabilities=AgentCapabilities(streaming=True),
+    skills=[...],
 )
 ```
 
 ### React/MSAL: Token Acquisition
 
 ```javascript
-// Silent acquisition with popup fallback
+// frontend/src/App.js:95-112
 const getAccessToken = async () => {
     try {
         const response = await instance.acquireTokenSilent({ scopes, account });
@@ -188,6 +241,8 @@ const getAccessToken = async () => {
 
 ## Environment Variables
 
+### Backend (.env)
+
 ```bash
 # Microsoft Entra ID
 ENTRA_CLIENT_ID=<app-registration-client-id>
@@ -199,11 +254,28 @@ ADMIN_GROUP_ID=<admin-security-group-id>
 DEVELOPER_GROUP_ID=<developer-security-group-id>
 VIEWER_GROUP_ID=<viewer-security-group-id>
 
+# Optional Blocklist (comma-separated user IDs)
+BLOCKED_USERS=
+
 # Server Ports
 A2A_SERVER_PORT=10000
 ADK_SERVER_PORT=10001
 MCP_SERVER_PORT=10002
 FRONTEND_PORT=10003
+
+# LLM API Key (for Google ADK)
+GOOGLE_API_KEY=<gemini-api-key>
+
+# Development only
+DISABLE_AUTH=false
+```
+
+### Frontend (frontend/.env)
+
+```bash
+REACT_APP_ENTRA_CLIENT_ID=<app-registration-id>
+REACT_APP_ENTRA_TENANT_ID=<directory-tenant-id>
+REACT_APP_A2A_SERVER_URL=http://localhost:10000
 ```
 
 ## Development Workflow
@@ -212,43 +284,53 @@ FRONTEND_PORT=10003
 
 ```bash
 # Terminal 1: MCP Server
-python mcp_server/server.py
+uv run python mcp_server/server.py
 
 # Terminal 2: ADK Agent
-python adk_agent/agent.py
+uv run python adk_agent/agent.py
 
 # Terminal 3: A2A Gateway
-python a2a_server/server.py
+uv run python a2a_server/server.py
 
 # Terminal 4: Frontend
 cd frontend && npm start
 ```
 
-### Testing Access Control
+### Health Checks
 
 ```bash
-pip install pytest pytest-asyncio httpx
-pytest tests/test_access_control.py -v
+curl http://localhost:10000/health  # A2A Gateway
+curl http://localhost:10001/health  # ADK Agent
+curl http://localhost:10002/health  # MCP Server (if exposed)
 ```
 
-## Verification Checklist
+### Agent Card Discovery
 
-### Agent-Level
-- [ ] Unauthenticated requests return 401
-- [ ] Blocked users receive 403
-- [ ] Users without allowed group receive 403
-- [ ] Valid users can send messages
+```bash
+# New endpoint (preferred)
+curl http://localhost:10000/.well-known/agent-card.json
 
-### Tool-Level
-- [ ] Viewer cannot use `send_email` or `delete_resource`
-- [ ] Developer cannot use `send_email`
-- [ ] Admin can use all tools
-- [ ] Denials return clear error messages
+# Legacy endpoint (deprecated but works)
+curl http://localhost:10000/.well-known/agent.json
+```
 
-### Resource-Level
-- [ ] Missing `Files.Read` scope → 403 on file operations
-- [ ] Missing `Mail.Send` scope → 403 on email operations
-- [ ] Error messages indicate missing scopes
+### Running Tests
+
+```bash
+# Requires all services running
+uv run pytest tests/test_access_control.py -v
+```
+
+## Current Limitations & TODOs
+
+| Limitation | Impact | Location |
+|-----------|--------|----------|
+| Frontend not using stream endpoint | UI shows response all at once | `frontend/src/App.js` |
+| Session service in-memory | Lost on service restart | `adk_agent/agent.py:31` |
+| JWKS cache never invalidated | Could use stale keys | `a2a_server/server.py:60-70` |
+| No rate limiting | Could be abused | All servers |
+| MCP delete_resource simulated | Only logs, doesn't delete | `mcp_server/server.py:240-246` |
+| A2A Inspector requires auth bypass | Can't test without workaround | `a2a_server/server.py` |
 
 ## Important Conventions
 
@@ -257,6 +339,26 @@ pytest tests/test_access_control.py -v
 3. **Error Handling**: Return structured errors with `error` and `message` fields
 4. **Scope Checking**: Check both role AND scopes before allowing tool execution
 5. **JWKS Caching**: Cache JWKS responses to avoid repeated fetches
+6. **Port Range**: Use 10000+ ports to avoid conflicts with common services
+
+## Verification Checklist
+
+### Agent-Level (a2a_server/server.py)
+- [ ] Unauthenticated requests return 401
+- [ ] Blocked users receive 403
+- [ ] Users without allowed group receive 403
+- [ ] Valid users can send messages
+
+### Tool-Level (mcp_server/server.py)
+- [ ] Viewer cannot use `send_email` or `delete_resource`
+- [ ] Developer cannot use `send_email`
+- [ ] Admin can use all tools
+- [ ] Denials return clear error messages
+
+### Resource-Level (Microsoft Graph)
+- [ ] Missing `Files.Read` scope → 403 on file operations
+- [ ] Missing `Mail.Send` scope → 403 on email operations
+- [ ] Error messages indicate missing scopes
 
 ## External Documentation
 
