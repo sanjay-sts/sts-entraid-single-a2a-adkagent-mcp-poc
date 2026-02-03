@@ -180,12 +180,11 @@ REACT_APP_A2A_SERVER_URL=http://localhost:8000
 ```bash
 cd C:\WorkSpace\Sanjay\github\sts-entraid-single-a2a-adkagent-mcp-poc
 
-# Create virtual environment and install dependencies (one command)
-uv sync
+# Create virtual environment
+uv venv
 
-# Or step by step:
-uv venv                              # Create .venv
-uv pip install -r requirements.txt   # Install dependencies
+# Install dependencies
+uv pip install -r requirements.txt
 ```
 
 ### 2. Activate Virtual Environment
