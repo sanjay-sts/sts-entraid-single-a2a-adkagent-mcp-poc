@@ -1,0 +1,26 @@
+# FastMCP - MCP server with authentication support
+fastmcp[auth]>=2.0.0
+
+# Google ADK - Agent Development Kit
+google-adk>=0.1.0
+
+# A2A SDK - Agent-to-Agent Protocol
+a2a-sdk>=0.1.0
+
+# Web framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# HTTP client
+httpx>=0.26.0
+
+# JWT token validation
+PyJWT>=2.8.0
+cryptography>=42.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
