@@ -259,6 +259,8 @@ agent_card = AgentCard(
     description="An AI agent that respects user identity and enforces permissions at multiple levels.",
     url=f"http://localhost:{A2A_SERVER_PORT}/",
     version="1.0.0",
+    defaultInputModes=["text/plain"],
+    defaultOutputModes=["text/plain", "application/json"],
     capabilities=AgentCapabilities(streaming=True),
     skills=[
         AgentSkill(
