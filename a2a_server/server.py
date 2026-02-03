@@ -5,12 +5,28 @@ Implements the A2A Protocol with proper SSE streaming.
 import os
 import jwt
 import asyncio
+import logging
+from pathlib import Path
 from typing import AsyncIterable
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from dotenv import load_dotenv
+
+# Configure logging
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "a2a_server.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("a2a_server")
 
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -37,8 +53,17 @@ load_dotenv()
 # Configuration
 ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 ENTRA_CLIENT_ID = os.getenv("ENTRA_CLIENT_ID")
-JWKS_URI = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys"
-ISSUER = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0"
+
+# Support both v1.0 and v2.0 tokens (Graph API uses v1.0 tokens)
+JWKS_URIS = [
+    f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys",  # v2.0
+    f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/keys",  # v1.0
+    "https://login.microsoftonline.com/common/discovery/keys",  # common
+]
+VALID_ISSUERS = [
+    f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0",  # v2.0 issuer
+    f"https://sts.windows.net/{ENTRA_TENANT_ID}/",  # v1.0 issuer (Graph tokens)
+]
 A2A_SERVER_PORT = int(os.getenv("A2A_SERVER_PORT", 10000))
 ADK_SERVER_URL = f"http://localhost:{os.getenv('ADK_SERVER_PORT', 10001)}"
 FRONTEND_PORT = os.getenv("FRONTEND_PORT", 10003)
@@ -54,52 +79,92 @@ ALLOWED_GROUPS = [g for g in ALLOWED_GROUPS if g]
 
 
 class TokenValidator:
-    """Validates Entra ID tokens using JWKS."""
+    """Validates Entra ID tokens using JWKS (supports both v1.0 and v2.0 tokens)."""
 
     def __init__(self):
-        self._jwks_cache = None
+        self._jwks_cache = {}  # Cache per URI
 
-    async def get_jwks(self):
-        if self._jwks_cache is None:
+    async def get_jwks(self, uri: str):
+        """Fetch and cache JWKS from a specific URI."""
+        if uri not in self._jwks_cache:
+            logger.debug(f"Fetching JWKS from {uri}")
             async with httpx.AsyncClient() as client:
-                response = await client.get(JWKS_URI)
-                self._jwks_cache = response.json()
-        return self._jwks_cache
+                response = await client.get(uri)
+                self._jwks_cache[uri] = response.json()
+            logger.debug(f"JWKS fetched from {uri}, {len(self._jwks_cache[uri].get('keys', []))} keys found")
+        return self._jwks_cache[uri]
 
     def clear_cache(self):
-        self._jwks_cache = None
+        logger.debug("Clearing JWKS cache")
+        self._jwks_cache = {}
+
+    async def _find_key(self, kid: str):
+        """Find the RSA key matching the kid from any JWKS endpoint."""
+        for uri in JWKS_URIS:
+            try:
+                jwks = await self.get_jwks(uri)
+                for key in jwks.get("keys", []):
+                    if key.get("kid") == kid:
+                        logger.debug(f"Found key {kid} in {uri}")
+                        return jwt.algorithms.RSAAlgorithm.from_jwk(key)
+            except Exception as e:
+                logger.debug(f"Failed to fetch/parse JWKS from {uri}: {e}")
+                continue
+        return None
 
     async def validate(self, token: str) -> dict:
         """Validate token and return claims."""
-        jwks = await self.get_jwks()
+        logger.debug(f"Validating token (first 50 chars): {token[:50]}...")
+
+        # Decode without verification to inspect claims
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        token_iss = unverified.get("iss", "")
+        token_aud = unverified.get("aud", "")
+        logger.debug(f"Token claims (unverified): iss={token_iss}, aud={token_aud}")
+        logger.debug(f"Valid issuers: {VALID_ISSUERS}")
+
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
+        logger.debug(f"Token kid: {kid}")
 
-        rsa_key = None
-        for key in jwks["keys"]:
-            if key["kid"] == kid:
-                rsa_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
-                break
-
+        # Find the key
+        rsa_key = await self._find_key(kid)
         if not rsa_key:
+            # Clear cache and retry
+            logger.debug("Key not found, clearing cache and retrying")
             self.clear_cache()
-            jwks = await self.get_jwks()
-            for key in jwks["keys"]:
-                if key["kid"] == kid:
-                    rsa_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
-                    break
+            rsa_key = await self._find_key(kid)
 
         if not rsa_key:
+            logger.error(f"Key {kid} not found in any JWKS endpoint")
             raise ValueError("Key not found in JWKS")
 
-        payload = jwt.decode(
-            token,
-            rsa_key,
-            algorithms=["RS256"],
-            audience=ENTRA_CLIENT_ID,
-            issuer=ISSUER,
-        )
-        return payload
+        try:
+            # Accept both app's client ID and Microsoft Graph as valid audiences
+            valid_audiences = [
+                ENTRA_CLIENT_ID,
+                "https://graph.microsoft.com",
+                "00000003-0000-0000-c000-000000000000",  # Graph API's app ID
+            ]
+            payload = jwt.decode(
+                token,
+                rsa_key,
+                algorithms=["RS256"],
+                audience=valid_audiences,
+                issuer=VALID_ISSUERS,  # Accept multiple issuers
+            )
+            logger.info(f"Token validated successfully for user: {payload.get('preferred_username', payload.get('unique_name', payload.get('sub')))}")
+            logger.debug(f"Token claims: aud={payload.get('aud')}, iss={payload.get('iss')}, groups={payload.get('groups', [])}")
+            return payload
+        except jwt.InvalidAudienceError:
+            logger.error(f"Invalid audience: token aud={token_aud}, expected one of {valid_audiences}")
+            raise
+        except jwt.InvalidIssuerError:
+            logger.error(f"Invalid issuer: token iss={token_iss}, expected one of {VALID_ISSUERS}")
+            raise
+        except Exception as e:
+            logger.error(f"Token validation error: {type(e).__name__}: {e}")
+            raise
 
 
 token_validator = TokenValidator()
@@ -310,19 +375,29 @@ app.add_middleware(
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Validate tokens and enforce agent-level access control."""
+    logger.debug(f"Incoming request: {request.method} {request.url.path}")
+
+    # Allow CORS preflight requests without auth
+    if request.method == "OPTIONS":
+        logger.debug("Allowing OPTIONS preflight request")
+        return await call_next(request)
 
     # Allow Agent Card discovery and health without auth
     if request.url.path in [
         "/.well-known/agent.json",
+        "/.well-known/agent-card.json",
         "/health",
         "/docs",
         "/openapi.json",
     ]:
+        logger.debug(f"Allowing unauthenticated access to {request.url.path}")
         return await call_next(request)
 
     # Require auth for all other endpoints
     auth_header = request.headers.get("Authorization")
+    logger.debug(f"Authorization header present: {bool(auth_header)}")
     if not auth_header:
+        logger.warning("Missing Authorization header")
         return Response(
             status_code=401,
             content='{"error": "unauthorized", "message": "Missing Authorization header"}',
@@ -331,6 +406,7 @@ async def auth_middleware(request: Request, call_next):
         )
 
     if not auth_header.startswith("Bearer "):
+        logger.warning(f"Invalid Authorization format: {auth_header[:20]}...")
         return Response(
             status_code=401,
             content='{"error": "unauthorized", "message": "Invalid Authorization format"}',
@@ -338,14 +414,19 @@ async def auth_middleware(request: Request, call_next):
         )
 
     token = auth_header[7:]
+    logger.debug(f"Extracted Bearer token (length: {len(token)})")
 
     try:
         claims = await token_validator.validate(token)
         user_id = claims.get("sub", "")
         user_groups = claims.get("groups", [])
+        logger.info(f"Token validated for user: {claims.get('preferred_username', user_id)}")
+        logger.debug(f"User groups: {user_groups}")
+        logger.debug(f"Allowed groups: {ALLOWED_GROUPS}")
 
         # Check if user is blocked
         if user_id in BLOCKED_USERS:
+            logger.warning(f"Blocked user attempted access: {user_id}")
             return Response(
                 status_code=403,
                 content='{"error": "access_denied", "message": "Your account has been blocked"}',
@@ -354,29 +435,34 @@ async def auth_middleware(request: Request, call_next):
 
         # Check group membership
         if ALLOWED_GROUPS and not any(g in ALLOWED_GROUPS for g in user_groups):
+            logger.warning(f"User {user_id} not in allowed groups. Has: {user_groups}, Allowed: {ALLOWED_GROUPS}")
             return Response(
                 status_code=403,
                 content='{"error": "access_denied", "message": "Not a member of any authorized group"}',
                 media_type="application/json",
             )
 
+        logger.debug("Access control passed, storing claims in request state")
         # Store claims in request state for the agent executor
         request.state.user_claims = claims
         request.state.access_token = token
 
     except jwt.ExpiredSignatureError:
+        logger.warning("Token has expired")
         return Response(
             status_code=401,
             content='{"error": "token_expired", "message": "Token has expired"}',
             media_type="application/json",
         )
     except Exception as e:
+        logger.error(f"Auth failed: {type(e).__name__}: {str(e)}")
         return Response(
             status_code=401,
             content=f'{{"error": "auth_failed", "message": "{str(e)}"}}',
             media_type="application/json",
         )
 
+    logger.debug("Auth middleware complete, passing to next handler")
     return await call_next(request)
 
 

@@ -1,6 +1,8 @@
 """Google ADK Agent with user context and MCP tool integration."""
 import os
 import asyncio
+import logging
+from pathlib import Path
 from typing import Optional, AsyncGenerator
 from google.adk import Agent
 from google.adk.tools import FunctionTool, ToolContext
@@ -17,6 +19,20 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "adk_agent.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("adk_agent")
 
 # Configuration
 MCP_SERVER_URL = f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}/mcp"
@@ -66,6 +82,9 @@ class IdentityAwareAgent:
 
     async def create_session(self, user_id: str, access_token: str, user_info: dict) -> str:
         """Create a session with user identity context."""
+        logger.info(f"Creating session for user: {user_id}")
+        logger.debug(f"User info: {user_info}")
+
         session = await self.session_service.create_session(
             app_name="identity-agent",
             user_id=user_id,
@@ -77,6 +96,9 @@ class IdentityAwareAgent:
         session.state["user:name"] = user_info.get("name", user_info.get("displayName", ""))
         session.state["user:groups"] = user_info.get("groups", [])
         session.state["user:role"] = self._determine_role(user_info.get("groups", []))
+
+        logger.debug(f"Session created with id: {session.id}")
+        logger.debug(f"User role determined: {session.state['user:role']}")
 
         # Track session
         self.sessions[session.id] = {
@@ -145,16 +167,22 @@ class IdentityAwareAgent:
 
     async def chat(self, session_id: str, user_id: str, message: str, access_token: str) -> AsyncGenerator[dict, None]:
         """Process a chat message with user context."""
+        logger.info(f"Chat request - session: {session_id}, user: {user_id}")
+        logger.debug(f"Message: {message[:100]}...")
+
         # Get session
         session_info = self.sessions.get(session_id)
         if not session_info:
+            logger.error(f"Session not found: {session_id}")
             yield {"error": "Session not found. Create session first."}
             return
 
         # Update access token in case it was refreshed
         session_info["session"].state["user:access_token"] = access_token
+        logger.debug("Updated access token in session state")
 
         # Run the agent
+        logger.debug("Starting agent run")
         async for event in self.runner.run_async(
             session_id=session_id,
             user_id=user_id,
@@ -163,6 +191,7 @@ class IdentityAwareAgent:
                 parts=[types.Part(text=message)]
             ),
         ):
+            logger.debug(f"Agent event: {type(event).__name__}")
             yield event
 
     async def call_mcp_tool(self, tool_name: str, arguments: dict, access_token: str) -> dict:
@@ -200,29 +229,37 @@ agent = IdentityAwareAgent()
 @app.post("/session")
 async def create_session(request: Request):
     """Create a new session for a user."""
+    logger.debug("POST /session request received")
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
+        logger.warning("Missing or invalid Authorization header in /session")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     access_token = auth_header[7:]
+    logger.debug(f"Access token received (length: {len(access_token)})")
 
     # Get user info from token (simplified - in production, validate the token)
     body = await request.json()
     user_id = body.get("user_id")
     user_info = body.get("user_info", {})
+    logger.debug(f"Creating session for user_id: {user_id}")
 
     if not user_id:
+        logger.error("user_id missing in request body")
         raise HTTPException(status_code=400, detail="user_id is required")
 
     session_id = await agent.create_session(user_id, access_token, user_info)
+    logger.info(f"Session created: {session_id} for user: {user_id}")
     return {"session_id": session_id}
 
 
 @app.post("/chat")
 async def chat(request: Request):
     """Process a chat message."""
+    logger.debug("POST /chat request received")
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
+        logger.warning("Missing or invalid Authorization header in /chat")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     access_token = auth_header[7:]
@@ -231,8 +268,11 @@ async def chat(request: Request):
     message = body.get("message", "")
     user_id = body.get("user_id")
     session_id = body.get("session_id")
+    logger.info(f"Chat request - user: {user_id}, session: {session_id}")
+    logger.debug(f"Message: {message}")
 
     if not all([message, user_id, session_id]):
+        logger.error("Missing required fields: message, user_id, or session_id")
         raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
 
     # Collect responses
@@ -243,8 +283,12 @@ async def chat(request: Request):
                 if hasattr(part, "text") and part.text:
                     responses.append(part.text)
 
+    response_text = " ".join(responses) if responses else "No response generated"
+    logger.info(f"Chat response generated (length: {len(response_text)})")
+    logger.debug(f"Response: {response_text[:200]}...")
+
     return {
-        "response": " ".join(responses) if responses else "No response generated",
+        "response": response_text,
         "session_id": session_id
     }
 
