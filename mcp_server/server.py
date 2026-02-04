@@ -1,9 +1,13 @@
 """FastMCP server with OAuth token validation and tool-level access control."""
 import os
+import asyncio
 import jwt
 import logging
+from datetime import datetime, timezone as tz
+from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
+from contextvars import ContextVar
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import (
     get_http_headers,
@@ -16,6 +20,12 @@ from fastmcp.server.context import Context
 from fastmcp.exceptions import ToolError
 import httpx
 from dotenv import load_dotenv
+
+# Context variables for passing auth info from middleware to tools (works in stateless mode)
+current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
+current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
+current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
+current_user_scopes: ContextVar[list] = ContextVar("current_user_scopes", default=[])
 
 # Load environment variables
 load_dotenv()
@@ -55,6 +65,10 @@ TOOL_PERMISSIONS = {
     "list_files": {"required_scopes": ["Files.Read"], "allowed_roles": ["admin", "developer"]},
     "send_email": {"required_scopes": ["Mail.Send"], "allowed_roles": ["admin"]},
     "delete_resource": {"required_scopes": ["Files.ReadWrite.All"], "allowed_roles": ["admin"]},
+    # Time tools - Admin only (no special Graph scopes required)
+    "get_current_time": {"required_scopes": [], "allowed_roles": ["admin"]},
+    "convert_timezone": {"required_scopes": [], "allowed_roles": ["admin"]},
+    "get_time_difference": {"required_scopes": [], "allowed_roles": ["admin"]},
 }
 
 GROUP_TO_ROLE = {
@@ -115,17 +129,18 @@ class TokenValidationMiddleware(Middleware):
             user_info = await self._validate_token(token)
             logger.info(f"Token validated for user: {user_info.get('preferred_username', user_info.get('unique_name', user_info.get('sub')))}")
 
-            # Store user info in context state for tool access
-            ctx = context.fastmcp_context
-            await ctx.set_state("user_id", user_info.get("sub") or user_info.get("oid"))
-            await ctx.set_state("user_email", user_info.get("preferred_username", user_info.get("unique_name", "")))
-            await ctx.set_state("user_groups", user_info.get("groups", []))
-            await ctx.set_state("user_scopes", user_info.get("scp", "").split())
+            # Store user info in context variables (works in stateless mode)
             user_role = self._get_highest_role(user_info.get("groups", []))
-            await ctx.set_state("user_role", user_role)
-            await ctx.set_state("access_token", token)  # For downstream API calls
+            user_email = user_info.get("preferred_username", user_info.get("unique_name", ""))
+            user_scopes = user_info.get("scp", "").split()
 
-            logger.debug(f"User context stored - role: {user_role}, groups: {user_info.get('groups', [])}")
+            # Set context variables
+            current_user_token.set(token)
+            current_user_role.set(user_role)
+            current_user_email.set(user_email)
+            current_user_scopes.set(user_scopes)
+
+            logger.debug(f"User context stored - role: {user_role}, email: {user_email}")
 
         except Exception as e:
             logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")
@@ -205,13 +220,13 @@ class ToolAuthorizationMiddleware(Middleware):
     """Middleware that enforces tool-level access control."""
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
-        tool_name = context.tool_name
+        # Get tool name - try different attribute names for compatibility
+        tool_name = getattr(context, 'tool_name', None) or getattr(context, 'name', None) or "unknown"
         logger.debug(f"ToolAuthorizationMiddleware: Checking access for tool '{tool_name}'")
-        ctx = context.fastmcp_context
 
-        # Get user info from context
-        user_role = await ctx.get_state("user_role")
-        user_scopes = await ctx.get_state("user_scopes") or []
+        # Get user info from context variables
+        user_role = current_user_role.get()
+        user_scopes = current_user_scopes.get()
         logger.debug(f"User role: {user_role}, scopes: {user_scopes}")
 
         # Check tool permissions
@@ -248,33 +263,41 @@ mcp.add_middleware(ToolAuthorizationMiddleware())
 
 
 @mcp.tool
-async def get_user_profile(ctx: Context = CurrentContext()) -> dict:
+async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
     logger.info("Executing tool: get_user_profile")
-    access_token = await ctx.get_state("access_token")
-    user_id = await ctx.get_state("user_id")
-    logger.debug(f"Calling Graph API /me for user: {user_id}")
+    access_token = current_user_token.get()
+    user_email = current_user_email.get()
+    user_role = current_user_role.get()
+    logger.debug(f"Getting profile for user: {user_email}")
 
+    # Try Graph API first
     async with httpx.AsyncClient() as client:
         response = await client.get(
             "https://graph.microsoft.com/v1.0/me",
             headers={"Authorization": f"Bearer {access_token}"}
         )
 
-        if response.status_code == 403:
-            logger.warning(f"Graph API returned 403 - insufficient scope")
-            return {"error": "insufficient_scope", "message": "Token lacks User.Read scope"}
+        if response.status_code == 200:
+            result = response.json()
+            logger.debug(f"Graph API response: {result.get('displayName', 'N/A')}")
+            return result
 
-        response.raise_for_status()
-        result = response.json()
-        logger.debug(f"Graph API response: {result.get('displayName', 'N/A')}")
-        return result
+        # If Graph fails (401/403), return profile from token claims
+        logger.warning(f"Graph API returned {response.status_code}, using token claims instead")
+        return {
+            "source": "token_claims",
+            "email": user_email,
+            "role": user_role,
+            "note": "Graph API requires OBO flow for delegated access. Showing token claims."
+        }
 
 
 @mcp.tool
-async def list_files(folder_path: str = "/", ctx: Context = CurrentContext()) -> dict:
+async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
-    access_token = await ctx.get_state("access_token")
+    access_token = current_user_token.get()
+    user_role = current_user_role.get()
 
     endpoint = "https://graph.microsoft.com/v1.0/me/drive/root/children"
     if folder_path != "/":
@@ -286,12 +309,18 @@ async def list_files(folder_path: str = "/", ctx: Context = CurrentContext()) ->
             headers={"Authorization": f"Bearer {access_token}"}
         )
 
-        if response.status_code == 403:
-            return {"error": "insufficient_scope", "message": "Token lacks Files.Read scope"}
+        if response.status_code == 200:
+            data = response.json()
+            return {"files": [f["name"] for f in data.get("value", [])]}
 
-        response.raise_for_status()
-        data = response.json()
-        return {"files": [f["name"] for f in data.get("value", [])]}
+        # If Graph fails, return informative message
+        logger.warning(f"Graph API returned {response.status_code} for list_files")
+        return {
+            "error": "graph_api_unavailable",
+            "status_code": response.status_code,
+            "role": user_role,
+            "note": "Graph API requires OBO flow. Token validated but cannot access OneDrive."
+        }
 
 
 @mcp.tool
@@ -299,11 +328,10 @@ async def send_email(
     to: str,
     subject: str,
     body: str,
-    ctx: Context = CurrentContext()
 ) -> dict:
     """Send an email via Microsoft Graph (admin only)."""
-    access_token = await ctx.get_state("access_token")
-    user_email = await ctx.get_state("user_email")
+    access_token = current_user_token.get()
+    user_email = current_user_email.get()
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -329,13 +357,218 @@ async def send_email(
 
 
 @mcp.tool
-async def delete_resource(resource_id: str, ctx: Context = CurrentContext()) -> dict:
+async def delete_resource(resource_id: str) -> dict:
     """Delete a resource (admin only with full write scope)."""
-    user_role = await ctx.get_state("user_role")
-    await ctx.info(f"Delete requested by {user_role} for resource {resource_id}")
+    user_role = current_user_role.get()
+    logger.info(f"Delete requested by {user_role} for resource {resource_id}")
 
     # Simulated deletion
     return {"status": "deleted", "resource_id": resource_id}
+
+
+# ============================================================================
+# TIME TOOLS - Admin Only
+# These tools demonstrate admin-restricted functionality without Graph API calls
+# ============================================================================
+
+# Common timezone mappings for user-friendly input
+TIMEZONE_ALIASES = {
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
+    "CST": "America/Chicago",
+    "CDT": "America/Chicago",
+    "MST": "America/Denver",
+    "MDT": "America/Denver",
+    "PST": "America/Los_Angeles",
+    "PDT": "America/Los_Angeles",
+    "GMT": "Europe/London",
+    "BST": "Europe/London",
+    "CET": "Europe/Paris",
+    "CEST": "Europe/Paris",
+    "JST": "Asia/Tokyo",
+    "IST": "Asia/Kolkata",
+    "AEST": "Australia/Sydney",
+    "AEDT": "Australia/Sydney",
+    "UTC": "UTC",
+}
+
+
+def resolve_timezone(tz_input: str) -> ZoneInfo:
+    """Resolve timezone from alias or IANA name."""
+    # Check if it's an alias
+    resolved = TIMEZONE_ALIASES.get(tz_input.upper(), tz_input)
+    try:
+        return ZoneInfo(resolved)
+    except Exception:
+        raise ValueError(f"Unknown timezone: {tz_input}. Use IANA names (e.g., 'America/New_York') or common aliases (e.g., 'EST', 'PST', 'UTC').")
+
+
+@mcp.tool
+async def get_current_time(timezone: str = "UTC") -> dict:
+    """Get the current time in a specified timezone (admin only).
+
+    Args:
+        timezone: Timezone name (IANA format like 'America/New_York' or alias like 'EST', 'PST', 'UTC')
+
+    Returns:
+        Current time information including ISO format, Unix timestamp, and formatted string
+    """
+    user_role = current_user_role.get()
+    user_email = current_user_email.get()
+    logger.info(f"get_current_time called by {user_email} (role: {user_role}) for timezone: {timezone}")
+
+    try:
+        tz_info = resolve_timezone(timezone)
+        now = datetime.now(tz_info)
+
+        return {
+            "timezone": str(tz_info),
+            "iso_format": now.isoformat(),
+            "unix_timestamp": int(now.timestamp()),
+            "formatted": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "day_of_week": now.strftime("%A"),
+            "utc_offset": now.strftime("%z"),
+            "requested_by": user_email,
+        }
+    except ValueError as e:
+        logger.warning(f"Invalid timezone requested: {timezone}")
+        return {"error": str(e)}
+
+
+@mcp.tool
+async def convert_timezone(
+    time_str: str,
+    from_timezone: str,
+    to_timezone: str
+) -> dict:
+    """Convert a time from one timezone to another (admin only).
+
+    Args:
+        time_str: Time to convert in ISO format (e.g., '2024-01-15T14:30:00') or common formats
+        from_timezone: Source timezone (IANA name or alias like 'EST', 'PST')
+        to_timezone: Target timezone (IANA name or alias like 'EST', 'PST')
+
+    Returns:
+        Converted time information in both timezones
+    """
+    user_role = current_user_role.get()
+    user_email = current_user_email.get()
+    logger.info(f"convert_timezone called by {user_email} (role: {user_role}): {time_str} from {from_timezone} to {to_timezone}")
+
+    try:
+        from_tz = resolve_timezone(from_timezone)
+        to_tz = resolve_timezone(to_timezone)
+
+        # Parse the input time - try multiple formats
+        parsed_time = None
+        formats_to_try = [
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M",
+            "%m/%d/%Y %H:%M:%S",
+            "%m/%d/%Y %H:%M",
+            "%H:%M:%S",
+            "%H:%M",
+        ]
+
+        for fmt in formats_to_try:
+            try:
+                parsed_time = datetime.strptime(time_str, fmt)
+                break
+            except ValueError:
+                continue
+
+        if parsed_time is None:
+            return {"error": f"Could not parse time: {time_str}. Use ISO format (YYYY-MM-DDTHH:MM:SS) or common formats."}
+
+        # If only time was provided (no date), use today's date
+        if parsed_time.year == 1900:
+            today = datetime.now(from_tz).date()
+            parsed_time = parsed_time.replace(year=today.year, month=today.month, day=today.day)
+
+        # Localize to source timezone and convert to target
+        source_time = parsed_time.replace(tzinfo=from_tz)
+        target_time = source_time.astimezone(to_tz)
+
+        return {
+            "original": {
+                "time": source_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": str(from_tz),
+                "iso_format": source_time.isoformat(),
+            },
+            "converted": {
+                "time": target_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": str(to_tz),
+                "iso_format": target_time.isoformat(),
+            },
+            "offset_difference": f"{(target_time.utcoffset().total_seconds() - source_time.utcoffset().total_seconds()) / 3600:+.1f} hours",
+            "requested_by": user_email,
+        }
+    except ValueError as e:
+        logger.warning(f"Timezone conversion error: {e}")
+        return {"error": str(e)}
+
+
+@mcp.tool
+async def get_time_difference(
+    timezone1: str,
+    timezone2: str
+) -> dict:
+    """Get the current time difference between two timezones (admin only).
+
+    Args:
+        timezone1: First timezone (IANA name or alias)
+        timezone2: Second timezone (IANA name or alias)
+
+    Returns:
+        Time difference information and current times in both zones
+    """
+    user_role = current_user_role.get()
+    user_email = current_user_email.get()
+    logger.info(f"get_time_difference called by {user_email} (role: {user_role}): {timezone1} vs {timezone2}")
+
+    try:
+        tz1 = resolve_timezone(timezone1)
+        tz2 = resolve_timezone(timezone2)
+
+        now_utc = datetime.now(tz.utc)
+        time1 = now_utc.astimezone(tz1)
+        time2 = now_utc.astimezone(tz2)
+
+        # Calculate the difference in hours
+        offset1 = time1.utcoffset().total_seconds() / 3600
+        offset2 = time2.utcoffset().total_seconds() / 3600
+        diff_hours = offset2 - offset1
+
+        # Format the difference nicely
+        if diff_hours == 0:
+            diff_str = "same time"
+        elif diff_hours > 0:
+            diff_str = f"{timezone2} is {abs(diff_hours):.1f} hours ahead of {timezone1}"
+        else:
+            diff_str = f"{timezone2} is {abs(diff_hours):.1f} hours behind {timezone1}"
+
+        return {
+            "timezone1": {
+                "name": str(tz1),
+                "current_time": time1.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                "utc_offset": f"UTC{offset1:+.1f}",
+            },
+            "timezone2": {
+                "name": str(tz2),
+                "current_time": time2.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                "utc_offset": f"UTC{offset2:+.1f}",
+            },
+            "difference_hours": diff_hours,
+            "description": diff_str,
+            "requested_by": user_email,
+        }
+    except ValueError as e:
+        logger.warning(f"Time difference error: {e}")
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
@@ -343,5 +576,6 @@ if __name__ == "__main__":
         transport="streamable-http",
         host="0.0.0.0",
         port=int(os.getenv("MCP_SERVER_PORT", 10002)),
-        path="/mcp"  # Endpoint: http://localhost:10002/mcp
+        path="/mcp",  # Endpoint: http://localhost:10002/mcp
+        stateless_http=True,  # Enable stateless mode - no session required
     )

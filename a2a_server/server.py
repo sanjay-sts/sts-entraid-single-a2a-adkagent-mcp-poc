@@ -6,6 +6,8 @@ import os
 import jwt
 import asyncio
 import logging
+import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import AsyncIterable
 from contextlib import asynccontextmanager
@@ -13,6 +15,10 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from dotenv import load_dotenv
+
+# Context variables for passing auth data to agent executor
+current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
+current_access_token: ContextVar[str] = ContextVar("current_access_token", default="")
 
 # Configure logging
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -159,7 +165,9 @@ class TokenValidator:
                 )
                 logger.info(f"Token validated successfully using key from {uri}")
                 logger.info(f"User: {payload.get('preferred_username', payload.get('unique_name', payload.get('sub')))}")
-                logger.debug(f"Token claims: aud={payload.get('aud')}, iss={payload.get('iss')}, groups={payload.get('groups', [])}")
+                # Log all claims to see what's available
+                logger.debug(f"All token claims: {list(payload.keys())}")
+                logger.debug(f"Token claims details: preferred_username={payload.get('preferred_username')}, unique_name={payload.get('unique_name')}, upn={payload.get('upn')}, name={payload.get('name')}, groups={payload.get('groups', [])}")
                 return payload
             except jwt.InvalidSignatureError as e:
                 logger.debug(f"Signature verification failed with key from {uri}, trying next...")
@@ -193,16 +201,18 @@ class IdentityAwareAgentExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Execute the agent request with streaming support."""
         try:
-            # Get user context from metadata (set by auth middleware)
-            user_claims = context.metadata.get("user_claims", {})
-            access_token = context.metadata.get("access_token", "")
+            # Get user context from context variables (set by auth middleware)
+            user_claims = current_user_claims.get()
+            access_token = current_access_token.get()
+            logger.debug(f"Agent executor - user_claims: {bool(user_claims)}, access_token length: {len(access_token)}")
 
             # Update task status to working
-            event_queue.enqueue_event(
+            await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     task_id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(state=TaskState.working),
+                    final=False,
                 )
             )
 
@@ -216,28 +226,33 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                         message_text += part.text + " "
 
             message_text = message_text.strip()
+            logger.debug(f"Message text: {message_text}")
 
             if not message_text:
-                event_queue.enqueue_event(
+                await event_queue.enqueue_event(
                     TaskStatusUpdateEvent(
                         task_id=context.task_id,
                         context_id=context.context_id,
                         status=TaskStatus(
                             state=TaskState.failed,
                             message=Message(
+                                messageId=str(uuid.uuid4()),
                                 role="agent",
                                 parts=[Part(root=TextPart(text="No message text provided"))],
                             ),
                         ),
+                        final=True,
                     )
                 )
                 return
 
             # Ensure session exists for user
-            user_id = user_claims.get("sub", "anonymous")
+            user_id = user_claims.get("sub", user_claims.get("oid", "anonymous"))
             session_id = await self._ensure_session(user_id, user_claims, access_token)
+            logger.debug(f"Session ID: {session_id} for user: {user_id}")
 
             # Call ADK agent
+            logger.debug(f"Calling ADK agent at {ADK_SERVER_URL}/chat")
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{ADK_SERVER_URL}/chat",
@@ -254,57 +269,67 @@ class IdentityAwareAgentExecutor(AgentExecutor):
 
             # Send the response as a completed task
             response_text = data.get("response", "No response from agent")
+            logger.info(f"Agent response received: {response_text[:100]}...")
 
-            event_queue.enqueue_event(
+            await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     task_id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(
                         state=TaskState.completed,
                         message=Message(
+                            messageId=str(uuid.uuid4()),
                             role="agent",
                             parts=[Part(root=TextPart(text=response_text))],
                         ),
                     ),
+                    final=True,
                 )
             )
 
         except httpx.HTTPStatusError as e:
-            event_queue.enqueue_event(
+            logger.error(f"HTTP error calling ADK: {e.response.status_code} - {e.response.text}")
+            await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     task_id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(
                         state=TaskState.failed,
                         message=Message(
+                            messageId=str(uuid.uuid4()),
                             role="agent",
                             parts=[Part(root=TextPart(text=f"Agent error: {e.response.text}"))],
                         ),
                     ),
+                    final=True,
                 )
             )
         except Exception as e:
-            event_queue.enqueue_event(
+            logger.error(f"Error in agent executor: {type(e).__name__}: {str(e)}")
+            await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     task_id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(
                         state=TaskState.failed,
                         message=Message(
+                            messageId=str(uuid.uuid4()),
                             role="agent",
                             parts=[Part(root=TextPart(text=f"Error: {str(e)}"))],
                         ),
                     ),
+                    final=True,
                 )
             )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Cancel the agent execution."""
-        event_queue.enqueue_event(
+        await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=context.task_id,
                 context_id=context.context_id,
                 status=TaskStatus(state=TaskState.canceled),
+                final=True,
             )
         )
 
@@ -317,8 +342,10 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                     json={
                         "user_id": user_id,
                         "user_info": {
-                            "email": user_claims.get("preferred_username", ""),
-                            "name": user_claims.get("name", ""),
+                            # Try multiple claim names for email (v2.0: preferred_username, v1.0: unique_name, upn)
+                            "email": user_claims.get("preferred_username") or user_claims.get("unique_name") or user_claims.get("upn", ""),
+                            # Try multiple claim names for name
+                            "name": user_claims.get("name") or user_claims.get("given_name", ""),
                             "groups": user_claims.get("groups", []),
                         },
                     },
@@ -335,7 +362,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
 # Create the Agent Card
 agent_card = AgentCard(
     name="Identity-Aware AI Agent",
-    description="An AI agent that respects user identity and enforces permissions at multiple levels.",
+    description="An AI agent with Entra ID authentication that enforces role-based access control via MCP tools.",
     url=f"http://localhost:{A2A_SERVER_PORT}/",
     version="1.0.0",
     defaultInputModes=["text/plain"],
@@ -343,25 +370,53 @@ agent_card = AgentCard(
     capabilities=AgentCapabilities(streaming=True),
     skills=[
         AgentSkill(
-            id="user_profile",
-            name="User Profile Access",
-            description="Access user's Microsoft profile information",
-            tags=["identity", "profile"],
-            examples=["What's my email?", "Show my profile"],
+            id="identity_info",
+            name="Identity Information",
+            description="Get user's email, name, and role from the authenticated token",
+            tags=["identity", "auth"],
+            examples=["What's my email?", "Who am I?", "What's my name?"],
         ),
         AgentSkill(
-            id="file_management",
-            name="File Management",
-            description="List and manage user's OneDrive files",
-            tags=["files", "onedrive"],
-            examples=["List my files", "What's in my Documents folder?"],
+            id="permissions",
+            name="Permission Check",
+            description="Check what permissions the authenticated user has based on their role",
+            tags=["permissions", "rbac"],
+            examples=["What are my permissions?", "What can I do?"],
         ),
         AgentSkill(
-            id="email",
-            name="Email Operations",
-            description="Send emails on behalf of the user (admin only)",
-            tags=["email", "communication"],
-            examples=["Send an email to team@company.com"],
+            id="graph_profile",
+            name="Microsoft Graph Profile",
+            description="Fetch user profile from Microsoft Graph API via MCP (requires User.Read scope)",
+            tags=["graph", "profile", "mcp"],
+            examples=["Show my Microsoft profile", "Get my Graph profile"],
+        ),
+        AgentSkill(
+            id="onedrive_files",
+            name="OneDrive Files",
+            description="List files in user's OneDrive via MCP (admin/developer only, requires Files.Read scope)",
+            tags=["files", "onedrive", "mcp"],
+            examples=["List my files", "What's in my OneDrive?"],
+        ),
+        AgentSkill(
+            id="time_current",
+            name="Current Time",
+            description="Get the current time in any timezone (ADMIN ONLY)",
+            tags=["time", "timezone", "admin"],
+            examples=["What time is it in Tokyo?", "Current time in EST", "What's the time in UTC?"],
+        ),
+        AgentSkill(
+            id="time_convert",
+            name="Timezone Converter",
+            description="Convert time between different timezones (ADMIN ONLY)",
+            tags=["time", "timezone", "convert", "admin"],
+            examples=["Convert 3pm EST to PST", "What is 14:00 Tokyo time in London?"],
+        ),
+        AgentSkill(
+            id="time_difference",
+            name="Timezone Difference",
+            description="Get the time difference between two timezones (ADMIN ONLY)",
+            tags=["time", "timezone", "difference", "admin"],
+            examples=["Time difference between NYC and London", "How many hours ahead is Tokyo from LA?"],
         ),
     ],
 )
@@ -460,6 +515,10 @@ async def auth_middleware(request: Request, call_next):
         # Store claims in request state for the agent executor
         request.state.user_claims = claims
         request.state.access_token = token
+
+        # Also set context variables for the agent executor
+        current_user_claims.set(claims)
+        current_access_token.set(token)
 
     except jwt.ExpiredSignatureError:
         logger.warning("Token has expired")

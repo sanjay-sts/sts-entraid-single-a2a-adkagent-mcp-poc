@@ -38,21 +38,25 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 ```
 /
 ├── a2a_server/
-│   └── server.py              # A2A gateway (409 lines) - auth middleware, task executor
+│   └── server.py              # A2A gateway (536 lines) - auth middleware, task executor
 ├── adk_agent/
-│   └── agent.py               # Google ADK agent (289 lines) - session mgmt, streaming
+│   └── agent.py               # Google ADK agent (333 lines) - session mgmt, streaming
 ├── mcp_server/
-│   └── server.py              # FastMCP tools (256 lines) - 2 middleware, 4 tools
+│   └── server.py              # FastMCP tools (348 lines) - 2 middleware, 4 tools
 ├── frontend/
 │   ├── src/
 │   │   ├── App.js             # React chat UI (267 lines) - token acquisition
-│   │   ├── authConfig.js      # MSAL configuration (36 lines)
+│   │   ├── authConfig.js      # MSAL configuration (40 lines)
 │   │   └── index.js           # MSAL provider setup (31 lines)
 │   ├── package.json           # React dependencies
 │   └── .env.example           # Frontend env template
 ├── tests/
 │   ├── test_access_control.py # Access control tests (340 lines)
 │   └── conftest.py            # Pytest fixtures (51 lines)
+├── logs/                      # Runtime logs (auto-created)
+│   ├── a2a_server.log
+│   ├── adk_agent.log
+│   └── mcp_server.log
 ├── scratchpad/
 │   └── singleagent/
 │       └── single_agent_adk_mcp.md  # Implementation guide (1630 lines)
@@ -81,11 +85,11 @@ The A2A Inspector requires authentication bypass for local testing:
 - A2A Inspector doesn't send Bearer tokens
 - Auth middleware requires token for all endpoints except agent card
 
-**Workaround**: Add to auth middleware allowed paths in `a2a_server/server.py:315`:
+**Current Implementation**: The auth middleware already allows these paths without authentication (`a2a_server/server.py:423-431`):
 ```python
 if request.url.path in [
     "/.well-known/agent.json",
-    "/.well-known/agent-card.json",  # Add new path
+    "/.well-known/agent-card.json",
     "/health",
     "/docs",
     "/openapi.json",
@@ -93,9 +97,8 @@ if request.url.path in [
     return await call_next(request)
 ```
 
-**For full local testing bypass** (development only):
+**For full local testing bypass** (development only), add at start of auth_middleware:
 ```python
-# Add at start of auth_middleware
 if os.getenv("DISABLE_AUTH") == "true":
     return await call_next(request)
 ```
@@ -104,14 +107,43 @@ if os.getenv("DISABLE_AUTH") == "true":
 
 A2A Inspector uses old endpoint `/.well-known/agent.json`. The a2a-sdk now prefers `/.well-known/agent-card.json`. Both currently work.
 
+### Token Validation (v1.0 and v2.0 Support)
+
+The system supports both Entra ID v1.0 and v2.0 tokens. Microsoft Graph API returns v1.0 tokens even when requesting via v2.0 endpoints.
+
+**Supported JWKS endpoints** (`a2a_server/server.py:64-68`, `mcp_server/server.py:42-46`):
+```python
+JWKS_URIS = [
+    f"https://login.microsoftonline.com/{TENANT_ID}/discovery/v2.0/keys",  # v2.0
+    f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",       # v1.0
+    "https://login.microsoftonline.com/common/discovery/keys",             # common
+]
+```
+
+**Supported issuers** (`a2a_server/server.py:69-72`, `mcp_server/server.py:47-50`):
+```python
+VALID_ISSUERS = [
+    f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",  # v2.0 issuer
+    f"https://sts.windows.net/{TENANT_ID}/",                # v1.0 issuer (Graph tokens)
+]
+```
+
+**Custom API audience support** (`a2a_server/server.py:149-153`, `mcp_server/server.py:161-165`):
+```python
+valid_audiences = [
+    CLIENT_ID,
+    f"api://{CLIENT_ID}",  # Custom API scope audience
+]
+```
+
 ## Security Model
 
 ### Three-Tier Access Control
 
 | Level | Location | Mechanism | Code Location | Denies Access When |
 |-------|----------|-----------|---------------|-------------------|
-| **Agent** | A2A Server | Group membership, blocklist | `a2a_server/server.py:310-380` | User blocked or not in allowed group |
-| **Tool** | FastMCP | Role-based permissions | `mcp_server/server.py:123-154` | User role lacks tool permission |
+| **Agent** | A2A Server | Group membership, blocklist | `a2a_server/server.py:411-507` | User blocked or not in allowed group |
+| **Tool** | FastMCP | Role-based permissions | `mcp_server/server.py:204-241` | User role lacks tool permission |
 | **Resource** | Graph API | OAuth scopes | External | Token missing required scope |
 
 ### Role Hierarchy & Permissions
@@ -122,7 +154,7 @@ developer  → Subset: get_user_profile, list_files
 viewer     → Limited: get_user_profile only
 ```
 
-**Tool Permission Matrix** (defined in `mcp_server/server.py:28-33`):
+**Tool Permission Matrix** (defined in `mcp_server/server.py:53-58`):
 ```python
 TOOL_PERMISSIONS = {
     "get_user_profile": {"required_scopes": ["User.Read"], "allowed_roles": ["admin", "developer", "viewer"]},
@@ -179,7 +211,7 @@ User         Frontend           A2A Gateway        ADK Agent          MCP Server
 ### FastMCP: Token Access in Tools
 
 ```python
-# mcp_server/server.py:164-166
+# mcp_server/server.py:250-256
 from fastmcp.server.dependencies import CurrentContext
 from fastmcp.server.context import Context
 
@@ -192,7 +224,8 @@ async def get_user_profile(ctx: Context = CurrentContext()) -> dict:
 ### FastMCP: Middleware Chain
 
 ```python
-# mcp_server/server.py:159-160
+# mcp_server/server.py:244-247
+mcp = FastMCP(name="Identity-Aware MCP Server")
 mcp.add_middleware(TokenValidationMiddleware())   # Validates JWT, extracts claims
 mcp.add_middleware(ToolAuthorizationMiddleware()) # Checks role + scopes
 ```
@@ -200,20 +233,24 @@ mcp.add_middleware(ToolAuthorizationMiddleware()) # Checks role + scopes
 ### Google ADK: Session State
 
 ```python
-# adk_agent/agent.py:75-79
+# adk_agent/agent.py:93-98
 # Use "user:" prefix for persistence across interactions
 session.state["user:access_token"] = access_token
-session.state["user:email"] = user_info.get("email", "")
-session.state["user:role"] = determined_role
+session.state["user:email"] = user_info.get("email", user_info.get("preferred_username", ""))
+session.state["user:name"] = user_info.get("name", user_info.get("displayName", ""))
+session.state["user:groups"] = user_info.get("groups", [])
+session.state["user:role"] = self._determine_role(user_info.get("groups", []))
 ```
 
 ### A2A: Agent Card Configuration
 
 ```python
-# a2a_server/server.py:257-288
+# a2a_server/server.py:358-390
 agent_card = AgentCard(
     name="Identity-Aware AI Agent",
+    description="An AI agent that respects user identity and enforces permissions at multiple levels.",
     url=f"http://localhost:{A2A_SERVER_PORT}/",
+    version="1.0.0",
     defaultInputModes=["text/plain"],
     defaultOutputModes=["text/plain", "application/json"],
     capabilities=AgentCapabilities(streaming=True),
@@ -221,11 +258,30 @@ agent_card = AgentCard(
 )
 ```
 
+### A2A: Context Variables for Auth Propagation
+
+```python
+# a2a_server/server.py:20-21
+from contextvars import ContextVar
+
+current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
+current_access_token: ContextVar[str] = ContextVar("current_access_token", default="")
+
+# Set in auth middleware (line 488-489)
+current_user_claims.set(claims)
+current_access_token.set(token)
+
+# Access in IdentityAwareAgentExecutor (line 203-204)
+user_claims = current_user_claims.get()
+access_token = current_access_token.get()
+```
+
 ### React/MSAL: Token Acquisition
 
 ```javascript
-// frontend/src/App.js:95-112
-const getAccessToken = async () => {
+// frontend/src/App.js:92-110
+const getAccessToken = useCallback(async () => {
+    const scopes = graphScopes[selectedScopes];
     try {
         const response = await instance.acquireTokenSilent({ scopes, account });
         return response.accessToken;
@@ -236,7 +292,45 @@ const getAccessToken = async () => {
         }
         throw error;
     }
+}, [instance, account, selectedScopes]);
+```
+
+### Custom API Scope Configuration
+
+```javascript
+// frontend/src/authConfig.js:27-39
+const API_SCOPE = `api://${process.env.REACT_APP_ENTRA_CLIENT_ID}/access_as_user`;
+
+export const graphScopes = {
+  basic: [API_SCOPE, 'User.Read'],
+  files: [API_SCOPE, 'User.Read', 'Files.Read'],
+  email: [API_SCOPE, 'User.Read', 'Mail.Send'],
+  full: [API_SCOPE, 'User.Read', 'Files.Read', 'Mail.Send'],
 };
+```
+
+### A2A: IdentityAwareAgentExecutor
+
+```python
+# a2a_server/server.py:196-322
+class IdentityAwareAgentExecutor(AgentExecutor):
+    """Agent executor that forwards requests to the ADK agent with user context."""
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        # Get user context from context variables
+        user_claims = current_user_claims.get()
+        access_token = current_access_token.get()
+
+        # Ensure session, call ADK agent, emit task status events
+        ...
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        # Emit canceled status
+        ...
+
+    async def _ensure_session(self, user_id: str, user_claims: dict, access_token: str) -> str:
+        # Create session with ADK agent if not exists
+        ...
 ```
 
 ## Environment Variables
@@ -326,11 +420,26 @@ uv run pytest tests/test_access_control.py -v
 | Limitation | Impact | Location |
 |-----------|--------|----------|
 | Frontend not using stream endpoint | UI shows response all at once | `frontend/src/App.js` |
-| Session service in-memory | Lost on service restart | `adk_agent/agent.py:31` |
-| JWKS cache never invalidated | Could use stale keys | `a2a_server/server.py:60-70` |
+| Session service in-memory | Lost on service restart | `adk_agent/agent.py:47` |
+| JWKS cache never invalidated | Could use stale keys (but clears on key-not-found) | `a2a_server/server.py:91-105` |
 | No rate limiting | Could be abused | All servers |
-| MCP delete_resource simulated | Only logs, doesn't delete | `mcp_server/server.py:240-246` |
+| MCP delete_resource simulated | Only logs, doesn't delete | `mcp_server/server.py:331-338` |
 | A2A Inspector requires auth bypass | Can't test without workaround | `a2a_server/server.py` |
+
+## Logging
+
+All servers log to both console and files in the `logs/` directory:
+
+| Server | Log File | Log Level |
+|--------|----------|-----------|
+| A2A Gateway | `logs/a2a_server.log` | DEBUG |
+| ADK Agent | `logs/adk_agent.log` | DEBUG |
+| MCP Server | `logs/mcp_server.log` | INFO |
+
+Logs are useful for debugging token validation issues. Key log messages:
+- `Token claims (unverified): iss=..., aud=...` - Shows token claims before validation
+- `Token validated successfully using key from...` - Successful validation
+- `Access denied: Role '...' cannot use tool '...'` - Permission denial
 
 ## Important Conventions
 
@@ -338,18 +447,19 @@ uv run pytest tests/test_access_control.py -v
 2. **State Prefix**: Use `user:` prefix for ADK session state to ensure persistence
 3. **Error Handling**: Return structured errors with `error` and `message` fields
 4. **Scope Checking**: Check both role AND scopes before allowing tool execution
-5. **JWKS Caching**: Cache JWKS responses to avoid repeated fetches
+5. **JWKS Caching**: Cache JWKS responses to avoid repeated fetches; cache clears on key-not-found errors
 6. **Port Range**: Use 10000+ ports to avoid conflicts with common services
+7. **Context Variables**: Use `ContextVar` for passing auth data across async boundaries (A2A server)
 
 ## Verification Checklist
 
-### Agent-Level (a2a_server/server.py)
+### Agent-Level (a2a_server/server.py:411-507)
 - [ ] Unauthenticated requests return 401
 - [ ] Blocked users receive 403
 - [ ] Users without allowed group receive 403
 - [ ] Valid users can send messages
 
-### Tool-Level (mcp_server/server.py)
+### Tool-Level (mcp_server/server.py:204-241)
 - [ ] Viewer cannot use `send_email` or `delete_resource`
 - [ ] Developer cannot use `send_email`
 - [ ] Admin can use all tools

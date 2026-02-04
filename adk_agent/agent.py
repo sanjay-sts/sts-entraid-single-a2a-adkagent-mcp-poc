@@ -1,21 +1,24 @@
-"""Google ADK Agent with user context and MCP tool integration."""
+"""Google ADK Agent with user context and MCP tool integration using McpToolset."""
 import os
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, Dict
 from google.adk import Agent
 from google.adk.tools import FunctionTool, ToolContext
-from google.adk.tools.mcp_tool import MCPToolset, SseConnectionParams
+from google.adk.tools.mcp_tool import McpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
+from google.adk.runners import Runner, RunConfig
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.genai import types
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-import httpx
 import json
 from dotenv import load_dotenv
+from litellm.exceptions import RateLimitError
 
 # Load environment variables
 load_dotenv()
@@ -39,40 +42,91 @@ MCP_SERVER_URL = f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}/mcp"
 ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 ADK_SERVER_PORT = int(os.getenv("ADK_SERVER_PORT", 10001))
 
+# Map CLAUDE_API_KEY to ANTHROPIC_API_KEY for LiteLLM compatibility
+if os.getenv("CLAUDE_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
+    os.environ["ANTHROPIC_API_KEY"] = os.getenv("CLAUDE_API_KEY")
+
+
+def mcp_header_provider(readonly_context: ReadonlyContext) -> Dict[str, str]:
+    """Provides Authorization header for MCP calls from session state.
+
+    This is called by McpToolset to get dynamic headers for each request.
+    The access token is stored in session state with 'user:' prefix.
+    """
+    if readonly_context and readonly_context.state:
+        access_token = readonly_context.state.get("user:access_token", "")
+        if access_token:
+            logger.debug(f"MCP header_provider: Providing auth token (length: {len(access_token)})")
+            return {"Authorization": f"Bearer {access_token}"}
+    logger.warning("MCP header_provider: No access token found in session state")
+    return {}
+
 
 class IdentityAwareAgent:
-    """Agent that maintains user identity context and passes tokens to MCP tools."""
+    """Agent that maintains user identity context and uses McpToolset for MCP tools."""
 
     def __init__(self):
         self.session_service = InMemorySessionService()
         self.sessions = {}  # Track active sessions
 
-        # Custom tools that access user context
+        # Identity tools (local - no MCP)
         self.identity_tool = FunctionTool(func=self.get_identity_info)
         self.permission_check_tool = FunctionTool(func=self.check_my_permissions)
 
-        # Create the agent
-        self.agent = Agent(
-            model="gemini-2.0-flash",
-            name="identity_aware_agent",
-            description="An agent that respects user identity and permissions",
-            instruction="""You are a helpful assistant with access to the user's Microsoft account.
-            Always check the user's permissions before attempting operations.
-            If a tool fails due to permissions, explain what access is needed.
+        # MCP Toolset - connects to FastMCP server with dynamic auth
+        # Uses header_provider to inject Authorization header from session state
+        self.mcp_toolset = McpToolset(
+            connection_params=StreamableHTTPConnectionParams(
+                url=MCP_SERVER_URL,
+                timeout=30.0,
+                sse_read_timeout=60.0,
+            ),
+            # Filter tools: only expose these MCP tools to the agent
+            # Admin-only tools (time tools) are enforced by MCP middleware
+            tool_filter=[
+                "get_user_profile",
+                "list_files",
+                "send_email",
+                "delete_resource",
+                "get_current_time",
+                "convert_timezone",
+                "get_time_difference",
+            ],
+            # Dynamic header provider for per-request auth
+            header_provider=mcp_header_provider,
+        )
 
-            Available tools:
-            - get_identity_info: Get the current user's identity information
-            - check_my_permissions: Check what permissions the current user has
-            - get_user_profile: Fetch the user's Microsoft Graph profile
-            - list_files: List files in user's OneDrive
-            - send_email: Send an email (admin only)
-            - delete_resource: Delete a resource (admin only)
-            """,
+        # Create the agent with both local tools and MCP toolset
+        self.agent = Agent(
+            model=LiteLlm(model="anthropic/claude-3-5-haiku-20241022"),
+            name="identity_aware_agent",
+            description="An agent that provides user identity information and time utilities",
+            instruction="""You MUST follow these rules strictly:
+1. Call EXACTLY ONE tool per user request
+2. After receiving a tool result, IMMEDIATELY respond to the user with that result
+3. NEVER call another tool after getting a result
+4. Format the tool result as a clear, human-readable response
+5. If the tool returns an error, explain it to the user
+
+Available tools:
+- get_identity_info: Get your identity (email, name, role) - local
+- check_my_permissions: Check what you can do - local
+- get_user_profile: Get Microsoft profile (via MCP) - all roles
+- list_files: List OneDrive files (via MCP) - admin/developer only
+- get_current_time: Get current time in a timezone (via MCP) - ADMIN ONLY
+- convert_timezone: Convert time between timezones (via MCP) - ADMIN ONLY
+- get_time_difference: Compare two timezones (via MCP) - ADMIN ONLY
+
+Example: If user asks "what time is it in Tokyo", call get_current_time with timezone="Asia/Tokyo".""",
             tools=[
                 self.identity_tool,
                 self.permission_check_tool,
+                self.mcp_toolset,  # McpToolset provides all MCP tools
             ],
         )
+
+        # Limit LLM calls: 1. user asks → 2. model calls tool → 3. model responds
+        self.run_config = RunConfig(max_llm_calls=3)
 
         self.runner = Runner(
             agent=self.agent,
@@ -85,20 +139,27 @@ class IdentityAwareAgent:
         logger.info(f"Creating session for user: {user_id}")
         logger.debug(f"User info: {user_info}")
 
+        # Determine role first
+        role = self._determine_role(user_info.get("groups", []))
+
+        # Pass initial state at creation time - this ensures it's stored properly
+        # Using user: prefix for persistence across sessions
+        initial_state = {
+            "user:access_token": access_token,
+            "user:email": user_info.get("email", user_info.get("preferred_username", "")),
+            "user:name": user_info.get("name", user_info.get("displayName", "")),
+            "user:groups": user_info.get("groups", []),
+            "user:role": role,
+        }
+
         session = await self.session_service.create_session(
             app_name="identity-agent",
             user_id=user_id,
+            state=initial_state,
         )
 
-        # Store user context in session state with user: prefix for persistence
-        session.state["user:access_token"] = access_token
-        session.state["user:email"] = user_info.get("email", user_info.get("preferred_username", ""))
-        session.state["user:name"] = user_info.get("name", user_info.get("displayName", ""))
-        session.state["user:groups"] = user_info.get("groups", [])
-        session.state["user:role"] = self._determine_role(user_info.get("groups", []))
-
         logger.debug(f"Session created with id: {session.id}")
-        logger.debug(f"User role determined: {session.state['user:role']}")
+        logger.debug(f"User role determined: {role}")
 
         # Track session
         self.sessions[session.id] = {
@@ -123,15 +184,26 @@ class IdentityAwareAgent:
 
     async def get_identity_info(self, tool_context: ToolContext) -> dict:
         """Get the current user's identity information."""
+        # Access session state via tool_context
+        state = tool_context.state if tool_context else {}
+        email = state.get("user:email", "")
+        name = state.get("user:name", "")
+        role = state.get("user:role", "none")
+
+        logger.debug(f"get_identity_info called - email: {email}, role: {role}")
+
         return {
-            "email": tool_context.state.get("user:email"),
-            "name": tool_context.state.get("user:name"),
-            "role": tool_context.state.get("user:role"),
+            "email": email,
+            "name": name,
+            "role": role,
         }
 
     async def check_my_permissions(self, tool_context: ToolContext) -> dict:
         """Check what permissions the current user has."""
-        role = tool_context.state.get("user:role", "none")
+        state = tool_context.state if tool_context else {}
+        role = state.get("user:role", "none")
+
+        logger.debug(f"check_my_permissions called - role: {role}")
 
         permission_map = {
             "admin": {
@@ -139,24 +211,28 @@ class IdentityAwareAgent:
                 "can_list_files": True,
                 "can_send_email": True,
                 "can_delete_resources": True,
+                "can_use_time_tools": True,
             },
             "developer": {
                 "can_read_profile": True,
                 "can_list_files": True,
                 "can_send_email": False,
                 "can_delete_resources": False,
+                "can_use_time_tools": False,
             },
             "viewer": {
                 "can_read_profile": True,
                 "can_list_files": False,
                 "can_send_email": False,
                 "can_delete_resources": False,
+                "can_use_time_tools": False,
             },
             "none": {
                 "can_read_profile": False,
                 "can_list_files": False,
                 "can_send_email": False,
                 "can_delete_resources": False,
+                "can_use_time_tools": False,
             },
         }
 
@@ -166,7 +242,7 @@ class IdentityAwareAgent:
         }
 
     async def chat(self, session_id: str, user_id: str, message: str, access_token: str) -> AsyncGenerator[dict, None]:
-        """Process a chat message with user context."""
+        """Process a chat message with user context, with retry logic for rate limits."""
         logger.info(f"Chat request - session: {session_id}, user: {user_id}")
         logger.debug(f"Message: {message[:100]}...")
 
@@ -177,37 +253,46 @@ class IdentityAwareAgent:
             yield {"error": "Session not found. Create session first."}
             return
 
-        # Update access token in case it was refreshed
-        session_info["session"].state["user:access_token"] = access_token
-        logger.debug("Updated access token in session state")
+        # Update access token in the storage directly (InMemorySessionService stores user: state separately)
+        # This is critical - header_provider reads from session state during MCP calls
+        # user: prefixed keys are stored in user_state with prefix stripped
+        self.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})["access_token"] = access_token
+        logger.debug(f"Updated access token in user_state (length: {len(access_token)})")
 
-        # Run the agent
-        logger.debug("Starting agent run")
-        async for event in self.runner.run_async(
-            session_id=session_id,
-            user_id=user_id,
-            new_message=types.Content(
-                role="user",
-                parts=[types.Part(text=message)]
-            ),
-        ):
-            logger.debug(f"Agent event: {type(event).__name__}")
-            yield event
+        # Retry configuration
+        max_retries = 3
+        base_delay = 30  # seconds - Claude rate limits reset per minute
 
-    async def call_mcp_tool(self, tool_name: str, arguments: dict, access_token: str) -> dict:
-        """Call an MCP tool with the user's access token."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{MCP_SERVER_URL}/tools/{tool_name}",
-                json=arguments,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json",
-                },
-                timeout=30.0
-            )
-            response.raise_for_status()
-            return response.json()
+        for attempt in range(max_retries):
+            try:
+                # Run the agent
+                logger.debug(f"Starting agent run (attempt {attempt + 1}/{max_retries})")
+                async for event in self.runner.run_async(
+                    session_id=session_id,
+                    user_id=user_id,
+                    new_message=types.Content(
+                        role="user",
+                        parts=[types.Part(text=message)]
+                    ),
+                    run_config=self.run_config,
+                ):
+                    logger.debug(f"Agent event: {type(event).__name__}")
+                    yield event
+                return  # Success, exit retry loop
+
+            except RateLimitError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (attempt + 1)  # 30s, 60s, 90s
+                    logger.warning(f"Rate limited, waiting {delay}s before retry {attempt + 2}/{max_retries}...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Rate limit exceeded after {max_retries} retries")
+                    yield {"error": f"Rate limit exceeded. Please wait a minute and try again. Details: {str(e)}"}
+                    return
+            except Exception as e:
+                logger.error(f"Agent error: {type(e).__name__}: {str(e)}")
+                yield {"error": f"Agent error: {str(e)}"}
+                return
 
 
 # Create FastAPI app
