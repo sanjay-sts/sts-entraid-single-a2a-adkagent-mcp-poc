@@ -136,7 +136,7 @@ function ChatInterface() {
             message: {
               messageId: `msg-${Date.now()}`,
               role: 'user',
-              parts: [{ kind: 'text', text: userMessage }],
+              parts: [{ type: 'text', text: userMessage }],
             },
           },
           id: `req-${Date.now()}`,
@@ -166,6 +166,7 @@ function ChatInterface() {
       }
 
       const data = await response.json();
+      console.log('A2A Response:', JSON.stringify(data, null, 2));
 
       if (data.error) {
         setMessages(prev => [...prev, {
@@ -173,12 +174,24 @@ function ChatInterface() {
           content: `Error: ${data.error.message}`,
           isError: true
         }]);
-      } else if (data.result?.message) {
-        const agentText = data.result.message.parts
-          .filter(p => p.kind === 'text')
+      } else if (data.result?.status?.message?.parts) {
+        // A2A task response format: result.status.message.parts[].kind='text'
+        const agentText = data.result.status.message.parts
+          .filter(p => p.kind === 'text' || p.type === 'text')
           .map(p => p.text)
           .join('\n');
-        setMessages(prev => [...prev, { role: 'agent', content: agentText }]);
+        setMessages(prev => [...prev, { role: 'agent', content: agentText || 'No text response' }]);
+      } else if (data.result?.message?.parts) {
+        // Direct message response format
+        const agentText = data.result.message.parts
+          .filter(p => p.kind === 'text' || p.type === 'text')
+          .map(p => p.text)
+          .join('\n');
+        setMessages(prev => [...prev, { role: 'agent', content: agentText || 'No text response' }]);
+      } else {
+        // Debug: log unexpected response format
+        console.log('Unexpected A2A response format:', JSON.stringify(data, null, 2));
+        setMessages(prev => [...prev, { role: 'agent', content: 'Received response (check console for format)' }]);
       }
 
     } catch (err) {

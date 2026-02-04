@@ -4,10 +4,9 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Optional, AsyncGenerator, Dict
-from google.adk import Agent
+from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, ToolContext
-from google.adk.tools.mcp_tool import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StreamableHTTPConnectionParams
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner, RunConfig
 from google.adk.models.lite_llm import LiteLlm
@@ -97,27 +96,28 @@ class IdentityAwareAgent:
         )
 
         # Create the agent with both local tools and MCP toolset
-        self.agent = Agent(
-            model=LiteLlm(model="anthropic/claude-3-5-haiku-20241022"),
+        # Using LlmAgent (recommended for LiteLLM) with Claude Sonnet 4
+        self.agent = LlmAgent(
+            model=LiteLlm(model="anthropic/claude-sonnet-4-20250514"),
             name="identity_aware_agent",
             description="An agent that provides user identity information and time utilities",
-            instruction="""You MUST follow these rules strictly:
-1. Call EXACTLY ONE tool per user request
-2. After receiving a tool result, IMMEDIATELY respond to the user with that result
-3. NEVER call another tool after getting a result
-4. Format the tool result as a clear, human-readable response
-5. If the tool returns an error, explain it to the user
+            instruction="""You are a helpful assistant for identity and time queries.
+
+When a user asks a question:
+1. Call the appropriate tool to get the information
+2. Once you receive the tool result, format it nicely and respond to the user
+3. Do not call unnecessary tools - only call what's needed to answer the question
 
 Available tools:
-- get_identity_info: Get your identity (email, name, role) - local
-- check_my_permissions: Check what you can do - local
-- get_user_profile: Get Microsoft profile (via MCP) - all roles
-- list_files: List OneDrive files (via MCP) - admin/developer only
-- get_current_time: Get current time in a timezone (via MCP) - ADMIN ONLY
-- convert_timezone: Convert time between timezones (via MCP) - ADMIN ONLY
-- get_time_difference: Compare two timezones (via MCP) - ADMIN ONLY
+- get_identity_info: Get user's email, name, role from their token
+- check_my_permissions: Check what actions the user can perform
+- get_user_profile: Get Microsoft profile via Graph API
+- list_files: List OneDrive files (admin/developer only)
+- get_current_time: Get current time in a timezone (ADMIN ONLY)
+- convert_timezone: Convert time between timezones (ADMIN ONLY)
+- get_time_difference: Get difference between timezones (ADMIN ONLY)
 
-Example: If user asks "what time is it in Tokyo", call get_current_time with timezone="Asia/Tokyo".""",
+For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "Asia/Tokyo", "America/New_York".""",
             tools=[
                 self.identity_tool,
                 self.permission_check_tool,
@@ -125,8 +125,9 @@ Example: If user asks "what time is it in Tokyo", call get_current_time with tim
             ],
         )
 
-        # Limit LLM calls: 1. user asks → 2. model calls tool → 3. model responds
-        self.run_config = RunConfig(max_llm_calls=3)
+        # Limit LLM calls: user message → tool call → final response
+        # Keep low to prevent infinite loops with ADK's "Handle the requests" injection
+        self.run_config = RunConfig(max_llm_calls=4)
 
         self.runner = Runner(
             agent=self.agent,
@@ -360,17 +361,41 @@ async def chat(request: Request):
         logger.error("Missing required fields: message, user_id, or session_id")
         raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
 
-    # Collect responses
-    responses = []
+    # Collect ALL events, then extract the FINAL text response
+    # The final response is the last text content after all tool calls complete
+    final_response = None
+    all_texts = []
+
     async for event in agent.chat(session_id, user_id, message, access_token):
+        logger.debug(f"Event type: {type(event).__name__}")
+
+        # Check for error dict from our error handling
+        if isinstance(event, dict) and "error" in event:
+            final_response = event["error"]
+            break
+
         if hasattr(event, "content") and event.content:
             for part in event.content.parts:
                 if hasattr(part, "text") and part.text:
-                    responses.append(part.text)
+                    text = part.text.strip()
+                    if text:
+                        all_texts.append(text)
+                        logger.debug(f"Collected text (len={len(text)}): {text[:100]}...")
+                        # Keep updating final_response - the last one is the actual answer
+                        final_response = text
 
-    response_text = " ".join(responses) if responses else "No response generated"
+    # Use the last collected text as the final response
+    # This is typically the model's final answer after processing tool results
+    if final_response:
+        response_text = final_response
+    elif all_texts:
+        # Fallback: join all texts if no clear final response
+        response_text = all_texts[-1]  # Take the last one
+    else:
+        response_text = "No response generated"
+
     logger.info(f"Chat response generated (length: {len(response_text)})")
-    logger.debug(f"Response: {response_text[:200]}...")
+    logger.debug(f"Final Response: {response_text[:200]}...")
 
     return {
         "response": response_text,
