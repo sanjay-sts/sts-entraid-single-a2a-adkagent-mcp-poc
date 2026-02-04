@@ -1,157 +1,766 @@
 # Identity-Aware AI Agent System
 
-A secure, multi-tier AI agent system where user identity propagates from frontend authentication through the agent layer down to resource APIs.
+A secure, multi-tier AI agent system where user identity propagates from frontend authentication through the agent layer down to resource APIs. The architecture enforces access control at three independent levels, providing defense in depth.
 
-## Architecture
+## Table of Contents
+
+- [System Design](#system-design)
+- [Current State](#current-state)
+- [Architecture Diagrams](#architecture-diagrams)
+- [Authentication Flow](#authentication-flow)
+- [Multi-Turn Conversation Flow](#multi-turn-conversation-flow)
+- [Context and Auth Passing](#context-and-auth-passing)
+- [RBAC (Role-Based Access Control)](#rbac-role-based-access-control)
+- [API Reference](#api-reference)
+- [Setup Guide](#setup-guide)
+- [Testing](#testing)
+
+---
+
+## System Design
+
+### Overview
+
+This system implements an identity-aware AI agent using:
+- **Frontend**: React with MSAL.js for Microsoft Entra ID authentication
+- **Gateway**: A2A Protocol server for agent discovery and request routing
+- **Agent**: Google ADK with Claude Sonnet 4 via LiteLLM
+- **Tools**: FastMCP server providing identity-aware tools
+
+### Technology Stack
+
+| Component | Technology | Port | Purpose |
+|-----------|------------|------|---------|
+| Frontend | React 18 + MSAL.js 3.6 | 10003 | User authentication, token acquisition |
+| Gateway | A2A Protocol (FastAPI + a2a-sdk) | 10000 | Agent discovery, agent-level ACL, streaming |
+| Agent | Google ADK + LiteLLM + Claude Sonnet 4 | 10001 | LLM orchestration, tool calling |
+| Tools | FastMCP (Stateless HTTP) | 10002 | Tool execution, token propagation |
+| Identity | Microsoft Entra ID | - | OAuth 2.0, group claims, scopes |
+| Resources | Microsoft Graph API | - | User data, files, email |
+
+### Three-Tier Security Model
+
+| Level | Location | Mechanism | Enforced By | Denies Access When |
+|-------|----------|-----------|-------------|-------------------|
+| **1. Agent** | A2A Server | Group membership, blocklist | `auth_middleware` | User blocked or not in allowed group |
+| **2. Tool** | FastMCP | Role-based permissions | `ToolAuthorizationMiddleware` | User role lacks tool permission |
+| **3. Resource** | Graph API | OAuth scopes | Microsoft Graph | Token missing required scope |
+
+---
+
+## Current State
+
+### Working Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Entra ID Authentication | ✅ Working | MSAL.js popup/silent token acquisition |
+| Custom API Scope | ✅ Working | `api://{client-id}/access_as_user` |
+| Token Validation (v1.0 & v2.0) | ✅ Working | Supports both Entra ID token versions |
+| A2A Protocol | ✅ Working | Agent card discovery, message/send |
+| ADK + Claude Sonnet 4 | ✅ Working | Via LiteLLM, no looping issues |
+| MCP Tools (Stateless) | ✅ Working | Token passed via header_provider |
+| Multi-turn Conversations | ✅ Working | Session state preserved in ADK |
+| RBAC Enforcement | ✅ Working | Three-tier access control |
+
+### Known Limitations
+
+| Limitation | Impact | Location |
+|-----------|--------|----------|
+| Graph API returns 401 | Using token claims fallback | MCP tools |
+| Session in-memory only | Lost on restart | ADK Agent |
+| No streaming to frontend | Full response only | Frontend |
+
+---
+
+## Architecture Diagrams
+
+### System Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│  React Frontend │───▶│   A2A Server    │───▶│   Google ADK    │───▶│   FastMCP       │
-│  (MSAL.js)      │    │   (Gateway)     │    │   Agent         │    │   Tools         │
-└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
-        │                      │                      │                      │
-        │  Entra ID Token      │  Token Validation    │  User Context        │  Token Access
-        │  (Authorization)     │  + Agent-Level ACL   │  + Tool-Level ACL    │  + Resource ACL
-        ▼                      ▼                      ▼                      ▼
-   ┌─────────────────────────────────────────────────────────────────────────────────────┐
-   │                              Microsoft Graph API                                      │
-   │                         (Resource-Level Scope Enforcement)                           │
-   └─────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                                    USER BROWSER                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                         React Frontend (Port 10003)                              │ │
+│  │  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────────────┐   │ │
+│  │  │   MSAL.js    │───▶│ Auth State   │───▶│  Chat Interface                  │   │ │
+│  │  │  (Login)     │    │ (Token)      │    │  - Send messages                 │   │ │
+│  │  └──────────────┘    └──────────────┘    │  - Display responses             │   │ │
+│  │         │                   │            │  - Scope selection               │   │ │
+│  │         ▼                   ▼            └──────────────────────────────────┘   │ │
+│  │  ┌─────────────────────────────────────────────────────────────────────────┐    │ │
+│  │  │              Microsoft Entra ID (OAuth 2.0 + OIDC)                      │    │ │
+│  │  │  - Token issuance (custom API scope + Graph scopes)                     │    │ │
+│  │  │  - Group claims in token                                                │    │ │
+│  │  └─────────────────────────────────────────────────────────────────────────┘    │ │
+│  └─────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          │ HTTP POST + Bearer Token
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              A2A Gateway (Port 10000)                                │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                         auth_middleware                                       │   │
+│  │  1. Validate JWT signature (JWKS from Entra ID)                              │   │
+│  │  2. Check blocklist (BLOCKED_USERS)                                          │   │
+│  │  3. Verify group membership (ALLOWED_GROUPS)                                 │   │
+│  │  4. Set ContextVar: current_user_claims, current_access_token                │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+│                                          │                                           │
+│                                          ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                    IdentityAwareAgentExecutor                                 │   │
+│  │  1. Extract user claims from ContextVar                                       │   │
+│  │  2. Ensure ADK session exists for user                                        │   │
+│  │  3. Forward request to ADK Agent                                              │   │
+│  │  4. Emit TaskStatusUpdateEvent with response                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          │ HTTP POST + Bearer Token
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              ADK Agent (Port 10001)                                  │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                         Session Management                                    │   │
+│  │  - InMemorySessionService                                                     │   │
+│  │  - Session state: user:access_token, user:email, user:role, user:groups      │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+│                                          │                                           │
+│                                          ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                    LlmAgent (Claude Sonnet 4 via LiteLLM)                     │   │
+│  │  - Processes user message                                                     │   │
+│  │  - Decides which tools to call                                               │   │
+│  │  - Formats final response                                                     │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+│                                          │                                           │
+│                                          ▼                                           │
+│  ┌────────────────────────┐    ┌────────────────────────────────────────────────┐   │
+│  │    Local Tools         │    │              McpToolset                         │   │
+│  │  - get_identity_info   │    │  - header_provider injects Bearer token        │   │
+│  │  - check_my_permissions│    │  - Calls FastMCP server                        │   │
+│  └────────────────────────┘    └────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          │ HTTP POST + Bearer Token (from header_provider)
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              FastMCP Server (Port 10002)                             │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                      TokenValidationMiddleware                                │   │
+│  │  1. Extract Bearer token from Authorization header                           │   │
+│  │  2. Validate JWT signature (JWKS)                                            │   │
+│  │  3. Extract claims: role, email, scopes                                      │   │
+│  │  4. Store in ContextVar for tool access                                      │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+│                                          │                                           │
+│                                          ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                      ToolAuthorizationMiddleware                              │   │
+│  │  1. Check user role against TOOL_PERMISSIONS                                 │   │
+│  │  2. Verify required scopes present                                           │   │
+│  │  3. Allow or deny tool execution                                             │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+│                                          │                                           │
+│                                          ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                              MCP Tools                                        │   │
+│  │  - get_user_profile      (all roles)                                         │   │
+│  │  - list_files            (admin, developer)                                  │   │
+│  │  - send_email            (admin only)                                        │   │
+│  │  - delete_resource       (admin only)                                        │   │
+│  │  - get_current_time      (admin only)                                        │   │
+│  │  - convert_timezone      (admin only)                                        │   │
+│  │  - get_time_difference   (admin only)                                        │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          │ (Optional) Graph API calls with user token
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              Microsoft Graph API                                     │
+│  - /me (User.Read scope)                                                            │
+│  - /me/drive/root/children (Files.Read scope)                                       │
+│  - /me/sendMail (Mail.Send scope)                                                   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Three-Tier Security Model
+### Request Flow Diagram
 
-| Level | Location | Mechanism | Denies Access When |
-|-------|----------|-----------|-------------------|
-| **Agent** | A2A Server | Group membership, blocklist | User blocked or not in allowed group |
-| **Tool** | FastMCP | Role-based permissions | User role lacks tool permission |
-| **Resource** | Graph API | OAuth scopes | Token missing required scope |
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│  User    │     │ Frontend │     │   A2A    │     │   ADK    │     │   MCP    │
+│ Browser  │     │  React   │     │ Gateway  │     │  Agent   │     │  Server  │
+└────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘
+     │                │                │                │                │
+     │  1. Login      │                │                │                │
+     │───────────────▶│                │                │                │
+     │                │ 2. MSAL        │                │                │
+     │                │ acquireToken   │                │                │
+     │                │───────────────▶│ Entra ID      │                │
+     │                │◀───────────────│ (Token)       │                │
+     │                │                │                │                │
+     │  3. Send msg   │                │                │                │
+     │───────────────▶│                │                │                │
+     │                │ 4. POST /      │                │                │
+     │                │ + Bearer token │                │                │
+     │                │───────────────▶│                │                │
+     │                │                │ 5. Validate    │                │
+     │                │                │    JWT         │                │
+     │                │                │ 6. Check       │                │
+     │                │                │    groups      │                │
+     │                │                │                │                │
+     │                │                │ 7. POST /chat  │                │
+     │                │                │ + Bearer token │                │
+     │                │                │───────────────▶│                │
+     │                │                │                │ 8. Store token │
+     │                │                │                │    in session  │
+     │                │                │                │                │
+     │                │                │                │ 9. LLM decides │
+     │                │                │                │    tool call   │
+     │                │                │                │                │
+     │                │                │                │ 10. MCP call   │
+     │                │                │                │ + Bearer token │
+     │                │                │                │───────────────▶│
+     │                │                │                │                │ 11. Validate
+     │                │                │                │                │     JWT
+     │                │                │                │                │ 12. Check
+     │                │                │                │                │     role
+     │                │                │                │                │ 13. Execute
+     │                │                │                │                │     tool
+     │                │                │                │◀───────────────│
+     │                │                │                │ 14. Tool result│
+     │                │                │                │                │
+     │                │                │                │ 15. LLM formats│
+     │                │                │                │     response   │
+     │                │                │◀───────────────│                │
+     │                │                │ 16. Response   │                │
+     │                │◀───────────────│                │                │
+     │                │ 17. A2A result │                │                │
+     │◀───────────────│                │                │                │
+     │ 18. Display    │                │                │                │
+     │                │                │                │                │
+```
 
-## Prerequisites
+---
+
+## Authentication Flow
+
+### Initial Authentication
+
+```
+1. User clicks "Sign In with Microsoft"
+2. MSAL.js opens popup to Entra ID login
+3. User authenticates with credentials/MFA
+4. Entra ID returns tokens:
+   - ID Token (user identity)
+   - Access Token (with custom API scope + Graph scopes)
+5. MSAL.js caches tokens in browser storage
+6. Frontend shows authenticated state
+```
+
+### Token Acquisition for Requests
+
+```javascript
+// Frontend: authConfig.js
+const API_SCOPE = `api://${clientId}/access_as_user`;
+
+export const graphScopes = {
+  basic: [API_SCOPE, 'User.Read'],
+  files: [API_SCOPE, 'User.Read', 'Files.Read'],
+  email: [API_SCOPE, 'User.Read', 'Mail.Send'],
+  full: [API_SCOPE, 'User.Read', 'Files.Read', 'Mail.Send'],
+};
+
+// Token acquisition (cached, no re-prompt unless expired)
+const token = await instance.acquireTokenSilent({ scopes, account });
+```
+
+### Token Validation (A2A & MCP)
+
+Both A2A Server and MCP Server validate tokens using:
+
+```python
+# Supported JWKS endpoints (v1.0 and v2.0)
+JWKS_URIS = [
+    f"https://login.microsoftonline.com/{TENANT_ID}/discovery/v2.0/keys",
+    f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",
+    "https://login.microsoftonline.com/common/discovery/keys",
+]
+
+# Supported issuers
+VALID_ISSUERS = [
+    f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",
+    f"https://sts.windows.net/{TENANT_ID}/",
+]
+
+# Valid audiences
+valid_audiences = [CLIENT_ID, f"api://{CLIENT_ID}"]
+```
+
+---
+
+## Multi-Turn Conversation Flow
+
+### Token Revalidation Per Request
+
+| Layer | Action | Frequency | Cached? |
+|-------|--------|-----------|---------|
+| **Frontend** | `acquireTokenSilent()` | Every request | Yes (MSAL cache) |
+| **A2A Server** | JWT signature validation | Every request | JWKS cached |
+| **A2A Server** | Group membership check | Every request | No |
+| **ADK Agent** | Store token in session | Every request | Session state |
+| **MCP Server** | JWT signature validation | Every tool call | JWKS cached |
+| **MCP Server** | Role permission check | Every tool call | No |
+
+### Session State in ADK
+
+```python
+# Session state stored with user: prefix for persistence
+session.state = {
+    "user:access_token": "<jwt_token>",      # Updated each request
+    "user:email": "user@domain.com",
+    "user:name": "User Name",
+    "user:groups": ["group-id-1", "group-id-2"],
+    "user:role": "admin"                      # Derived from groups
+}
+```
+
+### Multi-Turn Example
+
+```
+Turn 1: "What's my email?"
+  ├─ Token validated at A2A (cached JWKS)
+  ├─ Session created in ADK
+  ├─ Local tool: get_identity_info
+  └─ Response: "Your email is user@domain.com"
+
+Turn 2: "What time is it in Tokyo?"
+  ├─ Token validated at A2A (same JWKS)
+  ├─ Session retrieved (same session_id)
+  ├─ Token updated in session state
+  ├─ MCP tool: get_current_time
+  │   ├─ Token validated at MCP (cached JWKS)
+  │   └─ Role check: admin required ✓
+  └─ Response: "The time in Tokyo is..."
+
+Turn 3: "List my files"
+  ├─ Token validated at A2A
+  ├─ Session retrieved
+  ├─ MCP tool: list_files
+  │   ├─ Token validated at MCP
+  │   └─ Role check: admin/developer required ✓
+  └─ Response: "Your files are..."
+```
+
+---
+
+## Context and Auth Passing
+
+### A2A Server → ADK Agent
+
+```python
+# A2A Server uses ContextVar to pass auth data
+current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
+current_access_token: ContextVar[str] = ContextVar("current_access_token", default="")
+
+# Set in auth_middleware
+current_user_claims.set(claims)
+current_access_token.set(token)
+
+# Read in IdentityAwareAgentExecutor
+user_claims = current_user_claims.get()
+access_token = current_access_token.get()
+
+# Forward to ADK Agent via HTTP
+POST /chat
+{
+    "message": "user message",
+    "user_id": "sub-claim-value",
+    "session_id": "session-uuid"
+}
+Headers: Authorization: Bearer <token>
+```
+
+### ADK Agent → MCP Server
+
+```python
+# McpToolset uses header_provider for dynamic auth
+def mcp_header_provider(readonly_context: ReadonlyContext) -> Dict[str, str]:
+    if readonly_context and readonly_context.state:
+        access_token = readonly_context.state.get("user:access_token", "")
+        if access_token:
+            return {"Authorization": f"Bearer {access_token}"}
+    return {}
+
+# McpToolset configuration
+self.mcp_toolset = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(url=MCP_SERVER_URL),
+    header_provider=mcp_header_provider,  # Injects token per-request
+)
+```
+
+### MCP Server Context Variables
+
+```python
+# MCP Server stores validated claims in ContextVar (stateless mode)
+current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
+current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
+current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
+current_user_scopes: ContextVar[list] = ContextVar("current_user_scopes", default=[])
+
+# Tools access via ContextVar
+@mcp.tool
+async def get_current_time(timezone: str = "UTC") -> dict:
+    user_role = current_user_role.get()
+    user_email = current_user_email.get()
+    # ... tool logic
+```
+
+---
+
+## RBAC (Role-Based Access Control)
+
+### Role Hierarchy
+
+```
+admin      → Full access to all tools
+developer  → Access to profile and file tools
+viewer     → Access to profile tools only
+none       → No tool access (agent-level denied)
+```
+
+### Group-to-Role Mapping
+
+```python
+# Entra ID Security Groups → Roles
+GROUP_TO_ROLE = {
+    os.getenv("ADMIN_GROUP_ID"): "admin",
+    os.getenv("DEVELOPER_GROUP_ID"): "developer",
+    os.getenv("VIEWER_GROUP_ID"): "viewer",
+}
+
+# Highest privilege wins when user is in multiple groups
+def _get_highest_role(groups: list) -> str:
+    role_priority = {"admin": 3, "developer": 2, "viewer": 1}
+    highest_role = "none"
+    for group_id in groups:
+        role = GROUP_TO_ROLE.get(group_id)
+        if role and role_priority.get(role, 0) > role_priority.get(highest_role, 0):
+            highest_role = role
+    return highest_role
+```
+
+### Tool Permission Matrix
+
+| Tool | Required Scopes | Allowed Roles | Description |
+|------|-----------------|---------------|-------------|
+| `get_user_profile` | User.Read | admin, developer, viewer | Fetch Microsoft Graph profile |
+| `list_files` | Files.Read | admin, developer | List OneDrive files |
+| `send_email` | Mail.Send | admin | Send email via Graph |
+| `delete_resource` | Files.ReadWrite.All | admin | Delete resources |
+| `get_current_time` | (none) | admin | Get time in timezone |
+| `convert_timezone` | (none) | admin | Convert between timezones |
+| `get_time_difference` | (none) | admin | Compare timezone offsets |
+
+### Permission Enforcement Code
+
+```python
+# MCP Server: TOOL_PERMISSIONS
+TOOL_PERMISSIONS = {
+    "get_user_profile": {"required_scopes": ["User.Read"], "allowed_roles": ["admin", "developer", "viewer"]},
+    "list_files": {"required_scopes": ["Files.Read"], "allowed_roles": ["admin", "developer"]},
+    "send_email": {"required_scopes": ["Mail.Send"], "allowed_roles": ["admin"]},
+    "delete_resource": {"required_scopes": ["Files.ReadWrite.All"], "allowed_roles": ["admin"]},
+    "get_current_time": {"required_scopes": [], "allowed_roles": ["admin"]},
+    "convert_timezone": {"required_scopes": [], "allowed_roles": ["admin"]},
+    "get_time_difference": {"required_scopes": [], "allowed_roles": ["admin"]},
+}
+
+# ToolAuthorizationMiddleware enforcement
+if user_role not in permissions["allowed_roles"]:
+    raise ToolError(f"Access denied: Role '{user_role}' cannot use tool '{tool_name}'")
+```
+
+### Access Denied Examples
+
+```
+Viewer tries to list files:
+  → ToolAuthorizationMiddleware: "Access denied: Role 'viewer' cannot use tool 'list_files'"
+
+Developer tries to send email:
+  → ToolAuthorizationMiddleware: "Access denied: Role 'developer' cannot use tool 'send_email'"
+
+User without groups tries anything:
+  → A2A auth_middleware: "Not a member of any authorized group" (403)
+```
+
+---
+
+## API Reference
+
+### A2A Server (Port 10000)
+
+#### Agent Card Discovery
+
+```http
+GET /.well-known/agent-card.json
+```
+
+Response:
+```json
+{
+  "name": "Identity-Aware AI Agent",
+  "description": "An AI agent with Entra ID authentication...",
+  "url": "http://localhost:10000/",
+  "version": "1.0.0",
+  "capabilities": {"streaming": true},
+  "skills": [...]
+}
+```
+
+#### Send Message (A2A Protocol)
+
+```http
+POST /
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "messageId": "msg-123",
+      "role": "user",
+      "parts": [{"type": "text", "text": "What time is it?"}]
+    }
+  },
+  "id": "req-123"
+}
+```
+
+Response:
+```json
+{
+  "id": "req-123",
+  "jsonrpc": "2.0",
+  "result": {
+    "id": "task-uuid",
+    "kind": "task",
+    "status": {
+      "state": "completed",
+      "message": {
+        "kind": "message",
+        "role": "agent",
+        "parts": [{"kind": "text", "text": "The current time is..."}]
+      }
+    }
+  }
+}
+```
+
+#### Health Check
+
+```http
+GET /health
+```
+
+### ADK Agent (Port 10001)
+
+#### Create Session
+
+```http
+POST /session
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "user_id": "user-sub-claim",
+  "user_info": {
+    "email": "user@domain.com",
+    "name": "User Name",
+    "groups": ["group-id-1"]
+  }
+}
+```
+
+Response:
+```json
+{"session_id": "session-uuid"}
+```
+
+#### Chat
+
+```http
+POST /chat
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "message": "What's my email?",
+  "user_id": "user-sub-claim",
+  "session_id": "session-uuid"
+}
+```
+
+Response:
+```json
+{
+  "response": "Your email is user@domain.com",
+  "session_id": "session-uuid"
+}
+```
+
+### MCP Server (Port 10002)
+
+#### MCP Endpoint
+
+```http
+POST /mcp
+Authorization: Bearer <token>
+Content-Type: application/json
+
+# Standard MCP protocol messages
+```
+
+#### Available Tools
+
+| Tool | Parameters | Returns |
+|------|------------|---------|
+| `get_user_profile` | (none) | User profile from Graph or token claims |
+| `list_files` | `folder_path?: string` | List of file names |
+| `send_email` | `to, subject, body` | Send status |
+| `delete_resource` | `resource_id` | Delete status |
+| `get_current_time` | `timezone?: string` | Time info with epoch |
+| `convert_timezone` | `time_str, from_timezone, to_timezone` | Converted time |
+| `get_time_difference` | `timezone1, timezone2` | Offset difference |
+
+---
+
+## Setup Guide
+
+### Prerequisites
 
 - Python 3.10+
 - Node.js 18+
-- Microsoft Entra ID tenant with app registration
-- Google Cloud account with Gemini API access
-
-## Setup
+- Microsoft Entra ID tenant
+- Anthropic API key (for Claude)
 
 ### 1. Microsoft Entra ID Configuration
 
-1. Create an app registration in [Microsoft Entra admin center](https://entra.microsoft.com)
-2. Configure Single-page application redirect URIs:
-   - `http://localhost:10003`
-   - `http://localhost:10003/redirect`
-3. Add API permissions: `openid`, `profile`, `User.Read`, `Files.Read`, `Mail.Send`
-4. Enable group claims in Token configuration
-5. Create security groups for Admin, Developer, and Viewer roles
+1. Create app registration in [Entra admin center](https://entra.microsoft.com)
+2. Configure platform: Single-page application
+   - Redirect URIs: `http://localhost:10003`, `http://localhost:10003/redirect`
+3. Expose an API:
+   - Add scope: `access_as_user`
+   - Application ID URI: `api://{client-id}`
+4. API Permissions:
+   - `openid`, `profile`, `User.Read`, `Files.Read`, `Mail.Send`
+5. Token configuration:
+   - Add groups claim (Security groups)
+6. Create security groups:
+   - Admin Group, Developer Group, Viewer Group
 
 ### 2. Environment Setup
 
 ```bash
-# Copy environment template
+# Backend (.env)
 cp .env.example .env
 
-# Edit .env with your configuration
-# - ENTRA_CLIENT_ID: Your app registration client ID
-# - ENTRA_TENANT_ID: Your directory tenant ID
-# - ADMIN_GROUP_ID, DEVELOPER_GROUP_ID, VIEWER_GROUP_ID: Security group Object IDs
-# - GOOGLE_API_KEY: Your Google AI API key
+# Required variables:
+ENTRA_CLIENT_ID=<app-registration-client-id>
+ENTRA_TENANT_ID=<directory-tenant-id>
+ADMIN_GROUP_ID=<admin-security-group-object-id>
+DEVELOPER_GROUP_ID=<developer-security-group-object-id>
+VIEWER_GROUP_ID=<viewer-security-group-object-id>
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
+
+# Frontend (frontend/.env)
+cd frontend && cp .env.example .env
+
+REACT_APP_ENTRA_CLIENT_ID=<app-registration-client-id>
+REACT_APP_ENTRA_TENANT_ID=<directory-tenant-id>
 ```
 
-### 3. Backend Setup
+### 3. Install Dependencies
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+# Backend
 pip install -r requirements.txt
+# or with uv:
+uv pip install -r requirements.txt
+
+# Frontend
+cd frontend && npm install
 ```
 
-### 4. Frontend Setup
+### 4. Run Services
 
 ```bash
-cd frontend
-npm install
-
-# Copy environment template
-cp .env.example .env
-# Edit .env with your Entra ID configuration
-```
-
-## Running the Application
-
-Start each service in a separate terminal:
-
-```bash
-# Terminal 1: MCP Server (Tools)
-python mcp_server/server.py
+# Terminal 1: MCP Server
+uv run python mcp_server/server.py
 
 # Terminal 2: ADK Agent
-python adk_agent/agent.py
+uv run python adk_agent/agent.py
 
 # Terminal 3: A2A Gateway
-python a2a_server/server.py
+uv run python a2a_server/server.py
 
 # Terminal 4: Frontend
 cd frontend && npm start
 ```
 
-The application will be available at:
+### 5. Access Application
+
 - Frontend: http://localhost:10003
 - A2A Gateway: http://localhost:10000
-- ADK Agent: http://localhost:10001
-- MCP Server: http://localhost:10002
+- Agent Card: http://localhost:10000/.well-known/agent-card.json
+
+---
 
 ## Testing
 
+### Run Tests
+
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio httpx
-
-# Run tests (with services running)
-pytest tests/test_access_control.py -v
+# With services running
+uv run pytest tests/test_access_control.py -v
 ```
 
-## Role Permissions
+### Manual Testing
 
-| Role | get_user_profile | list_files | send_email | delete_resource |
-|------|-----------------|------------|------------|-----------------|
-| admin | Yes | Yes | Yes | Yes |
-| developer | Yes | Yes | No | No |
-| viewer | Yes | No | No | No |
+1. Sign in with a user in the Admin group
+2. Test: "What's my email?" → Should work
+3. Test: "What time is it in Tokyo?" → Should work (admin only)
+4. Test: "List my files" → Should work
 
-## Project Structure
+5. Sign in with a user in the Viewer group
+6. Test: "What's my email?" → Should work
+7. Test: "What time is it in Tokyo?" → Should fail (admin only)
 
-```
-├── a2a_server/
-│   └── server.py          # A2A gateway with auth middleware
-├── adk_agent/
-│   └── agent.py           # Google ADK agent with MCP integration
-├── mcp_server/
-│   └── server.py          # FastMCP tools with token validation
-├── frontend/
-│   ├── src/
-│   │   ├── App.js         # Main React component
-│   │   ├── authConfig.js  # MSAL configuration
-│   │   └── index.js       # MSAL provider setup
-│   └── package.json
-├── tests/
-│   └── test_access_control.py
-├── .env.example
-├── requirements.txt
-├── README.md
-└── claude.md              # Development guide
+### Check Logs
+
+```bash
+# All logs in logs/ directory
+tail -f logs/a2a_server.log
+tail -f logs/adk_agent.log
+tail -f logs/mcp_server.log
 ```
 
-## Documentation
+---
+
+## Documentation Links
 
 - [FastMCP Documentation](https://gofastmcp.com)
 - [Google ADK Documentation](https://google.github.io/adk-docs/)
 - [A2A Protocol Specification](https://github.com/a2aproject/A2A)
 - [MSAL.js Documentation](https://learn.microsoft.com/en-us/entra/msal/overview)
+- [Microsoft Graph API](https://learn.microsoft.com/en-us/graph/overview)
+
+---
 
 ## License
 
