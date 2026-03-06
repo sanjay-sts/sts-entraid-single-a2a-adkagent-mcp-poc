@@ -51,6 +51,8 @@ from a2a.types import (
     TaskStatusUpdateEvent,
     TaskArtifactUpdateEvent,
     Artifact,
+    SecurityScheme,
+    HTTPAuthSecurityScheme,
 )
 
 # Load environment variables
@@ -368,6 +370,14 @@ agent_card = AgentCard(
     defaultInputModes=["text/plain"],
     defaultOutputModes=["text/plain", "application/json"],
     capabilities=AgentCapabilities(streaming=True),
+    security=[{"bearer": []}],
+    security_schemes={
+        "bearer": SecurityScheme(root=HTTPAuthSecurityScheme(
+            scheme="bearer",
+            bearer_format="JWT",
+            description="Entra ID JWT token authentication",
+        ))
+    },
     skills=[
         AgentSkill(
             id="identity_info",

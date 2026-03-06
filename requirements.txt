@@ -1,15 +1,15 @@
 # FastMCP - MCP server with authentication support
-fastmcp[auth]>=2.0.0
+fastmcp>=3.0.0
 
 # Google ADK - Agent Development Kit
-google-adk>=0.1.0
+google-adk>=1.25.0
 google-genai>=1.0.0
 
 # LiteLLM - Multi-provider LLM support (for Claude, OpenAI, etc.)
 litellm>=1.30.0
 
 # A2A SDK - Agent-to-Agent Protocol with streaming support
-a2a-sdk[http-server]>=0.2.0
+a2a-sdk[http-server]>=0.3.20
 
 # Web framework
 fastapi>=0.109.0

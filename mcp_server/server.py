@@ -18,6 +18,7 @@ from fastmcp.server.dependencies import (
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.context import Context
 from fastmcp.exceptions import ToolError
+from fastmcp.server.auth import AuthContext
 import httpx
 from dotenv import load_dotenv
 
@@ -58,18 +59,6 @@ VALID_ISSUERS = [
     f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",  # v2.0 issuer
     f"https://sts.windows.net/{TENANT_ID}/",  # v1.0 issuer (Graph tokens)
 ]
-
-# Permission configuration
-TOOL_PERMISSIONS = {
-    "get_user_profile": {"required_scopes": ["User.Read"], "allowed_roles": ["admin", "developer", "viewer"]},
-    "list_files": {"required_scopes": ["Files.Read"], "allowed_roles": ["admin", "developer"]},
-    "send_email": {"required_scopes": ["Mail.Send"], "allowed_roles": ["admin"]},
-    "delete_resource": {"required_scopes": ["Files.ReadWrite.All"], "allowed_roles": ["admin"]},
-    # Time tools - Admin only (no special Graph scopes required)
-    "get_current_time": {"required_scopes": [], "allowed_roles": ["admin"]},
-    "convert_timezone": {"required_scopes": [], "allowed_roles": ["admin"]},
-    "get_time_difference": {"required_scopes": [], "allowed_roles": ["admin"]},
-}
 
 GROUP_TO_ROLE = {
     os.getenv("ADMIN_GROUP_ID"): "admin",
@@ -216,53 +205,43 @@ class TokenValidationMiddleware(Middleware):
         return "none"
 
 
-class ToolAuthorizationMiddleware(Middleware):
-    """Middleware that enforces tool-level access control."""
-
-    async def on_call_tool(self, context: MiddlewareContext, call_next):
-        # Get tool name - try different attribute names for compatibility
-        tool_name = getattr(context, 'tool_name', None) or getattr(context, 'name', None) or "unknown"
-        logger.debug(f"ToolAuthorizationMiddleware: Checking access for tool '{tool_name}'")
-
-        # Get user info from context variables
+# Auth helpers for per-tool authorization (replaces ToolAuthorizationMiddleware)
+# These custom callables read from ContextVars set by TokenValidationMiddleware.
+# Execution order: middleware on_call_tool → auth= callables → tool function.
+# If auth= callables run before middleware (ContextVars not set), fall back to
+# re-adding ToolAuthorizationMiddleware.
+def require_role(*allowed_roles: str):
+    """Require user to have one of the specified roles."""
+    def check(ctx: AuthContext) -> bool:
         user_role = current_user_role.get()
-        user_scopes = current_user_scopes.get()
-        logger.debug(f"User role: {user_role}, scopes: {user_scopes}")
+        if user_role not in allowed_roles:
+            raise ToolError(
+                f"Access denied: Role '{user_role}' cannot use this tool. "
+                f"Required roles: {list(allowed_roles)}"
+            )
+        return True
+    return check
 
-        # Check tool permissions
-        if tool_name in TOOL_PERMISSIONS:
-            perms = TOOL_PERMISSIONS[tool_name]
-            logger.debug(f"Tool permissions: {perms}")
 
-            # Check role
-            if user_role not in perms["allowed_roles"]:
-                logger.warning(f"Access denied: Role '{user_role}' cannot use tool '{tool_name}'")
-                raise ToolError(
-                    f"Access denied: Role '{user_role}' cannot use tool '{tool_name}'. "
-                    f"Required roles: {perms['allowed_roles']}"
-                )
-
-            # Check scopes
-            required = set(perms["required_scopes"])
-            granted = set(user_scopes)
-            missing = required - granted
-            if missing:
-                logger.warning(f"Insufficient scopes for tool '{tool_name}': missing {list(missing)}")
-                raise ToolError(
-                    f"Insufficient permissions: Missing scopes {list(missing)} for tool '{tool_name}'"
-                )
-
-        logger.info(f"Access granted for tool '{tool_name}' to role '{user_role}'")
-        return await call_next(context)
+def require_scopes_from_token(*required_scopes: str):
+    """Require user token to have the specified OAuth scopes."""
+    def check(ctx: AuthContext) -> bool:
+        user_scopes = set(current_user_scopes.get())
+        missing = set(required_scopes) - user_scopes
+        if missing:
+            raise ToolError(
+                f"Insufficient permissions: Missing scopes {list(missing)}"
+            )
+        return True
+    return check
 
 
 # Initialize FastMCP with middleware
 mcp = FastMCP(name="Identity-Aware MCP Server")
 mcp.add_middleware(TokenValidationMiddleware())
-mcp.add_middleware(ToolAuthorizationMiddleware())
 
 
-@mcp.tool
+@mcp.tool(auth=[require_role("admin", "developer", "viewer"), require_scopes_from_token("User.Read")])
 async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
     logger.info("Executing tool: get_user_profile")
@@ -293,7 +272,7 @@ async def get_user_profile() -> dict:
         }
 
 
-@mcp.tool
+@mcp.tool(auth=[require_role("admin", "developer"), require_scopes_from_token("Files.Read")])
 async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
     access_token = current_user_token.get()
@@ -323,7 +302,7 @@ async def list_files(folder_path: str = "/") -> dict:
         }
 
 
-@mcp.tool
+@mcp.tool(auth=[require_role("admin"), require_scopes_from_token("Mail.Send")])
 async def send_email(
     to: str,
     subject: str,
@@ -356,7 +335,7 @@ async def send_email(
         return {"status": "sent", "from": user_email, "to": to}
 
 
-@mcp.tool
+@mcp.tool(auth=[require_role("admin"), require_scopes_from_token("Files.ReadWrite.All")])
 async def delete_resource(resource_id: str) -> dict:
     """Delete a resource (admin only with full write scope)."""
     user_role = current_user_role.get()
@@ -403,7 +382,7 @@ def resolve_timezone(tz_input: str) -> ZoneInfo:
         raise ValueError(f"Unknown timezone: {tz_input}. Use IANA names (e.g., 'America/New_York') or common aliases (e.g., 'EST', 'PST', 'UTC').")
 
 
-@mcp.tool
+@mcp.tool(auth=require_role("admin"))
 async def get_current_time(timezone: str = "UTC") -> dict:
     """Get the current time in a specified timezone (admin only).
 
@@ -437,7 +416,7 @@ async def get_current_time(timezone: str = "UTC") -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool
+@mcp.tool(auth=require_role("admin"))
 async def convert_timezone(
     time_str: str,
     from_timezone: str,
@@ -512,7 +491,7 @@ async def convert_timezone(
         return {"error": str(e)}
 
 
-@mcp.tool
+@mcp.tool(auth=require_role("admin"))
 async def get_time_difference(
     timezone1: str,
     timezone2: str
