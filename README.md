@@ -43,7 +43,7 @@ This system implements an identity-aware AI agent using:
 | Level | Location | Mechanism | Enforced By | Denies Access When |
 |-------|----------|-----------|-------------|-------------------|
 | **1. Agent** | A2A Server | Group membership, blocklist | `auth_middleware` | User blocked or not in allowed group |
-| **2. Tool** | FastMCP | Role-based permissions | `ToolAuthorizationMiddleware` | User role lacks tool permission |
+| **2. Tool** | FastMCP | Role-based permissions | `auth=` decorators (`require_role`, `require_scopes_from_token`) | User role lacks tool permission |
 | **3. Resource** | Graph API | OAuth scopes | Microsoft Graph | Token missing required scope |
 
 ---
@@ -158,10 +158,10 @@ This system implements an identity-aware AI agent using:
 │                                          │                                           │
 │                                          ▼                                           │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│  │                      ToolAuthorizationMiddleware                              │   │
-│  │  1. Check user role against TOOL_PERMISSIONS                                 │   │
-│  │  2. Verify required scopes present                                           │   │
-│  │  3. Allow or deny tool execution                                             │   │
+│  │                      Per-Tool Auth Decorators                                │   │
+│  │  1. auth=require_role() checks user role via ContextVar                      │   │
+│  │  2. auth=require_scopes_from_token() verifies scopes                         │   │
+│  │  3. Raises ToolError with [TOOL_DENIAL] or [SCOPE_DENIAL] prefix             │   │
 │  └──────────────────────────────────────────────────────────────────────────────┘   │
 │                                          │                                           │
 │                                          ▼                                           │
@@ -272,6 +272,7 @@ export const graphScopes = {
   files: [API_SCOPE, 'User.Read', 'Files.Read'],
   email: [API_SCOPE, 'User.Read', 'Mail.Send'],
   full: [API_SCOPE, 'User.Read', 'Files.Read', 'Mail.Send'],
+  destructive: [API_SCOPE, 'User.Read', 'Files.Read', 'Files.ReadWrite.All', 'Mail.Send'],
 };
 
 // Token acquisition (cached, no re-prompt unless expired)
@@ -468,33 +469,40 @@ def _get_highest_role(groups: list) -> str:
 ### Permission Enforcement Code
 
 ```python
-# MCP Server: TOOL_PERMISSIONS
-TOOL_PERMISSIONS = {
-    "get_user_profile": {"required_scopes": ["User.Read"], "allowed_roles": ["admin", "developer", "viewer"]},
-    "list_files": {"required_scopes": ["Files.Read"], "allowed_roles": ["admin", "developer"]},
-    "send_email": {"required_scopes": ["Mail.Send"], "allowed_roles": ["admin"]},
-    "delete_resource": {"required_scopes": ["Files.ReadWrite.All"], "allowed_roles": ["admin"]},
-    "get_current_time": {"required_scopes": [], "allowed_roles": ["admin"]},
-    "convert_timezone": {"required_scopes": [], "allowed_roles": ["admin"]},
-    "get_time_difference": {"required_scopes": [], "allowed_roles": ["admin"]},
-}
+# MCP Server: Per-tool auth= decorators
+@mcp.tool(auth=[require_role("admin", "developer", "viewer"), require_scopes_from_token("User.Read")])
+async def get_user_profile() -> dict: ...
 
-# ToolAuthorizationMiddleware enforcement
-if user_role not in permissions["allowed_roles"]:
-    raise ToolError(f"Access denied: Role '{user_role}' cannot use tool '{tool_name}'")
+@mcp.tool(auth=[require_role("admin", "developer"), require_scopes_from_token("Files.Read")])
+async def list_files(folder_path: str = "/") -> dict: ...
+
+# Auth helpers with denial tags
+def require_role(*allowed_roles):
+    # Raises: "[TOOL_DENIAL] Access denied: Role '...' cannot use this tool."
+    ...
+
+def require_scopes_from_token(*required_scopes):
+    # Raises: "[SCOPE_DENIAL] Insufficient permissions: Missing scopes [...]"
+    ...
 ```
 
 ### Access Denied Examples
 
 ```
 Viewer tries to list files:
-  → ToolAuthorizationMiddleware: "Access denied: Role 'viewer' cannot use tool 'list_files'"
+  → [TOOL_DENIAL] Access denied: Role 'viewer' cannot use this tool. Required roles: ['admin', 'developer']
 
 Developer tries to send email:
-  → ToolAuthorizationMiddleware: "Access denied: Role 'developer' cannot use tool 'send_email'"
+  → [TOOL_DENIAL] Access denied: Role 'developer' cannot use this tool. Required roles: ['admin']
+
+Admin uses basic scope for list_files:
+  → [SCOPE_DENIAL] Insufficient permissions: Missing scopes ['Files.Read']
 
 User without groups tries anything:
-  → A2A auth_middleware: "Not a member of any authorized group" (403)
+  → A2A auth_middleware: 403 {"error": "access_denied", "denial_level": "agent", "denial_reason": "no_group_membership"}
+
+Blocked user:
+  → A2A auth_middleware: 403 {"error": "access_denied", "denial_level": "agent", "denial_reason": "blocked_user"}
 ```
 
 ---
@@ -566,6 +574,38 @@ Response:
 
 ```http
 GET /health
+```
+
+#### Security Context
+
+```http
+GET /me
+Authorization: Bearer <token>
+```
+
+Response:
+```json
+{
+  "user": { "email": "user@domain.com", "name": "User Name", "oid": "..." },
+  "security": {
+    "role": "developer",
+    "groups": ["group-id-1"],
+    "group_names": { "group-id-1": "developer" },
+    "token_scopes": ["User.Read", "Files.Read"],
+    "token_expiry": 1741363200,
+    "issuer": "https://login.microsoftonline.com/{tenant}/v2.0"
+  },
+  "permissions": {
+    "get_user_profile": true, "list_files": true, "send_email": false,
+    "delete_resource": false, "get_current_time": false,
+    "convert_timezone": false, "get_time_difference": false
+  },
+  "tool_scopes": {
+    "get_user_profile": ["User.Read"], "list_files": ["Files.Read"],
+    "send_email": ["Mail.Send"], "delete_resource": ["Files.ReadWrite.All"],
+    "get_current_time": [], "convert_timezone": [], "get_time_difference": []
+  }
+}
 ```
 
 ### ADK Agent (Port 10001)
@@ -718,6 +758,59 @@ cd frontend && npm start
 - Frontend: http://localhost:10003
 - A2A Gateway: http://localhost:10000
 - Agent Card: http://localhost:10000/.well-known/agent-card.json
+
+---
+
+## Security Testing Dashboard
+
+The frontend includes a comprehensive Security Testing Dashboard for testing and visualizing the three-tier access control system.
+
+### Dashboard Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Security Context Panel | Left sidebar | Shows role, groups, scopes, token expiry countdown |
+| Token Inspector | Left sidebar (collapsible) | Decodes JWT header/payload for display |
+| RBAC Test Matrix | Left sidebar | One-click test grid with pass/fail tracking |
+| Conversation Tabs | Main area | Multi-tab chat with per-tab scope selection (max 4) |
+| Audit Log | Main area (bottom) | Request history with denial classification |
+| Denial Indicator | Inline badges | Color-coded denial tier: AGENT (red), TOOL (orange), SCOPE (amber), RESOURCE (purple) |
+| Account Switcher | Header | Multi-account support for testing different roles |
+
+### Denial Classification
+
+Denials are automatically classified into four tiers:
+
+| Tier | Detected By | Example |
+|------|------------|---------|
+| AGENT | HTTP 401/403 + `denial_level` in response body | User not in any group |
+| TOOL | `[TOOL_DENIAL]` tag in response text | Viewer trying `list_files` |
+| SCOPE | `[SCOPE_DENIAL]` tag in response text | `basic` scope for `list_files` |
+| RESOURCE | Graph API 403 in response text | Insufficient Graph permissions |
+
+### Frontend File Structure
+
+```
+frontend/src/
+  App.js                      # Dashboard layout shell
+  App.css                     # Dark theme styles
+  authConfig.js               # MSAL config + scope presets (basic, files, email, full, destructive)
+  index.js                    # MSAL provider setup
+  components/
+    AuthStatus.js             # Multi-account switcher dropdown
+    LoginPrompt.js            # Sign-in prompt
+    SecurityContextPanel.js   # Role, groups, scopes, expiry countdown
+    TokenInspector.js         # JWT decoder display
+    ConversationTabs.js       # Multi-tab chat with per-tab scope
+    ChatInterface.js          # Chat with denial tagging and latency tracking
+    RBACTestMatrix.js         # One-click test grid
+    AuditLog.js               # Request history table
+    DenialIndicator.js        # Color-coded denial badge
+  utils/
+    tokenDecoder.js           # JWT base64url decode helper
+    denialClassifier.js       # HTTP status + response text → denial tier
+    testScenarios.js          # Predefined test prompts with expected outcomes
+```
 
 ---
 

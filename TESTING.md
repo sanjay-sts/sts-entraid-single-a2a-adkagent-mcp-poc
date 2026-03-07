@@ -8,7 +8,7 @@ This document provides step-by-step instructions for setting up and testing the 
 - Node.js 18+
 - [uv](https://docs.astral.sh/uv/) - Fast Python package installer (recommended)
 - Microsoft Entra ID app registration (see [Entra ID Setup](#entra-id-app-registration-setup))
-- Google API Key for Gemini (for ADK agent)
+- Anthropic API Key (for Claude via LiteLLM)
 
 ### Installing uv
 
@@ -130,7 +130,6 @@ Edit `.env` with your values:
 # Microsoft Entra ID (from App Registration)
 ENTRA_CLIENT_ID=your-application-client-id
 ENTRA_TENANT_ID=your-directory-tenant-id
-ENTRA_AUTHORITY=https://login.microsoftonline.com/your-tenant-id
 
 # Access Control Group IDs (from Security Groups)
 ADMIN_GROUP_ID=your-admin-group-object-id
@@ -146,9 +145,9 @@ ADK_SERVER_PORT=10001
 MCP_SERVER_PORT=10002
 FRONTEND_PORT=10003
 
-# Google AI API Key (for ADK agent)
-# Get from https://aistudio.google.com/app/apikey
-GOOGLE_API_KEY=your-google-api-key
+# LLM API Key (for Claude via LiteLLM)
+# Set either CLAUDE_API_KEY or ANTHROPIC_API_KEY
+CLAUDE_API_KEY=your-anthropic-api-key
 ```
 
 ### Frontend Environment Setup
@@ -432,6 +431,174 @@ To test role-based access control:
 
 ---
 
+## Security Testing Dashboard
+
+The frontend includes a full Security Testing Dashboard that provides comprehensive tools for testing and visualizing the three-tier access control system.
+
+### Dashboard Layout
+
+After signing in, the dashboard shows:
+- **Left Sidebar** (collapsible): Security Context Panel, Token Inspector, RBAC Test Matrix
+- **Main Content**: Multi-tab chat interface with per-tab scope selection, Audit Log
+
+### Security Context Panel
+
+Displays real-time security information by calling the `GET /me` endpoint on the A2A server:
+- **Role Badge**: Color-coded role (green=admin, blue=developer, yellow=viewer, red=none)
+- **Groups**: Entra ID security group IDs with mapped role names
+- **Token Scopes**: OAuth scopes present in the current token
+- **Token Expiry**: Live countdown timer (amber when < 5 minutes, red when expired)
+- **Permissions**: Checkmarks showing which tools the current role can access
+
+### Testing the `/me` Endpoint
+
+The A2A server exposes a `GET /me` endpoint that returns the authenticated user's security context:
+
+```bash
+# Test with a valid Bearer token
+curl -H "Authorization: Bearer <access-token>" http://localhost:10000/me
+```
+
+Expected response:
+```json
+{
+  "user": { "email": "user@domain.com", "name": "User Name", "oid": "..." },
+  "security": {
+    "role": "developer",
+    "groups": ["group-id-1"],
+    "group_names": { "group-id-1": "developer" },
+    "token_scopes": ["User.Read", "Files.Read"],
+    "token_expiry": 1741363200,
+    "issuer": "https://login.microsoftonline.com/{tenant}/v2.0"
+  },
+  "permissions": {
+    "get_user_profile": true, "list_files": true, "send_email": false,
+    "delete_resource": false, "get_current_time": false,
+    "convert_timezone": false, "get_time_difference": false
+  },
+  "tool_scopes": {
+    "get_user_profile": ["User.Read"], "list_files": ["Files.Read"],
+    "send_email": ["Mail.Send"], "delete_resource": ["Files.ReadWrite.All"],
+    "get_current_time": [], "convert_timezone": [], "get_time_difference": []
+  }
+}
+```
+
+### Token Inspector
+
+The sidebar includes a collapsible Token Inspector that decodes the JWT access token client-side (display only, never used for authorization):
+- **Header**: Shows algorithm, token type, key ID
+- **Payload**: Shows all claims with highlighted fields: `groups`, `scp`, `aud`, `iss`, `exp`, `oid`, `sub`, `preferred_username`
+
+### Multi-Tab Conversations
+
+The main area supports up to 4 conversation tabs, each with its own scope preset:
+
+| Scope Preset | Scopes Requested | Use Case |
+|-------------|-------------------|----------|
+| `basic` | `api://...`, `User.Read` | Profile operations |
+| `files` | `api://...`, `User.Read`, `Files.Read` | File listing |
+| `email` | `api://...`, `User.Read`, `Mail.Send` | Email sending |
+| `full` | `api://...`, `User.Read`, `Files.Read`, `Mail.Send` | All read + email |
+| `destructive` | `api://...`, `User.Read`, `Files.Read`, `Files.ReadWrite.All`, `Mail.Send` | Delete operations |
+
+**How to test scope differences:**
+1. Open a "basic" tab and ask "List my OneDrive files" → Should fail (scope denial)
+2. Open a "files" tab and ask "List my OneDrive files" → Should succeed (if role allows)
+
+### RBAC Test Matrix
+
+The sidebar includes a one-click test grid that automatically runs predefined test scenarios:
+
+1. Click **Run** next to any scenario to test it individually
+2. Click **Run All** to execute all scenarios sequentially (2s delay between each)
+3. Each row shows:
+   - **Tool**: The MCP tool being tested
+   - **Scope**: Which scope preset the test uses
+   - **Expected**: ALLOW or DENY (based on current role + scope)
+   - **Result**: PASS/FAIL with denial badge and latency
+
+**Test Scenarios by Role:**
+
+| Scenario | Admin | Developer | Viewer |
+|----------|-------|-----------|--------|
+| `get_user_profile` (basic) | ALLOW | ALLOW | ALLOW |
+| `list_files` (basic) | SCOPE DENY | SCOPE DENY | SCOPE DENY |
+| `list_files` (files) | ALLOW | ALLOW | TOOL DENY |
+| `send_email` (basic) | SCOPE DENY | TOOL DENY | TOOL DENY |
+| `send_email` (email) | ALLOW | TOOL DENY | TOOL DENY |
+| `delete_resource` (basic) | SCOPE DENY | TOOL DENY | TOOL DENY |
+| `delete_resource` (destructive) | ALLOW | TOOL DENY | TOOL DENY |
+| `get_current_time` (basic) | ALLOW | TOOL DENY | TOOL DENY |
+
+### Denial Classification
+
+The dashboard classifies denials into four tiers, shown as color-coded badges:
+
+| Tier | Badge Color | Meaning | Example |
+|------|------------|---------|---------|
+| **AGENT** | Red | A2A gateway blocked the request | User not in any group (403) |
+| **TOOL** | Orange | MCP tool denied by role check | Viewer trying `list_files` |
+| **SCOPE** | Amber | Token missing required OAuth scopes | Using `basic` scope for `list_files` |
+| **RESOURCE** | Purple | Microsoft Graph API rejected the call | Insufficient Graph permissions |
+
+**Detection mechanism:**
+- HTTP 401/403 → `AGENT` (reads `denial_reason` from response body)
+- Response contains `[TOOL_DENIAL]` → `TOOL`
+- Response contains `[SCOPE_DENIAL]` → `SCOPE`
+- Response mentions Graph API 403 or `insufficient_scope` → `RESOURCE`
+
+### Audit Log
+
+The bottom of the main content area shows a collapsible audit log:
+- **Columns**: #, Time, Prompt (truncated), Scope, HTTP Status, Denial Level, Latency
+- **Expandable rows**: Click to see full request/response JSON
+- **Copy JSON**: Export entire audit log to clipboard
+- **Clear**: Reset the log
+
+### Multi-Account Testing
+
+To test different roles without signing out:
+
+1. Sign in with your primary account (e.g., admin)
+2. Click **Add Account** in the header
+3. Sign in with a different account (e.g., viewer) via the popup
+4. Use the account dropdown to switch between accounts
+5. The Security Context Panel and RBAC Test Matrix update automatically
+
+### Testing Walkthrough
+
+#### Step 1: Verify Security Context
+1. Sign in as an admin user
+2. Check the Security Context Panel shows role=ADMIN (green badge)
+3. Verify all 7 tool permissions show checkmarks
+4. Confirm token expiry countdown is running
+
+#### Step 2: Test Scope Differences
+1. Open a "basic" tab → Ask "List my OneDrive files" → Expect scope denial
+2. Open a "files" tab → Ask "List my OneDrive files" → Expect success
+3. Compare the denial badges in both chat messages
+
+#### Step 3: Run RBAC Matrix
+1. Click "Run All" in the RBAC Test Matrix
+2. Wait for all scenarios to complete
+3. All rows should show PASS (green) — meaning the actual result matches the expected outcome
+4. Check the Audit Log for detailed request/response data
+
+#### Step 4: Test Role Restrictions
+1. Switch to a viewer account (or sign in as viewer)
+2. Verify Security Context shows role=VIEWER (yellow badge)
+3. Only `get_user_profile` should have a checkmark
+4. Run the RBAC Matrix — viewer-denied scenarios should show PASS (correctly denied)
+
+#### Step 5: Inspect Tokens
+1. Expand the Token Inspector
+2. Verify `groups` claim contains your security group IDs
+3. Verify `scp` claim shows the scopes for the current tab's scope preset
+4. Check `aud` matches your app's client ID or `api://` URI
+
+---
+
 ## Alternative: Using pip
 
 If you prefer to use pip instead of uv:
@@ -475,7 +642,9 @@ python a2a_server/server.py
 
 After successful local testing:
 
-1. Review the [claude.md](./claude.md) for development patterns
-2. Customize tool permissions in `mcp_server/server.py`
-3. Add additional tools as needed
-4. Configure production environment variables
+1. Review the [CLAUDE.md](./CLAUDE.md) for development patterns and code conventions
+2. Use the Security Testing Dashboard to verify role-based access control
+3. Run the RBAC Test Matrix for each role (admin, developer, viewer)
+4. Customize tool permissions in `mcp_server/server.py`
+5. Add additional tools as needed
+6. Configure production environment variables

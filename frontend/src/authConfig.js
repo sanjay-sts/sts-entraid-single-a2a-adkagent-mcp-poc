@@ -36,4 +36,5 @@ export const graphScopes = {
   files: [API_SCOPE, 'User.Read', 'Files.Read'],
   email: [API_SCOPE, 'User.Read', 'Mail.Send'],
   full: [API_SCOPE, 'User.Read', 'Files.Read', 'Mail.Send'],
+  destructive: [API_SCOPE, 'User.Read', 'Files.Read', 'Files.ReadWrite.All', 'Mail.Send'],
 };

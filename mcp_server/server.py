@@ -216,7 +216,7 @@ def require_role(*allowed_roles: str):
         user_role = current_user_role.get()
         if user_role not in allowed_roles:
             raise ToolError(
-                f"Access denied: Role '{user_role}' cannot use this tool. "
+                f"[TOOL_DENIAL] Access denied: Role '{user_role}' cannot use this tool. "
                 f"Required roles: {list(allowed_roles)}"
             )
         return True
@@ -230,7 +230,7 @@ def require_scopes_from_token(*required_scopes: str):
         missing = set(required_scopes) - user_scopes
         if missing:
             raise ToolError(
-                f"Insufficient permissions: Missing scopes {list(missing)}"
+                f"[SCOPE_DENIAL] Insufficient permissions: Missing scopes {list(missing)}"
             )
         return True
     return check

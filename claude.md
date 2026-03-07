@@ -47,10 +47,24 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 │   ├── public/
 │   │   └── index.html         # HTML entry point
 │   ├── src/
-│   │   ├── App.js             # React chat UI (280 lines) - token acquisition
-│   │   ├── App.css            # Styles
-│   │   ├── authConfig.js      # MSAL configuration (40 lines)
-│   │   └── index.js           # MSAL provider setup (30 lines)
+│   │   ├── App.js             # Dashboard layout shell - sidebar + main area
+│   │   ├── App.css            # Dark theme dashboard styles (~1130 lines)
+│   │   ├── authConfig.js      # MSAL config + scope presets (basic/files/email/full/destructive)
+│   │   ├── index.js           # MSAL provider setup (30 lines)
+│   │   ├── components/
+│   │   │   ├── AuthStatus.js        # Multi-account switcher dropdown
+│   │   │   ├── LoginPrompt.js       # Sign-in prompt (extracted from App.js)
+│   │   │   ├── SecurityContextPanel.js  # Role badge, groups, scopes, expiry countdown
+│   │   │   ├── TokenInspector.js    # JWT header/payload decoder (display only)
+│   │   │   ├── ConversationTabs.js  # Multi-tab chat with per-tab scope (max 4)
+│   │   │   ├── ChatInterface.js     # Chat with denial tagging + latency tracking
+│   │   │   ├── RBACTestMatrix.js    # One-click test grid with pass/fail
+│   │   │   ├── AuditLog.js          # Request history table with denial tiers
+│   │   │   └── DenialIndicator.js   # Color-coded denial badge component
+│   │   └── utils/
+│   │       ├── tokenDecoder.js      # JWT base64url decode helper
+│   │       ├── denialClassifier.js  # HTTP status + response → denial tier classification
+│   │       └── testScenarios.js     # Predefined test prompts with expected outcomes
 │   ├── package.json           # React dependencies
 │   └── .env.example           # Frontend env template
 ├── tests/
@@ -242,6 +256,7 @@ User         Frontend           A2A Gateway        ADK Agent          MCP Server
 | GET | `/docs` | No | OpenAPI docs UI |
 | GET | `/openapi.json` | No | OpenAPI schema |
 | POST | `/` | Bearer | A2A JSON-RPC endpoint (`message/send`) |
+| GET | `/me` | Bearer | User security context (role, groups, permissions) |
 | OPTIONS | `*` | No | CORS preflight |
 
 ### ADK Agent (port 10001)
@@ -376,9 +391,9 @@ mcp.add_middleware(TokenValidationMiddleware())   # Validates JWT, sets ContextV
 **Execution order**: Middleware `on_call_tool` (sets ContextVars) → `auth=` callables (read ContextVars, enforce role/scopes) → tool function.
 
 **Auth helpers** (`mcp_server/server.py:208-236`):
-- `require_role(*roles)` -- checks `current_user_role` ContextVar
-- `require_scopes_from_token(*scopes)` -- checks `current_user_scopes` ContextVar
-- Both raise `ToolError` with descriptive messages on denial
+- `require_role(*roles)` -- checks `current_user_role` ContextVar; raises `ToolError` prefixed with `[TOOL_DENIAL]`
+- `require_scopes_from_token(*scopes)` -- checks `current_user_scopes` ContextVar; raises `ToolError` prefixed with `[SCOPE_DENIAL]`
+- These prefixes survive LLM paraphrasing and enable frontend denial classification
 
 ### FastMCP: Stateless HTTP Mode
 
@@ -493,6 +508,7 @@ export const graphScopes = {
   files: [API_SCOPE, 'User.Read', 'Files.Read'],
   email: [API_SCOPE, 'User.Read', 'Mail.Send'],
   full: [API_SCOPE, 'User.Read', 'Files.Read', 'Mail.Send'],
+  destructive: [API_SCOPE, 'User.Read', 'Files.Read', 'Files.ReadWrite.All', 'Mail.Send'],
 };
 ```
 
@@ -632,14 +648,14 @@ uv run pytest tests/test_access_control.py -v
 
 ### A2A Server (`a2a_server/server.py`)
 
-| Status | Error Key | Message | Trigger |
-|--------|-----------|---------|---------|
-| 401 | `unauthorized` | Missing Authorization header | No `Authorization` header |
-| 401 | `unauthorized` | Invalid Authorization format | Not `Bearer` prefix |
-| 401 | `token_expired` | Token has expired | JWT `exp` claim in past |
-| 401 | `auth_failed` | (dynamic) | Any other JWT validation failure |
-| 403 | `access_denied` | Your account has been blocked | User ID in `BLOCKED_USERS` |
-| 403 | `access_denied` | Not a member of any authorized group | No matching group claim |
+| Status | Error Key | Message | `denial_level` | `denial_reason` | Trigger |
+|--------|-----------|---------|-----------------|------------------|---------|
+| 401 | `unauthorized` | Missing Authorization header | `agent` | `missing_token` | No `Authorization` header |
+| 401 | `unauthorized` | Invalid Authorization format | `agent` | `invalid_format` | Not `Bearer` prefix |
+| 401 | `token_expired` | Token has expired | `agent` | `token_expired` | JWT `exp` claim in past |
+| 401 | `auth_failed` | (dynamic) | `agent` | `validation_failed` | Any other JWT validation failure |
+| 403 | `access_denied` | Your account has been blocked | `agent` | `blocked_user` | User ID in `BLOCKED_USERS` |
+| 403 | `access_denied` | Not a member of any authorized group | `agent` | `no_group_membership` | No matching group claim |
 
 ### ADK Agent (`adk_agent/agent.py`)
 
@@ -655,8 +671,8 @@ uv run pytest tests/test_access_control.py -v
 |---------------|---------|
 | `Missing or invalid Authorization header` | No Bearer token in MCP request headers |
 | `Token validation failed: {details}` | JWT validation fails (bad signature, expired, wrong audience) |
-| `Access denied: Role '{role}' cannot use this tool. Required roles: [...]` | User role not in `auth=require_role(...)` |
-| `Insufficient permissions: Missing scopes [...]` | Token missing scopes in `auth=require_scopes_from_token(...)` |
+| `[TOOL_DENIAL] Access denied: Role '{role}' cannot use this tool. Required roles: [...]` | User role not in `auth=require_role(...)` |
+| `[SCOPE_DENIAL] Insufficient permissions: Missing scopes [...]` | Token missing scopes in `auth=require_scopes_from_token(...)` |
 
 ## Logging
 
@@ -685,6 +701,48 @@ Logs are useful for debugging token validation issues. Key log messages:
 8. **Test Tokens**: Tests use HS256 mock tokens (not RS256), so they cannot validate real Entra ID token signatures
 9. **Client ID Sync**: Frontend `REACT_APP_ENTRA_CLIENT_ID` and backend `ENTRA_CLIENT_ID` must be the same value
 
+### A2A Server: `/me` Endpoint
+
+```python
+# a2a_server/server.py - GET /me
+# Returns authenticated user's security context
+# Goes through auth middleware (requires valid Bearer token)
+@app.get("/me")
+async def get_me(request: Request):
+    claims = current_user_claims.get()
+    role = _determine_role(claims.get("groups", []))
+    # Returns: user info, security context, permission matrix, tool scopes
+```
+
+The `/me` endpoint reuses the same role determination logic as the ADK agent and MCP server. It provides the frontend Security Context Panel with real-time role, group, scope, and permission data.
+
+### Frontend: Denial Classification
+
+```javascript
+// frontend/src/utils/denialClassifier.js
+// Classifies denials into four tiers based on HTTP status and response content:
+// 1. HTTP 401/403 → level: 'agent' (reads denial_reason from response body)
+// 2. Response contains '[TOOL_DENIAL]' → level: 'tool'
+// 3. Response contains '[SCOPE_DENIAL]' → level: 'scope'
+// 4. Graph API 403 / insufficient_scope → level: 'resource'
+// 5. Otherwise → null (success)
+```
+
+### Frontend: Security Testing Dashboard
+
+The frontend is a Security Testing Dashboard with these components:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| SecurityContextPanel | `components/SecurityContextPanel.js` | Calls `GET /me`, shows role/groups/scopes/expiry |
+| TokenInspector | `components/TokenInspector.js` | Decodes JWT for display (never for auth) |
+| RBACTestMatrix | `components/RBACTestMatrix.js` | One-click test grid with predefined scenarios |
+| ConversationTabs | `components/ConversationTabs.js` | Multi-tab chat, per-tab scope selection |
+| ChatInterface | `components/ChatInterface.js` | Chat with denial tagging + latency |
+| AuditLog | `components/AuditLog.js` | Request history with denial tiers |
+| DenialIndicator | `components/DenialIndicator.js` | Color-coded badge (AGENT/TOOL/SCOPE/RESOURCE) |
+| AuthStatus | `components/AuthStatus.js` | Multi-account switcher |
+
 ## Verification Checklist
 
 ### Agent-Level (a2a_server/server.py:444-539)
@@ -704,6 +762,16 @@ Logs are useful for debugging token validation issues. Key log messages:
 - [ ] Missing `Files.Read` scope -> 403 on file operations
 - [ ] Missing `Mail.Send` scope -> 403 on email operations
 - [ ] Error messages indicate missing scopes
+
+### Security Testing Dashboard
+- [ ] `GET /me` returns correct role, groups, permissions for authenticated user
+- [ ] Security Context Panel shows live token expiry countdown
+- [ ] Token Inspector decodes JWT header and payload correctly
+- [ ] RBAC Test Matrix scenarios show PASS for all expected outcomes
+- [ ] Denial badges show correct tier: AGENT (red), TOOL (orange), SCOPE (amber), RESOURCE (purple)
+- [ ] Multi-tab conversations maintain independent scope and message history
+- [ ] Audit Log records all requests with denial classification and latency
+- [ ] Account switcher updates Security Context Panel on account change
 
 ## External Documentation
 

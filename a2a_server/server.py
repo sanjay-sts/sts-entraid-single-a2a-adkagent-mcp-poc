@@ -3,6 +3,7 @@
 Implements the A2A Protocol with proper SSE streaming.
 """
 import os
+import json
 import jwt
 import asyncio
 import logging
@@ -479,7 +480,7 @@ async def auth_middleware(request: Request, call_next):
         logger.warning("Missing Authorization header")
         return Response(
             status_code=401,
-            content='{"error": "unauthorized", "message": "Missing Authorization header"}',
+            content='{"error": "unauthorized", "message": "Missing Authorization header", "denial_level": "agent", "denial_reason": "missing_token"}',
             media_type="application/json",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -488,7 +489,7 @@ async def auth_middleware(request: Request, call_next):
         logger.warning(f"Invalid Authorization format: {auth_header[:20]}...")
         return Response(
             status_code=401,
-            content='{"error": "unauthorized", "message": "Invalid Authorization format"}',
+            content='{"error": "unauthorized", "message": "Invalid Authorization format", "denial_level": "agent", "denial_reason": "invalid_format"}',
             media_type="application/json",
         )
 
@@ -508,7 +509,7 @@ async def auth_middleware(request: Request, call_next):
             logger.warning(f"Blocked user attempted access: {user_id}")
             return Response(
                 status_code=403,
-                content='{"error": "access_denied", "message": "Your account has been blocked"}',
+                content='{"error": "access_denied", "message": "Your account has been blocked", "denial_level": "agent", "denial_reason": "blocked_user"}',
                 media_type="application/json",
             )
 
@@ -517,7 +518,7 @@ async def auth_middleware(request: Request, call_next):
             logger.warning(f"User {user_id} not in allowed groups. Has: {user_groups}, Allowed: {ALLOWED_GROUPS}")
             return Response(
                 status_code=403,
-                content='{"error": "access_denied", "message": "Not a member of any authorized group"}',
+                content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
                 media_type="application/json",
             )
 
@@ -534,14 +535,14 @@ async def auth_middleware(request: Request, call_next):
         logger.warning("Token has expired")
         return Response(
             status_code=401,
-            content='{"error": "token_expired", "message": "Token has expired"}',
+            content='{"error": "token_expired", "message": "Token has expired", "denial_level": "agent", "denial_reason": "token_expired"}',
             media_type="application/json",
         )
     except Exception as e:
         logger.error(f"Auth failed: {type(e).__name__}: {str(e)}")
         return Response(
             status_code=401,
-            content=f'{{"error": "auth_failed", "message": "{str(e)}"}}',
+            content=json.dumps({"error": "auth_failed", "message": str(e), "denial_level": "agent", "denial_reason": "validation_failed"}),
             media_type="application/json",
         )
 
@@ -566,10 +567,95 @@ a2a_app = A2AStarletteApplication(
 a2a_app.add_routes_to_app(app)
 
 
+# Group-to-role mapping (same as mcp_server and adk_agent)
+GROUP_TO_ROLE = {
+    os.getenv("ADMIN_GROUP_ID"): "admin",
+    os.getenv("DEVELOPER_GROUP_ID"): "developer",
+    os.getenv("VIEWER_GROUP_ID"): "viewer",
+}
+
+# Tool permission matrix (matches auth= decorators on MCP tools)
+TOOL_ROLES = {
+    "get_user_profile": ["admin", "developer", "viewer"],
+    "list_files": ["admin", "developer"],
+    "send_email": ["admin"],
+    "delete_resource": ["admin"],
+    "get_current_time": ["admin"],
+    "convert_timezone": ["admin"],
+    "get_time_difference": ["admin"],
+}
+
+TOOL_SCOPES = {
+    "get_user_profile": ["User.Read"],
+    "list_files": ["Files.Read"],
+    "send_email": ["Mail.Send"],
+    "delete_resource": ["Files.ReadWrite.All"],
+    "get_current_time": [],
+    "convert_timezone": [],
+    "get_time_difference": [],
+}
+
+
+def _determine_role(groups: list) -> str:
+    """Map user groups to highest privilege role."""
+    role_priority = ["admin", "developer", "viewer"]
+    user_roles = [GROUP_TO_ROLE.get(g) for g in groups if g in GROUP_TO_ROLE]
+    for role in role_priority:
+        if role in user_roles:
+            return role
+    return "none"
+
+
 # Health check endpoint
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "a2a-gateway"}
+
+
+@app.get("/me")
+async def get_me(request: Request):
+    """Return the authenticated user's security context."""
+    # Auth middleware has already validated the token and set context vars
+    claims = current_user_claims.get()
+    if not claims:
+        return Response(
+            status_code=401,
+            content='{"error": "unauthorized", "message": "No authenticated user"}',
+            media_type="application/json",
+        )
+
+    user_groups = claims.get("groups", [])
+    role = _determine_role(user_groups)
+    token_scopes = claims.get("scp", "").split()
+
+    # Build group names mapping
+    group_names = {}
+    for gid in user_groups:
+        if gid in GROUP_TO_ROLE:
+            group_names[gid] = GROUP_TO_ROLE[gid]
+
+    # Build permission matrix
+    permissions = {}
+    for tool, allowed_roles in TOOL_ROLES.items():
+        permissions[tool] = role in allowed_roles
+
+    return {
+        "user": {
+            "email": claims.get("preferred_username") or claims.get("unique_name") or claims.get("upn", ""),
+            "name": claims.get("name") or claims.get("given_name", ""),
+            "oid": claims.get("oid", ""),
+        },
+        "security": {
+            "role": role,
+            "groups": user_groups,
+            "group_names": group_names,
+            "token_scopes": token_scopes,
+            "token_expiry": claims.get("exp"),
+            "issuer": claims.get("iss", ""),
+        },
+        "permissions": permissions,
+        "tool_scopes": TOOL_SCOPES,
+    }
 
 
 if __name__ == "__main__":
