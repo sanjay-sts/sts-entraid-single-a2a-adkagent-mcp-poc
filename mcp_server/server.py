@@ -1,37 +1,39 @@
-"""FastMCP server with OAuth token validation and tool-level access control."""
+"""FastMCP server with built-in auth providers and policy-based access control.
+
+Uses FastMCP's AzureJWTVerifier / JWTVerifier for trusted provider verification
+(JWKS, issuer, audience) and a lightweight UserContextMiddleware for role resolution
+via the agent-owned permissions.toml policy store.
+"""
+
 import os
-import asyncio
-import jwt
 import logging
 from datetime import datetime, timezone as tz
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Annotated, Optional
 from contextvars import ContextVar
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import (
-    get_http_headers,
-    get_access_token,
-    get_context,
-    CurrentContext
-)
+from fastmcp.server.dependencies import get_http_headers, get_access_token
 from fastmcp.server.middleware import Middleware, MiddlewareContext
-from fastmcp.server.context import Context
+from fastmcp.server.auth import AuthContext, RemoteAuthProvider, MultiAuth
+from fastmcp.server.auth.providers.azure import AzureJWTVerifier
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AuthContext
+from pydantic import AnyHttpUrl
 import sys
 import httpx
 from dotenv import load_dotenv
 
-# Add project root to path for shared dev_config module
+# Add project root and mcp_server/ to path for sibling module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 from dev_config import is_auth_disabled, get_section
+from policy import TomlPolicyEvaluator
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
+# Removed current_user_scopes — IdP scopes are no longer checked at tool level.
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
-current_user_scopes: ContextVar[list] = ContextVar("current_user_scopes", default=[])
 
 # Load environment variables
 load_dotenv()
@@ -54,116 +56,220 @@ logger = logging.getLogger("mcp_server")
 TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 CLIENT_ID = os.getenv("ENTRA_CLIENT_ID")
 
-# Support both v1.0 and v2.0 tokens (Graph API uses v1.0 tokens)
-JWKS_URIS = [
-    f"https://login.microsoftonline.com/{TENANT_ID}/discovery/v2.0/keys",  # v2.0
-    f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",  # v1.0
-    "https://login.microsoftonline.com/common/discovery/keys",  # common
-]
-VALID_ISSUERS = [
-    f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",  # v2.0 issuer
-    f"https://sts.windows.net/{TENANT_ID}/",  # v1.0 issuer (Graph tokens)
-]
-
-GROUP_TO_ROLE = {
-    os.getenv("ADMIN_GROUP_ID"): "admin",
-    os.getenv("DEVELOPER_GROUP_ID"): "developer",
-    os.getenv("VIEWER_GROUP_ID"): "viewer",
+# Provider-specific email claim mapping
+EMAIL_CLAIMS = {
+    "entra": ["preferred_username", "unique_name", "upn", "email"],
+    "cognito": ["email"],
+    "auth0": ["email"],
+    "default": ["email", "preferred_username", "sub"],
 }
 
-# JWKS cache (per URI)
-_jwks_cache = {}
+
+def _detect_provider(claims: dict) -> str:
+    """Detect IdP from token issuer claim."""
+    iss = claims.get("iss", "")
+    if "login.microsoftonline.com" in iss or "sts.windows.net" in iss:
+        return "entra"
+    if "cognito-idp" in iss:
+        return "cognito"
+    if "auth0.com" in iss:
+        return "auth0"
+    return "default"
 
 
-async def get_jwks(uri: str):
-    """Fetch and cache JWKS from a specific URI."""
-    global _jwks_cache
-    if uri not in _jwks_cache:
-        logger.debug(f"Fetching JWKS from {uri}")
-        async with httpx.AsyncClient() as client:
-            response = await client.get(uri)
-            _jwks_cache[uri] = response.json()
-        logger.debug(f"JWKS fetched from {uri}, {len(_jwks_cache[uri].get('keys', []))} keys found")
-    return _jwks_cache[uri]
+def _extract_email(claims: dict, provider: str) -> str:
+    """Extract email from claims using provider-specific claim names."""
+    for claim_name in EMAIL_CLAIMS.get(provider, EMAIL_CLAIMS["default"]):
+        if claim_name in claims:
+            return claims[claim_name]
+    return claims.get("sub", "")
 
 
-async def get_all_keys(kid: str):
-    """Get all RSA keys matching the kid from all JWKS endpoints."""
-    keys = []
-    for uri in JWKS_URIS:
-        try:
-            jwks = await get_jwks(uri)
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    logger.debug(f"Found key {kid} in {uri}")
-                    keys.append((uri, jwt.algorithms.RSAAlgorithm.from_jwk(key)))
-        except Exception as e:
-            logger.debug(f"Failed to fetch/parse JWKS from {uri}: {e}")
-            continue
-    return keys
+def _extract_groups(claims: dict) -> list[str]:
+    """Extract groups from claims, handling Entra ID group overage.
+
+    Entra ID limits groups in tokens to ~150. When exceeded, the token
+    contains an overage indicator (_claim_names.groups) instead of groups.
+    In that case, groups must be fetched via Graph API /me/memberOf.
+    For POC, we log a warning. Production: call Graph API.
+    """
+    if "groups" in claims:
+        return claims["groups"]
+
+    # Entra ID group overage detection
+    claim_names = claims.get("_claim_names", {})
+    if isinstance(claim_names, dict) and "groups" in claim_names:
+        logger.warning(
+            "Group overage detected — token has too many groups. "
+            "Groups must be fetched via Graph API /me/memberOf. "
+            "Falling back to user-level role assignment."
+        )
+        # TODO: Production — call Graph API to get full group list
+        return []
+
+    return []
 
 
-class TokenValidationMiddleware(Middleware):
-    """Middleware that validates tokens and extracts user context."""
+# --- Auth setup: trusted provider verification ---
 
-    def _set_bypass_context(self):
-        """Set ContextVars to dev bypass defaults from config."""
+def _build_auth():
+    """Configure trusted IdP verifiers. Only tokens from these providers are accepted.
+
+    Trust model:
+      Token arrives → FastMCP auth system
+        1. Fetch JWKS from CONFIGURED provider endpoint (cached, auto-rotated)
+        2. Validate JWT SIGNATURE against provider's public keys
+        3. Check ISSUER matches configured trusted issuer
+        4. Check AUDIENCE matches configured expected audience
+        5. Check EXPIRY (not expired)
+        → Only tokens signed by keys from trusted providers pass
+    """
+    if is_auth_disabled("mcp"):
+        return None  # No auth in dev bypass mode
+
+    verifiers = []
+
+    # Entra ID verifier — auto-configures JWKS, issuer, audience from Azure config
+    if TENANT_ID and CLIENT_ID:
+        verifiers.append(AzureJWTVerifier(
+            client_id=CLIENT_ID,
+            tenant_id=TENANT_ID,
+            required_scopes=["access_as_user"],
+        ))
+
+        # v1.0 token fallback — Graph API can return v1.0 tokens with
+        # sts.windows.net issuer even when using v2.0 endpoints.
+        verifiers.append(JWTVerifier(
+            jwks_uri=f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",
+            issuer=f"https://sts.windows.net/{TENANT_ID}/",
+            audience=[CLIENT_ID, f"api://{CLIENT_ID}"],
+            algorithm="RS256",
+            required_scopes=["access_as_user"],
+        ))
+
+    # Add more verifiers here for other IdPs:
+    # verifiers.append(JWTVerifier(
+    #     jwks_uri="https://cognito-idp.us-east-1.amazonaws.com/{pool_id}/.well-known/jwks.json",
+    #     issuer="https://cognito-idp.us-east-1.amazonaws.com/{pool_id}",
+    #     audience="your-cognito-client-id",
+    # ))
+
+    if not verifiers:
+        logger.warning("No auth providers configured — all requests will be unauthenticated!")
+        return None
+
+    if len(verifiers) == 1:
+        return RemoteAuthProvider(
+            token_verifier=verifiers[0],
+            authorization_servers=[
+                AnyHttpUrl(f"https://login.microsoftonline.com/{TENANT_ID}/v2.0")
+            ],
+            base_url=f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}",
+        )
+
+    return MultiAuth(
+        verifiers=verifiers,
+        base_url=f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}",
+    )
+
+
+# --- Policy evaluator ---
+
+policy_evaluator = TomlPolicyEvaluator(
+    Path(__file__).parent.parent / "permissions.toml"
+)
+
+
+# --- Middleware: role resolution + ContextVar setup ---
+
+class UserContextMiddleware(Middleware):
+    """Reads validated token claims, resolves available roles, enforces role selection.
+
+    FastMCP's built-in auth validates the token (signature, issuer, audience, expiry).
+    This middleware then:
+      - Detects the provider (from issuer claim)
+      - Extracts email (provider-specific claim name)
+      - Resolves available roles from group claims via policy evaluator
+      - Handles group overage (Entra ID >150 groups)
+      - Checks X-Assume-Role header for explicit role selection (tool calls)
+      - Falls back to highest-priority role when header is absent (tool listing)
+      - Sets ContextVars for auth= callables and tool functions
+    """
+
+    def __init__(self, evaluator: TomlPolicyEvaluator):
+        self.policy_evaluator = evaluator
+
+    def _set_bypass_context(self) -> None:
+        """Dev bypass — sets mock auth context from dev_config.toml."""
         dev_cfg = get_section("mcp")
         current_user_token.set("dev-bypass-token")
         current_user_role.set(dev_cfg.get("default_role", "admin"))
         current_user_email.set(dev_cfg.get("default_email", "dev@localhost"))
-        current_user_scopes.set(dev_cfg.get("default_scopes", [
-            "User.Read", "Files.Read", "Mail.Send", "Files.ReadWrite.All"
-        ]))
         logger.warning("AUTH BYPASSED - role: %s", dev_cfg.get("default_role", "admin"))
 
-    async def _validate_and_set_context(self, raise_on_error: bool = True):
-        """Validate Bearer token from headers and set ContextVars.
+    def _resolve_context(self, raise_on_error: bool = True) -> None:
+        """Extract claims from validated token and resolve role.
 
         Args:
-            raise_on_error: If True, raise ToolError on failure. If False, silently
-                leave ContextVars at defaults (role="none"), which causes auth=
-                callables to hide tools during listing.
+            raise_on_error: If True (tool calls), raise ToolError on missing role
+                selection. If False (tool listing), use highest available role.
         """
+        token = get_access_token()
+        if not token or not token.claims:
+            if raise_on_error:
+                raise ToolError("No valid authentication token available")
+            return  # ContextVars stay at defaults → tools hidden during listing
+
+        provider = _detect_provider(token.claims)
+        email = _extract_email(token.claims, provider)
+        groups = _extract_groups(token.claims)
+
+        # Resolve ALL roles the user qualifies for
+        available_roles = self.policy_evaluator.get_available_roles(
+            email, provider, groups
+        )
+
+        # Check X-Assume-Role header for explicit role selection
         headers = get_http_headers()
-        auth_header = headers.get("authorization", "")
+        assumed_role = headers.get("x-assume-role", "")
 
-        if not auth_header.startswith("Bearer "):
-            if raise_on_error:
-                logger.warning("Missing or invalid Authorization header in MCP request")
-                raise ToolError("Missing or invalid Authorization header")
-            return
+        if assumed_role:
+            # Validate the assumed role is available to this user
+            if assumed_role not in available_roles:
+                raise ToolError(
+                    f"[TOOL_DENIAL] Cannot assume role '{assumed_role}'. "
+                    f"Available roles: {available_roles}"
+                )
+        elif raise_on_error:
+            # Tool calls require explicit role selection
+            if not available_roles:
+                raise ToolError(
+                    f"[TOOL_DENIAL] No roles available for {email}. "
+                    f"Contact admin to assign group membership."
+                )
+            raise ToolError(
+                f"[ROLE_SELECTION] Role selection required. "
+                f"Set X-Assume-Role header to one of: {available_roles}"
+            )
+        else:
+            # Tool listing — use highest-priority role for visibility
+            assumed_role = available_roles[0] if available_roles else "none"
 
-        token = auth_header[7:]
-        logger.debug(f"Bearer token received (length: {len(token)})")
+        current_user_token.set(token.token)
+        current_user_email.set(email)
+        current_user_role.set(assumed_role)
 
-        try:
-            user_info = await self._validate_token(token)
-            logger.info(f"Token validated for user: {user_info.get('preferred_username', user_info.get('unique_name', user_info.get('sub')))}")
-
-            user_role = self._get_highest_role(user_info.get("groups", []))
-            user_email = user_info.get("preferred_username", user_info.get("unique_name", ""))
-            user_scopes = user_info.get("scp", "").split()
-
-            current_user_token.set(token)
-            current_user_role.set(user_role)
-            current_user_email.set(user_email)
-            current_user_scopes.set(user_scopes)
-
-            logger.debug(f"User context stored - role: {user_role}, email: {user_email}")
-
-        except Exception as e:
-            logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")
-            if raise_on_error:
-                raise ToolError(f"Token validation failed: {str(e)}")
+        logger.info(
+            "User %s assumed role '%s' (available: %s)",
+            email, assumed_role, available_roles,
+        )
 
     async def on_list_tools(self, context, call_next):
         if is_auth_disabled("mcp"):
             self._set_bypass_context()
         else:
-            # Validate token so auth= callables see correct role during tool listing.
-            # If no token or invalid token, role stays "none" and tools are hidden.
-            await self._validate_and_set_context(raise_on_error=False)
+            # Lenient: use highest available role so tools are visible
+            self._resolve_context(raise_on_error=False)
         return await call_next(context)
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
@@ -171,86 +277,21 @@ class TokenValidationMiddleware(Middleware):
             self._set_bypass_context()
             return await call_next(context)
 
-        # Validate token — raise on failure (tool calls require valid auth)
-        await self._validate_and_set_context(raise_on_error=True)
+        # Strict: require explicit role selection via X-Assume-Role
+        self._resolve_context(raise_on_error=True)
 
         return await call_next(context)
 
-    async def _validate_token(self, token: str) -> dict:
-        """Validate JWT against Entra ID JWKS (supports v1.0 and v2.0 tokens)."""
-        # Decode without verification to inspect claims
-        unverified = jwt.decode(token, options={"verify_signature": False})
-        token_iss = unverified.get("iss", "")
-        token_aud = unverified.get("aud", "")
-        logger.debug(f"Token claims (unverified): iss={token_iss}, aud={token_aud}")
 
-        # Get the key ID from token header
-        unverified_header = jwt.get_unverified_header(token)
-        kid = unverified_header.get("kid")
-        logger.debug(f"Token kid: {kid}")
+# --- Auth callables for per-tool authorization ---
 
-        # Get all matching keys from all endpoints
-        keys = await get_all_keys(kid)
-        if not keys:
-            # Clear cache and retry
-            global _jwks_cache
-            _jwks_cache = {}
-            keys = await get_all_keys(kid)
-
-        if not keys:
-            logger.error(f"Key {kid} not found in any JWKS endpoint")
-            raise ValueError("Unable to find appropriate key")
-
-        # Accept your custom API audience (tokens with api://{client-id}/access_as_user scope)
-        valid_audiences = [
-            CLIENT_ID,
-            f"api://{CLIENT_ID}",  # Custom API scope audience
-        ]
-
-        # Try each key until one works
-        last_error = None
-        for uri, rsa_key in keys:
-            try:
-                payload = jwt.decode(
-                    token,
-                    rsa_key,
-                    algorithms=["RS256"],
-                    audience=valid_audiences,
-                    issuer=VALID_ISSUERS,  # Accept both v1.0 and v2.0 issuers
-                )
-                logger.info(f"Token decoded successfully using key from {uri}")
-                return payload
-            except jwt.InvalidSignatureError as e:
-                logger.debug(f"Signature verification failed with key from {uri}, trying next...")
-                last_error = e
-                continue
-            except Exception as e:
-                logger.debug(f"Validation failed with key from {uri}: {type(e).__name__}: {e}")
-                last_error = e
-                continue
-
-        # All keys failed
-        logger.error(f"Token validation failed with all {len(keys)} keys: {last_error}")
-        raise last_error or ValueError("Token validation failed")
-
-    def _get_highest_role(self, groups: list) -> str:
-        """Map user groups to highest privilege role."""
-        role_priority = ["admin", "developer", "viewer"]
-        user_roles = [GROUP_TO_ROLE.get(g) for g in groups if g in GROUP_TO_ROLE]
-        logger.debug(f"Group to role mapping: groups={groups}, mapped_roles={user_roles}")
-        for role in role_priority:
-            if role in user_roles:
-                return role
-        return "none"
-
-
-# Auth helpers for per-tool authorization (replaces ToolAuthorizationMiddleware)
-# These custom callables read from ContextVars set by TokenValidationMiddleware.
-# Execution order: middleware on_call_tool → auth= callables → tool function.
-# If auth= callables run before middleware (ContextVars not set), fall back to
-# re-adding ToolAuthorizationMiddleware.
 def require_role(*allowed_roles: str):
-    """Require user to have one of the specified roles."""
+    """Require user to have one of the specified roles.
+
+    Reads from current_user_role ContextVar set by UserContextMiddleware.
+    Used as auth= callable on @mcp.tool() decorators to control tool visibility
+    and access.
+    """
     def check(ctx: AuthContext) -> bool:
         user_role = current_user_role.get()
         if user_role not in allowed_roles:
@@ -262,25 +303,17 @@ def require_role(*allowed_roles: str):
     return check
 
 
-def require_scopes_from_token(*required_scopes: str):
-    """Require user token to have the specified OAuth scopes."""
-    def check(ctx: AuthContext) -> bool:
-        user_scopes = set(current_user_scopes.get())
-        missing = set(required_scopes) - user_scopes
-        if missing:
-            raise ToolError(
-                f"[SCOPE_DENIAL] Insufficient permissions: Missing scopes {list(missing)}"
-            )
-        return True
-    return check
+# --- Initialize FastMCP with built-in auth + middleware ---
+
+mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())
+mcp.add_middleware(UserContextMiddleware(policy_evaluator))
 
 
-# Initialize FastMCP with middleware
-mcp = FastMCP(name="Identity-Aware MCP Server")
-mcp.add_middleware(TokenValidationMiddleware())
+# ============================================================================
+# TOOLS
+# ============================================================================
 
-
-@mcp.tool(auth=[require_role("admin", "developer", "viewer"), require_scopes_from_token("User.Read")])
+@mcp.tool(auth=require_role("admin", "developer", "viewer"))
 async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
     logger.info("Executing tool: get_user_profile")
@@ -311,7 +344,7 @@ async def get_user_profile() -> dict:
         }
 
 
-@mcp.tool(auth=[require_role("admin", "developer"), require_scopes_from_token("Files.Read")])
+@mcp.tool(auth=require_role("admin", "developer"))
 async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
     access_token = current_user_token.get()
@@ -341,7 +374,7 @@ async def list_files(folder_path: str = "/") -> dict:
         }
 
 
-@mcp.tool(auth=[require_role("admin"), require_scopes_from_token("Mail.Send")])
+@mcp.tool(auth=require_role("admin"))
 async def send_email(
     to: str,
     subject: str,
@@ -374,7 +407,7 @@ async def send_email(
         return {"status": "sent", "from": user_email, "to": to}
 
 
-@mcp.tool(auth=[require_role("admin"), require_scopes_from_token("Files.ReadWrite.All")])
+@mcp.tool(auth=require_role("admin"))
 async def delete_resource(resource_id: str) -> dict:
     """Delete a resource (admin only with full write scope)."""
     user_role = current_user_role.get()

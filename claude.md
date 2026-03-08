@@ -42,7 +42,8 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 ├── adk_agent/
 │   └── agent.py               # Google ADK agent (443 lines) - session mgmt, streaming, retry
 ├── mcp_server/
-│   └── server.py              # FastMCP tools (561 lines) - 1 middleware, auth decorators, 7 tools
+│   ├── server.py              # FastMCP tools (~633 lines) - built-in auth, UserContextMiddleware, 7 tools
+│   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator (~110 lines)
 ├── frontend/
 │   ├── public/
 │   │   └── index.html         # HTML entry point
@@ -80,6 +81,7 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 │       └── single_agent_adk_mcp.md  # Implementation guide (1630 lines)
 ├── dev_config.py              # Shared TOML config loader for auth bypass (~45 lines)
 ├── dev_config.example.toml    # Template for dev_config.toml (committed, defaults false)
+├── permissions.example.toml   # Template for permissions.toml (group-to-role mapping)
 ├── .env.example               # Backend env template
 ├── .gitignore                 # Git ignore rules
 ├── pyproject.toml             # Python project config (uv)
@@ -128,30 +130,37 @@ A2A Inspector uses old endpoint `/.well-known/agent.json`. The a2a-sdk now prefe
 
 The system supports both Entra ID v1.0 and v2.0 tokens. Microsoft Graph API returns v1.0 tokens even when requesting via v2.0 endpoints.
 
-**Supported JWKS endpoints** (`a2a_server/server.py:64-68`, `mcp_server/server.py:52-56`):
+**A2A Server** — manual JWT validation (unchanged):
+
 ```python
+# a2a_server/server.py:64-72
 JWKS_URIS = [
     f"https://login.microsoftonline.com/{TENANT_ID}/discovery/v2.0/keys",  # v2.0
     f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",       # v1.0
     "https://login.microsoftonline.com/common/discovery/keys",             # common
 ]
-```
-
-**Supported issuers** (`a2a_server/server.py:69-72`, `mcp_server/server.py:57-60`):
-```python
 VALID_ISSUERS = [
     f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",  # v2.0 issuer
     f"https://sts.windows.net/{TENANT_ID}/",                # v1.0 issuer (Graph tokens)
 ]
 ```
 
-**Custom API audience support** (`a2a_server/server.py:150-153`, `mcp_server/server.py:177-180`):
+**MCP Server** — FastMCP built-in auth with `MultiAuth` (`mcp_server/server.py:115-173`):
+
 ```python
-valid_audiences = [
-    CLIENT_ID,
-    f"api://{CLIENT_ID}",  # Custom API scope audience
-]
+# v2.0 verifier (primary) — auto-configured from Azure app registration
+AzureJWTVerifier(client_id=CLIENT_ID, tenant_id=TENANT_ID, required_scopes=["access_as_user"])
+
+# v1.0 verifier (fallback) — for tokens with sts.windows.net issuer
+JWTVerifier(
+    jwks_uri=f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",
+    issuer=f"https://sts.windows.net/{TENANT_ID}/",
+    audience=[CLIENT_ID, f"api://{CLIENT_ID}"],
+    required_scopes=["access_as_user"],
+)
 ```
+
+Both verifiers are composed via `MultiAuth` — tries v2.0 first, falls back to v1.0. JWKS caching and key rotation handled by FastMCP.
 
 ## Security Model
 
@@ -160,7 +169,7 @@ valid_audiences = [
 | Level | Location | Mechanism | Code Location | Denies Access When |
 |-------|----------|-----------|---------------|-------------------|
 | **Agent** | A2A Server | Group membership, blocklist | `a2a_server/server.py:444-539` | User blocked or not in allowed group |
-| **Tool** | FastMCP | Per-tool `auth=` callables | `mcp_server/server.py:208-236` | User role lacks tool permission |
+| **Tool** | FastMCP | Built-in auth (JWT verification) + `auth=` callables + `UserContextMiddleware` | `mcp_server/server.py:115-303` | Token invalid, role not assumed, or role lacks tool permission |
 | **Resource** | Graph API | OAuth scopes | External | Token missing required scope |
 
 ### Role Hierarchy & Permissions
@@ -172,21 +181,23 @@ developer  → Subset: get_user_profile, list_files
 viewer     → Limited: get_user_profile only
 ```
 
-**Tool Permissions** (declared via FastMCP 3 `auth=` decorator, `mcp_server/server.py:244-494`):
+**Role Assignment**: Roles are defined in `permissions.toml` (agent-owned, gitignored). Group-to-role mapping is the primary mechanism. User-level overrides are optional for exceptions.
+
+**Tool Permissions** (declared via FastMCP 3 `auth=` decorator, `mcp_server/server.py:316-567`):
 ```python
-@mcp.tool(auth=[require_role("admin", "developer", "viewer"), require_scopes_from_token("User.Read")])
+@mcp.tool(auth=require_role("admin", "developer", "viewer"))
 async def get_user_profile() -> dict: ...
 
-@mcp.tool(auth=[require_role("admin", "developer"), require_scopes_from_token("Files.Read")])
+@mcp.tool(auth=require_role("admin", "developer"))
 async def list_files(folder_path: str = "/") -> dict: ...
 
-@mcp.tool(auth=[require_role("admin"), require_scopes_from_token("Mail.Send")])
+@mcp.tool(auth=require_role("admin"))
 async def send_email(to: str, subject: str, body: str) -> dict: ...
 
-@mcp.tool(auth=[require_role("admin"), require_scopes_from_token("Files.ReadWrite.All")])
+@mcp.tool(auth=require_role("admin"))
 async def delete_resource(resource_id: str) -> dict: ...
 
-# Time tools -- role only (no Graph scopes needed)
+# Time tools -- admin only
 @mcp.tool(auth=require_role("admin"))
 async def get_current_time(timezone: str = "UTC") -> dict: ...
 @mcp.tool(auth=require_role("admin"))
@@ -195,14 +206,29 @@ async def convert_timezone(...) -> dict: ...
 async def get_time_difference(...) -> dict: ...
 ```
 
-Custom auth callables (`require_role`, `require_scopes_from_token`) read from ContextVars set by `TokenValidationMiddleware`. They raise `ToolError` with descriptive messages on denial.
+`require_role` reads from ContextVars set by `UserContextMiddleware`. Raises `ToolError` with `[TOOL_DENIAL]` prefix on denial. IdP scope checking (`require_scopes_from_token`) has been removed — the agent owns permissions via `permissions.toml`, not the IdP.
 
 ### Group-to-Role Mapping
 
-Roles derived from Entra ID security group membership (highest privilege wins):
-- `ADMIN_GROUP_ID` -> `admin`
-- `DEVELOPER_GROUP_ID` -> `developer`
-- `VIEWER_GROUP_ID` -> `viewer`
+Roles are defined in `permissions.toml` (copied from `permissions.example.toml`):
+
+```toml
+[group_rules.entra]
+"<admin-group-guid>" = "admin"
+"<developer-group-guid>" = "developer"
+"<viewer-group-guid>" = "viewer"
+
+[group_rules.cognito]
+# "platform-admins" = "admin"  # Future: Cognito groups
+
+[users]
+# "user@company.com" = { role = "admin" }  # Optional overrides
+
+[defaults]
+unknown_users = "none"
+```
+
+Role priority (highest wins): admin > developer > viewer. The `TomlPolicyEvaluator` (`mcp_server/policy.py`) resolves available roles from group claims. Users select a role via `X-Assume-Role` header.
 
 ## Data Flow
 
@@ -349,20 +375,19 @@ Between chat requests, the A2A server may forward a fresh token. This directly m
 ### FastMCP: Context Variables
 
 ```python
-# mcp_server/server.py:25-28
+# mcp_server/server.py:34-36
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
-current_user_scopes: ContextVar[list] = ContextVar("current_user_scopes", default=[])
 ```
 
-The MCP server uses 4 `ContextVar`s (vs A2A server's 2) because FastMCP runs in **stateless HTTP mode** (`stateless_http=True`), meaning `ctx.get_state()` / `ctx.set_state()` are not available. Middleware sets these variables; tools read them.
+The MCP server uses 3 `ContextVar`s (vs A2A server's 2) because FastMCP runs in **stateless HTTP mode** (`stateless_http=True`), meaning `ctx.get_state()` / `ctx.set_state()` are not available. `UserContextMiddleware` sets these variables; tools and `auth=` callables read them. `current_user_scopes` was removed — IdP scopes are no longer checked at tool level.
 
 ### FastMCP: Token Access in Tools
 
 ```python
-# mcp_server/server.py:244-250
-@mcp.tool(auth=[require_role("admin", "developer", "viewer"), require_scopes_from_token("User.Read")])
+# mcp_server/server.py:316-323
+@mcp.tool(auth=require_role("admin", "developer", "viewer"))
 async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
     access_token = current_user_token.get()
@@ -370,25 +395,31 @@ async def get_user_profile() -> dict:
     user_role = current_user_role.get()
 ```
 
-Tools read auth context from `ContextVar`s set by middleware, not from `ctx.get_state()`. Authorization is enforced by `auth=` callables on each tool decorator.
+Tools read auth context from `ContextVar`s set by `UserContextMiddleware`, not from `ctx.get_state()`. Authorization is enforced by `auth=` callables on each tool decorator. IdP scope checking has been removed from tool decorators.
 
-**Graph API Fallback**: `get_user_profile` returns token claims with `"source": "token_claims"` when Graph API returns 401/403 (`mcp_server/server.py:265-272`). This happens because the token uses a custom API audience, not the Graph API audience (OBO flow would be needed).
+**Graph API Fallback**: `get_user_profile` returns token claims with `"source": "token_claims"` when Graph API returns 401/403. This happens because the token uses a custom API audience, not the Graph API audience (OBO flow would be needed).
 
-### FastMCP: Middleware + Auth Decorators
+### FastMCP: Auth + Middleware + Auth Decorators
 
 ```python
-# mcp_server/server.py:239-241
-mcp = FastMCP(name="Identity-Aware MCP Server")
-mcp.add_middleware(TokenValidationMiddleware())   # Validates JWT, sets ContextVars
-# Per-tool auth via @mcp.tool(auth=...) replaces ToolAuthorizationMiddleware
+# mcp_server/server.py:308-309
+mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())  # Built-in JWT verification
+mcp.add_middleware(UserContextMiddleware(policy_evaluator))            # Role resolution + ContextVars
 ```
 
-**Execution order**: Middleware `on_call_tool` (sets ContextVars) → `auth=` callables (read ContextVars, enforce role/scopes) → tool function.
+**Execution order**: FastMCP built-in auth (JWT verification via `MultiAuth`) → `UserContextMiddleware.on_call_tool` (provider detection, role resolution, ContextVar setup) → `auth=` callables (read ContextVars, enforce role) → tool function.
 
-**Auth helpers** (`mcp_server/server.py:208-236`):
+**Auth helpers** (`mcp_server/server.py:288-303`):
 - `require_role(*roles)` -- checks `current_user_role` ContextVar; raises `ToolError` prefixed with `[TOOL_DENIAL]`
-- `require_scopes_from_token(*scopes)` -- checks `current_user_scopes` ContextVar; raises `ToolError` prefixed with `[SCOPE_DENIAL]`
-- These prefixes survive LLM paraphrasing and enable frontend denial classification
+- `require_scopes_from_token` -- **removed**. IdP scopes are no longer checked at tool level. The agent owns permissions via `permissions.toml`.
+
+**Policy evaluation** (`mcp_server/policy.py`):
+- `TomlPolicyEvaluator` reads `permissions.toml` (hot-reloaded on file change)
+- Resolves available roles from group claims and user overrides
+- Supports multi-IdP group rules: `[group_rules.entra]`, `[group_rules.cognito]`, `[group_rules.auth0]`
+- Interface (`PolicyEvaluator`) is swappable for OPA or Cedar
+
+**Role selection**: Users must set `X-Assume-Role` header for tool calls. `UserContextMiddleware` validates the assumed role against available roles. For tool listing, the highest-priority role is used automatically.
 
 ### FastMCP: Stateless HTTP Mode
 
@@ -619,13 +650,15 @@ uv run pytest tests/test_access_control.py -v
 |-----------|--------|----------|
 | Frontend not using stream endpoint | UI shows response all at once | `frontend/src/App.js` |
 | Session service in-memory | Lost on service restart | `adk_agent/agent.py:68` |
-| JWKS cache never invalidated | Could use stale keys (but clears on key-not-found) | `a2a_server/server.py:91-105` |
+| JWKS cache never invalidated (A2A) | Could use stale keys (but clears on key-not-found) | `a2a_server/server.py:91-105` |
 | No rate limiting | Could be abused | All servers |
 | MCP delete_resource simulated | Only logs, doesn't delete | `mcp_server/server.py:338-345` |
 | A2A Inspector requires auth bypass | Can't test without workaround | `a2a_server/server.py` |
 | httpx client per request | No connection pooling between services | All inter-service calls |
 | Stale `.env.example` | Still lists `ENTRA_AUTHORITY` and `GOOGLE_API_KEY` | `.env.example` |
-| Graph API needs OBO flow | `get_user_profile` falls back to token claims | `mcp_server/server.py:265-272` |
+| Graph API needs OBO flow | `get_user_profile` falls back to token claims | `mcp_server/server.py:337-344` |
+| X-Assume-Role not sent by ADK | ADK agent doesn't set X-Assume-Role header → MCP tool calls require it | `mcp_server/server.py:243-253` |
+| Group overage not handled | Entra ID >150 groups → groups missing from token, logged but not fetched | `mcp_server/server.py:88-110` |
 
 ## Timeouts & Configuration Constants
 
@@ -664,10 +697,12 @@ uv run pytest tests/test_access_control.py -v
 
 | Error Pattern | Trigger |
 |---------------|---------|
-| `Missing or invalid Authorization header` | No Bearer token in MCP request headers |
-| `Token validation failed: {details}` | JWT validation fails (bad signature, expired, wrong audience) |
+| HTTP 401 (from FastMCP built-in auth) | Missing/invalid Bearer token, bad signature, expired, wrong issuer/audience |
+| `No valid authentication token available` | Token not present after auth validation |
+| `[ROLE_SELECTION] Role selection required. Set X-Assume-Role header to one of: [...]` | Tool call without `X-Assume-Role` header |
+| `[TOOL_DENIAL] Cannot assume role '{role}'. Available roles: [...]` | User tries to assume a role they don't qualify for |
+| `[TOOL_DENIAL] No roles available for {email}. Contact admin to assign group membership.` | User has no group/user mappings in `permissions.toml` |
 | `[TOOL_DENIAL] Access denied: Role '{role}' cannot use this tool. Required roles: [...]` | User role not in `auth=require_role(...)` |
-| `[SCOPE_DENIAL] Insufficient permissions: Missing scopes [...]` | Token missing scopes in `auth=require_scopes_from_token(...)` |
 
 ## Logging
 
@@ -690,11 +725,14 @@ Logs are useful for debugging token validation issues. Key log messages:
 2. **State Prefix**: Use `user:` prefix for ADK session state to ensure persistence
 3. **Error Handling**: Return structured errors with `error` and `message` fields
 4. **Scope Checking**: Check both role AND scopes before allowing tool execution
-5. **JWKS Caching**: Cache JWKS responses to avoid repeated fetches; cache clears on key-not-found errors
+5. **JWKS Caching**: A2A server caches manually (clears on key-not-found). MCP server uses FastMCP's built-in JWKS caching (1-hour TTL)
 6. **Port Range**: Use 10000+ ports to avoid conflicts with common services
 7. **Context Variables**: Use `ContextVar` for passing auth data across async boundaries (A2A server and MCP server)
 8. **Test Tokens**: Tests use HS256 mock tokens (not RS256), so they cannot validate real Entra ID token signatures
 9. **Client ID Sync**: Frontend `REACT_APP_ENTRA_CLIENT_ID` and backend `ENTRA_CLIENT_ID` must be the same value
+10. **Permission Store**: `permissions.toml` is gitignored; copy from `permissions.example.toml` and configure group-to-role mappings
+11. **Role Selection**: MCP tool calls require `X-Assume-Role` header. Tool listing uses highest available role automatically
+12. **Multi-IdP Support**: MCP server uses `MultiAuth` with verifiers per IdP. Provider detected from `iss` claim. Group mappings in `permissions.toml` are per-provider (`[group_rules.entra]`, `[group_rules.cognito]`, etc.)
 
 ### A2A Server: `/me` Endpoint
 

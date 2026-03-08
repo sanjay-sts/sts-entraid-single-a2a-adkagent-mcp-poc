@@ -1,0 +1,28 @@
+# permissions.toml — Agent-owned role assignments
+# Copy this file to permissions.toml and configure for your environment.
+# permissions.toml is gitignored; this example is committed.
+
+# PRIMARY: Map IdP group claims to roles (managed by agent, not IdP)
+# Group-to-role mapping uses Entra ID security group GUIDs.
+# Priority order: admin > developer > viewer (highest wins).
+[group_rules.entra]
+# "72460602-5251-4f2e-a4f2-611476cc984c" = "admin"
+# "4baa4106-f6bf-4a10-9324-39f487b3eb6d" = "developer"
+# "cde4fa16-7717-44e5-a502-ce2a17ef4385" = "viewer"
+
+[group_rules.cognito]
+# Cognito group names → role (for future use)
+# "platform-admins" = "admin"
+# "developers" = "developer"
+
+[group_rules.auth0]
+# Auth0 roles/groups → role (for future use)
+# "admin" = "admin"
+
+# OPTIONAL: Direct user overrides (for exceptions — e.g., promoting/demoting a user)
+[users]
+# "sanjay@company.com" = { role = "admin" }
+
+[defaults]
+# Role for authenticated users not matched by group rules or user overrides
+unknown_users = "none"
