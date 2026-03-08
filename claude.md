@@ -78,6 +78,8 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 ├── scratchpad/
 │   └── singleagent/
 │       └── single_agent_adk_mcp.md  # Implementation guide (1630 lines)
+├── dev_config.py              # Shared TOML config loader for auth bypass (~45 lines)
+├── dev_config.example.toml    # Template for dev_config.toml (committed, defaults false)
 ├── .env.example               # Backend env template
 ├── .gitignore                 # Git ignore rules
 ├── pyproject.toml             # Python project config (uv)
@@ -97,33 +99,26 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 | ADK Agent | Has endpoint | `/chat/stream` for SSE streaming |
 | Frontend | Not using stream | Uses buffered `/chat` endpoint |
 
-### Local Testing with A2A Inspector
+### Local Testing with A2A / MCP Inspector
 
-The A2A Inspector requires authentication bypass for local testing:
+The A2A Inspector and MCP Inspector cannot send Bearer tokens, causing 401s and ToolError spam.
 
-**Issue**: POST requests to `/` return `401 Unauthorized` because:
-- A2A Inspector doesn't send Bearer tokens
-- Auth middleware requires token for all endpoints except agent card
+**Solution**: Copy `dev_config.example.toml` to `dev_config.toml` and set `disable_auth = true` for the servers you want to bypass. Restart the servers.
 
-**Current Implementation**: The auth middleware already allows these paths without authentication (`a2a_server/server.py:455-461`):
-```python
-if request.url.path in [
-    "/.well-known/agent.json",
-    "/.well-known/agent-card.json",
-    "/health",
-    "/docs",
-    "/openapi.json",
-]:
-    return await call_next(request)
+```bash
+cp dev_config.example.toml dev_config.toml
+# Edit dev_config.toml — set disable_auth = true under [a2a], [adk], [mcp]
 ```
 
-**For full local testing bypass** (development only), add at start of auth_middleware:
-```python
-if os.getenv("DISABLE_AUTH") == "true":
-    return await call_next(request)
-```
+**How it works**:
+- `dev_config.py` (shared loader) reads `dev_config.toml` using stdlib `tomllib`
+- Each server imports `is_auth_disabled()` and `get_section()` from `dev_config.py`
+- When `disable_auth = true`, the server sets mock auth context and skips JWT validation
+- MCP server's `on_list_tools()` hook also sets bypass context so `auth=` callables pass during tool listing
+- `dev_config.toml` is gitignored; `dev_config.example.toml` ships with all options set to `false`
+- Prominent WARNING banners are logged when bypass is active
 
-> **Note**: `DISABLE_AUTH` is a suggested code addition for development convenience. It is **not currently implemented** in any server. You must add it manually to `a2a_server/server.py` if needed.
+**Configuration sections**: `[a2a]`, `[adk]`, `[mcp]` — each has `disable_auth` boolean. The `[mcp]` section also has `default_role`, `default_email`, and `default_scopes` to control the mock identity.
 
 ### Deprecation Warning
 

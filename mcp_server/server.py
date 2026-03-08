@@ -19,8 +19,13 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.context import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AuthContext
+import sys
 import httpx
 from dotenv import load_dotenv
+
+# Add project root to path for shared dev_config module
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from dev_config import is_auth_disabled, get_section
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
@@ -101,7 +106,27 @@ async def get_all_keys(kid: str):
 class TokenValidationMiddleware(Middleware):
     """Middleware that validates tokens and extracts user context."""
 
+    def _set_bypass_context(self):
+        """Set ContextVars to dev bypass defaults from config."""
+        dev_cfg = get_section("mcp")
+        current_user_token.set("dev-bypass-token")
+        current_user_role.set(dev_cfg.get("default_role", "admin"))
+        current_user_email.set(dev_cfg.get("default_email", "dev@localhost"))
+        current_user_scopes.set(dev_cfg.get("default_scopes", [
+            "User.Read", "Files.Read", "Mail.Send", "Files.ReadWrite.All"
+        ]))
+        logger.warning("AUTH BYPASSED - role: %s", dev_cfg.get("default_role", "admin"))
+
+    async def on_list_tools(self, context, call_next):
+        if is_auth_disabled("mcp"):
+            self._set_bypass_context()
+        return await call_next(context)
+
     async def on_call_tool(self, context: MiddlewareContext, call_next):
+        if is_auth_disabled("mcp"):
+            self._set_bypass_context()
+            return await call_next(context)
+
         logger.debug(f"TokenValidationMiddleware: Processing tool call")
         headers = get_http_headers()
         auth_header = headers.get("authorization", "")

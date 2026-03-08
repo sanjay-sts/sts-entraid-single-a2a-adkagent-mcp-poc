@@ -10,6 +10,9 @@ uv.lock
 .env
 .env.local
 
+# Dev auth bypass config (user-created from dev_config.example.toml)
+dev_config.toml
+
 # IDE
 .idea/
 .vscode/
@@ -33,3 +36,9 @@ npm-debug.log*
 # Test coverage
 coverage/
 .pytest_cache/
+
+# Test reports
+reports/
+
+# Manual test results
+test_results/

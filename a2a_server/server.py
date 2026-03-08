@@ -14,8 +14,13 @@ from typing import AsyncIterable
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+import sys
 import httpx
 from dotenv import load_dotenv
+
+# Add project root to path for shared dev_config module
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from dev_config import is_auth_disabled, get_section
 
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
@@ -471,6 +476,22 @@ async def auth_middleware(request: Request, call_next):
         "/openapi.json",
     ]:
         logger.debug(f"Allowing unauthenticated access to {request.url.path}")
+        return await call_next(request)
+
+    # Development auth bypass (dev_config.toml)
+    if is_auth_disabled("a2a"):
+        mock_claims = {
+            "sub": "dev-user",
+            "preferred_username": get_section("a2a").get("default_email", "dev@localhost"),
+            "name": "Dev User (auth bypassed)",
+            "groups": ALLOWED_GROUPS,
+            "scp": "User.Read Files.Read Mail.Send Files.ReadWrite.All",
+        }
+        current_user_claims.set(mock_claims)
+        current_access_token.set("dev-bypass-token")
+        request.state.user_claims = mock_claims
+        request.state.access_token = "dev-bypass-token"
+        logger.warning("AUTH BYPASSED: %s %s", request.method, request.url.path)
         return await call_next(request)
 
     # Require auth for all other endpoints

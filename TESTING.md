@@ -638,6 +638,46 @@ python a2a_server/server.py
 
 ---
 
+## Manual Dashboard Testing
+
+For detailed manual testing of the Security Testing Dashboard with step-by-step procedures, role-specific expected results, and result recording instructions, see **[MANUAL_TESTING.md](./MANUAL_TESTING.md)**.
+
+### Quick Start
+
+1. Sign in as **admin** (AdeleV@2tdgcb.onmicrosoft.com)
+2. Verify Security Context Panel shows green **ADMIN** badge with all 7 permissions checked
+3. Click **Run All** in the RBAC Test Matrix
+4. All rows should show **PASS** (green)
+5. Switch to **developer** and **viewer** accounts and repeat
+
+### Saving Test Results
+
+Save results to `test_results/` in both formats:
+- **Markdown**: `test_results/YYYY-MM-DD_<role>_manual.md` (copy checklist from MANUAL_TESTING.md)
+- **JSON**: `test_results/YYYY-MM-DD_<role>_audit.json` (use Audit Log "Copy JSON" button)
+
+See `test_results/README.md` for templates and JSON schema.
+
+### Automated Security Dashboard Tests
+
+```bash
+# Full suite with HTML report
+uv run pytest --html=reports/test_report.html --self-contained-html -v
+
+# Only security dashboard tests (real Entra ID tokens required)
+uv run pytest tests/test_security_dashboard.py -v
+
+# Skip slow LLM pipeline tests (~3-4 min total)
+uv run pytest tests/test_security_dashboard.py -m "not slow" -v
+
+# Only mock-token tests (no real tokens needed)
+uv run pytest tests/test_access_control.py -v
+```
+
+Set `TEST_ADMIN_TOKEN`, `TEST_DEVELOPER_TOKEN`, `TEST_VIEWER_TOKEN`, and `TEST_NOGROUP_TOKEN` in `.env` before running. See `.env.example` for instructions.
+
+---
+
 ## Next Steps
 
 After successful local testing:

@@ -16,8 +16,13 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import json
+import sys
 from dotenv import load_dotenv
 from litellm.exceptions import RateLimitError
+
+# Add project root to path for shared dev_config module
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from dev_config import is_auth_disabled
 
 # Load environment variables
 load_dotenv()
@@ -317,11 +322,15 @@ async def create_session(request: Request):
     """Create a new session for a user."""
     logger.debug("POST /session request received")
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    if auth_header.startswith("Bearer "):
+        access_token = auth_header[7:]
+    elif is_auth_disabled("adk"):
+        access_token = "dev-bypass-token"
+        logger.warning("AUTH BYPASSED: POST /session")
+    else:
         logger.warning("Missing or invalid Authorization header in /session")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    access_token = auth_header[7:]
     logger.debug(f"Access token received (length: {len(access_token)})")
 
     # Get user info from token (simplified - in production, validate the token)
@@ -344,11 +353,15 @@ async def chat(request: Request):
     """Process a chat message."""
     logger.debug("POST /chat request received")
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    if auth_header.startswith("Bearer "):
+        access_token = auth_header[7:]
+    elif is_auth_disabled("adk"):
+        access_token = "dev-bypass-token"
+        logger.warning("AUTH BYPASSED: POST /chat")
+    else:
         logger.warning("Missing or invalid Authorization header in /chat")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    access_token = auth_header[7:]
     body = await request.json()
 
     message = body.get("message", "")
@@ -407,10 +420,14 @@ async def chat(request: Request):
 async def chat_stream(request: Request):
     """Process a chat message with streaming response."""
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    if auth_header.startswith("Bearer "):
+        access_token = auth_header[7:]
+    elif is_auth_disabled("adk"):
+        access_token = "dev-bypass-token"
+        logger.warning("AUTH BYPASSED: POST /chat/stream")
+    else:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    access_token = auth_header[7:]
     body = await request.json()
 
     message = body.get("message", "")
