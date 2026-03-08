@@ -117,38 +117,34 @@ class TokenValidationMiddleware(Middleware):
         ]))
         logger.warning("AUTH BYPASSED - role: %s", dev_cfg.get("default_role", "admin"))
 
-    async def on_list_tools(self, context, call_next):
-        if is_auth_disabled("mcp"):
-            self._set_bypass_context()
-        return await call_next(context)
+    async def _validate_and_set_context(self, raise_on_error: bool = True):
+        """Validate Bearer token from headers and set ContextVars.
 
-    async def on_call_tool(self, context: MiddlewareContext, call_next):
-        if is_auth_disabled("mcp"):
-            self._set_bypass_context()
-            return await call_next(context)
-
-        logger.debug(f"TokenValidationMiddleware: Processing tool call")
+        Args:
+            raise_on_error: If True, raise ToolError on failure. If False, silently
+                leave ContextVars at defaults (role="none"), which causes auth=
+                callables to hide tools during listing.
+        """
         headers = get_http_headers()
         auth_header = headers.get("authorization", "")
 
         if not auth_header.startswith("Bearer "):
-            logger.warning("Missing or invalid Authorization header in MCP request")
-            raise ToolError("Missing or invalid Authorization header")
+            if raise_on_error:
+                logger.warning("Missing or invalid Authorization header in MCP request")
+                raise ToolError("Missing or invalid Authorization header")
+            return
 
-        token = auth_header[7:]  # Strip "Bearer "
+        token = auth_header[7:]
         logger.debug(f"Bearer token received (length: {len(token)})")
 
         try:
-            # Fetch JWKS and validate token
             user_info = await self._validate_token(token)
             logger.info(f"Token validated for user: {user_info.get('preferred_username', user_info.get('unique_name', user_info.get('sub')))}")
 
-            # Store user info in context variables (works in stateless mode)
             user_role = self._get_highest_role(user_info.get("groups", []))
             user_email = user_info.get("preferred_username", user_info.get("unique_name", ""))
             user_scopes = user_info.get("scp", "").split()
 
-            # Set context variables
             current_user_token.set(token)
             current_user_role.set(user_role)
             current_user_email.set(user_email)
@@ -158,7 +154,25 @@ class TokenValidationMiddleware(Middleware):
 
         except Exception as e:
             logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")
-            raise ToolError(f"Token validation failed: {str(e)}")
+            if raise_on_error:
+                raise ToolError(f"Token validation failed: {str(e)}")
+
+    async def on_list_tools(self, context, call_next):
+        if is_auth_disabled("mcp"):
+            self._set_bypass_context()
+        else:
+            # Validate token so auth= callables see correct role during tool listing.
+            # If no token or invalid token, role stays "none" and tools are hidden.
+            await self._validate_and_set_context(raise_on_error=False)
+        return await call_next(context)
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        if is_auth_disabled("mcp"):
+            self._set_bypass_context()
+            return await call_next(context)
+
+        # Validate token — raise on failure (tool calls require valid auth)
+        await self._validate_and_set_context(raise_on_error=True)
 
         return await call_next(context)
 
