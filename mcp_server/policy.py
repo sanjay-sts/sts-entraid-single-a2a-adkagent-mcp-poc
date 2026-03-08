@@ -97,11 +97,14 @@ class TomlPolicyEvaluator(PolicyEvaluator):
                 if g in group_rules:
                     roles.add(group_rules[g])
 
-        # 2. Direct user override
+        # 2. Direct user override (case-insensitive lookup)
         users = self._config.get("users", {})
         email_lower = email.lower()
-        if email_lower in users:
-            user_entry = users[email_lower]
+        # TOML preserves key case, so normalize both sides
+        user_entry = next(
+            (v for k, v in users.items() if k.lower() == email_lower), None
+        )
+        if user_entry is not None:
             if isinstance(user_entry, dict) and "role" in user_entry:
                 roles.add(user_entry["role"])
             elif isinstance(user_entry, str):

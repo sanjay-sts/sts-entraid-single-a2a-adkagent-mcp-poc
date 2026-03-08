@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent / "dev_config.toml"
 _config: dict[str, Any] | None = None
+_logged_sections: set[str] = set()
 
 
 def _load_config() -> dict[str, Any]:
@@ -21,13 +22,6 @@ def _load_config() -> dict[str, Any]:
     if _CONFIG_PATH.exists():
         with open(_CONFIG_PATH, "rb") as f:
             _config = tomllib.load(f)
-        logger.warning(
-            "\n========================================\n"
-            "  DEV CONFIG LOADED: %s\n"
-            "  Auth bypass may be active!\n"
-            "========================================",
-            _CONFIG_PATH,
-        )
     else:
         _config = {}
     return _config
@@ -35,7 +29,22 @@ def _load_config() -> dict[str, Any]:
 
 def is_auth_disabled(section: str) -> bool:
     """Check if auth is disabled for the given server section."""
-    return _load_config().get(section, {}).get("disable_auth", False)
+    config = _load_config()
+    disabled = config.get(section, {}).get("disable_auth", False)
+    if section not in _logged_sections:
+        _logged_sections.add(section)
+        if disabled:
+            logger.warning(
+                "\n========================================\n"
+                "  ⚠️  AUTH BYPASS ENABLED for: %s\n"
+                "  Config: %s\n"
+                "========================================",
+                section.upper(),
+                _CONFIG_PATH,
+            )
+        else:
+            logger.info("[%s] Auth enforced (disable_auth=false)", section.upper())
+    return disabled
 
 
 def get_section(section: str) -> dict[str, Any]:
