@@ -146,6 +146,22 @@ User DiegoS@2tdgcb.onmicrosoft.com assumed role 'developer' (available: ['develo
 {"error": "MCP error 0: [TOOL_DENIAL] Cannot assume role 'viewer'. Available roles: ['developer']"}
 ```
 
+### B4: Developer with viewer override → step down
+**Status**: PASS
+
+**Config**:
+- permissions.toml: `"DiegoS@2tdgcb.onmicrosoft.com" = { role = "viewer" }`
+- Header: `X-Assume-Role: viewer`
+
+**Results**:
+- Available roles resolved: `['developer', 'viewer']` (group + user override)
+- List Tools: 1 tool visible (`get_user_profile`)
+- `get_user_profile` → SUCCESS with `role: viewer`
+  ```json
+  {"source": "token_claims", "email": "DiegoS@2tdgcb.onmicrosoft.com",
+   "role": "viewer", "note": "Graph API requires OBO flow for delegated access."}
+  ```
+
 ---
 
 ## Test Suite C: JohannaL (Viewer Group)
@@ -194,11 +210,54 @@ User JohannaL@2tdgcb.onmicrosoft.com assumed role 'viewer' (available: ['viewer'
 {"error": "MCP error 0: [TOOL_DENIAL] Cannot assume role 'developer'. Available roles: ['viewer']"}
 ```
 
+### C4: Viewer promoted to admin via override
+**Status**: PASS
+
+**Config**:
+- permissions.toml: `"JohannaL@2tdgcb.onmicrosoft.com" = { role = "admin" }`
+- Header: `X-Assume-Role: admin`
+
+**Results**:
+- Available roles resolved: `['admin', 'viewer']` (user override + group)
+- List Tools: all 7 tools visible
+- `get_current_time {"timezone": "UTC"}` → SUCCESS
+  ```json
+  {"timezone": "UTC", "formatted": "2026-03-09 11:50:28 UTC",
+   "day_of_week": "Monday", "requested_by": "JohannaL@2tdgcb.onmicrosoft.com"}
+  ```
+
 ---
 
 ## Test Suite D: No-Group User
 
-**Status**: NOT YET TESTED — requires no-group user token
+### D1: Authenticated but no group membership
+**Status**: PASS
+
+**Config**:
+- User: PradeepG@2tdgcb.onmicrosoft.com (not in any of the 3 groups)
+- No user override in permissions.toml
+- Header: `X-Assume-Role: developer`
+
+**Results**:
+```
+[TOOL_DENIAL] No roles available for PradeepG@2tdgcb.onmicrosoft.com. Contact admin to assign group membership.
+```
+
+### D2: No-group user with user override
+**Status**: PASS
+
+**Config**:
+- permissions.toml: `"PradeepG@2tdgcb.onmicrosoft.com" = { role = "developer" }`
+- Header: `X-Assume-Role: developer`
+
+**Results**:
+- Available roles resolved: `['developer']` (from user override only)
+- List Tools: 2 tools visible (`get_user_profile`, `list_files`)
+- `get_user_profile` → SUCCESS
+  ```json
+  {"source": "token_claims", "email": "PradeepG@2tdgcb.onmicrosoft.com",
+   "role": "developer", "note": "Graph API requires OBO flow for delegated access."}
+  ```
 
 ---
 
@@ -222,6 +281,21 @@ AUTH BYPASSED - role: admin
 get_current_time called by dev@localhost (role: admin) for timezone: UTC
 ```
 
+### E2: Dev bypass with viewer role
+**Status**: PASS
+
+**Config**:
+- dev_config.toml: `[mcp] disable_auth = true, default_role = "viewer"`
+- No Bearer token, no X-Assume-Role header
+
+**Results**:
+- List Tools: 1 tool visible (`get_user_profile`)
+- `get_user_profile` → SUCCESS
+  ```json
+  {"source": "token_claims", "email": "dev@localhost",
+   "role": "viewer", "note": "Graph API requires OBO flow for delegated access."}
+  ```
+
 ---
 
 ## Test Suite F: Token Validation
@@ -235,6 +309,27 @@ get_current_time called by dev@localhost (role: admin) for timezone: UTC
   {"error": "invalid_token", "error_description": "Authentication failed..."}
   ```
 
+### F2: Expired token
+**Status**: PASS
+
+**Config**:
+- Used JohannaL's token from previous session (expired ~24 hours ago)
+
+**Results**:
+- HTTP 401 — `invalid_token`
+- Server log: `Bearer token rejected for client MZEulubuf6...`
+
+### F3: Fake/self-signed JWT
+**Status**: PASS
+
+**Config**:
+- Generated fake JWT with issuer `https://evil.com` and HS256 signature
+- Token: `eyJhbGciOiAiSFMyNTYi...fakesignature123`
+
+**Results**:
+- HTTP 401 — `invalid_token`
+- Signature doesn't match any configured JWKS, rejected by both verifiers
+
 ### F4: Wrong audience (Graph API token)
 **Status**: PASS (observed)
 
@@ -245,6 +340,18 @@ get_current_time called by dev@localhost (role: admin) for timezone: UTC
 ---
 
 ## Test Suite G: Hot Reload
+
+### G1: Change group mapping without restart
+**Status**: PASS
+
+**Config changes** (no server restart):
+1. Changed `"DiegoS@2tdgcb.onmicrosoft.com"` user override from `developer` to `viewer`
+2. Changed `"JohannaL@2tdgcb.onmicrosoft.com"` user override to `admin`
+
+**Results**:
+- DiegoS: `X-Assume-Role: viewer` → 1 tool visible, role: viewer (previously had developer only)
+- JohannaL: `X-Assume-Role: admin` → all 7 tools visible, called `get_current_time` successfully
+- Hot-reload confirmed — no server restart needed
 
 ### G2: Add user override without restart
 **Status**: PASS
@@ -313,7 +420,7 @@ user_entry = next(
 
 ---
 
-## Test Summary
+## Test Summary — ALL 22 TESTS PASSED
 
 | Test | User | What was Tested | Status |
 |------|------|----------------|--------|
@@ -323,24 +430,19 @@ user_entry = next(
 | A4 | AdeleV | Can't assume role not in available list | PASS |
 | B1 | DiegoS | Developer sees 2 tools, can call them | PASS |
 | B2 | DiegoS | Developer can't assume admin | PASS |
-| B3 | DiegoS | Developer can't assume viewer | PASS |
+| B3 | DiegoS | Developer can't assume viewer (no override) | PASS |
+| B4 | DiegoS | Developer with viewer override → step down | PASS |
 | C1 | JohannaL | Viewer sees 1 tool, can call it | PASS |
 | C2 | JohannaL | Viewer can't assume admin | PASS |
-| E1 | — | Dev bypass mode, all tools accessible | PASS |
-| F1 | — | No/invalid token → 401 | PASS |
-| F4 | — | Wrong audience token rejected | PASS |
-| G2 | AdeleV | User override hot-reload works | PASS |
-
-## Remaining Tests
-
-| Test | User | What to Test | Status |
-|------|------|-------------|--------|
-| B4 | DiegoS | Developer with viewer override → can step down | TODO |
 | C3 | JohannaL | Viewer can't assume developer | PASS |
-| C4 | JohannaL | Viewer promoted to admin via override → sees all tools | TODO |
-| D1 | No-group | No roles available error | TODO |
-| D2 | No-group | User override grants access | TODO |
-| E2 | — | Dev bypass with viewer role | TODO |
-| F2 | — | Expired token rejection | TODO |
-| F3 | — | Fake JWT rejection | TODO |
-| G1 | AdeleV | Change group mapping without restart | TODO |
+| C4 | JohannaL | Viewer promoted to admin via override | PASS |
+| D1 | PradeepG | No-group user → no roles available | PASS |
+| D2 | PradeepG | No-group user with override → developer access | PASS |
+| E1 | — | Dev bypass mode (admin), all tools | PASS |
+| E2 | — | Dev bypass mode (viewer), 1 tool | PASS |
+| F1 | — | No/invalid token → 401 | PASS |
+| F2 | — | Expired token → 401 | PASS |
+| F3 | — | Fake JWT (evil issuer) → 401 | PASS |
+| F4 | — | Wrong audience token → 401 | PASS |
+| G1 | DiegoS/JohannaL | Hot-reload group/user mapping changes | PASS |
+| G2 | AdeleV | User override hot-reload works | PASS |
