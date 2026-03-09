@@ -21,8 +21,11 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 
 ### Overview
 
-This system implements an identity-aware AI agent using:
-- **Frontend**: React with MSAL.js for Microsoft Entra ID authentication
+This system implements an identity-aware AI agent using **OAuth 2.0 with OpenID Connect (OIDC)** for authentication and authorization, powered by Microsoft Entra ID:
+
+- **Protocol**: OAuth 2.0 Authorization Code Flow with PKCE (Proof Key for Code Exchange)
+- **Token format**: JWT access tokens signed by Entra ID, validated via JWKS (JSON Web Key Sets)
+- **Frontend**: React with MSAL.js 3.6 — acquires tokens via PKCE (no implicit grant)
 - **Gateway**: A2A Protocol server for agent discovery and request routing
 - **Agent**: Google ADK with Claude Sonnet 4 via LiteLLM
 - **Tools**: FastMCP server providing identity-aware tools
@@ -35,7 +38,7 @@ This system implements an identity-aware AI agent using:
 | Gateway | A2A Protocol (FastAPI + a2a-sdk) | 10000 | Agent discovery, agent-level ACL, streaming |
 | Agent | Google ADK + LiteLLM + Claude Sonnet 4 | 10001 | LLM orchestration, tool calling |
 | Tools | FastMCP (Stateless HTTP) | 10002 | Tool execution, token propagation |
-| Identity | Microsoft Entra ID | - | OAuth 2.0, group claims, scopes |
+| Identity | Microsoft Entra ID | - | OAuth 2.0 + OIDC, Authorization Code with PKCE |
 | Resources | Microsoft Graph API | - | User data, files, email |
 
 ### Three-Tier Security Model
@@ -256,17 +259,20 @@ This system implements an identity-aware AI agent using:
 
 ## Authentication Flow
 
+The system uses **OAuth 2.0 Authorization Code Flow with PKCE** via Microsoft Entra ID. MSAL.js 3.6 handles the frontend flow — implicit grant is not used. Tokens are standard JWTs containing OAuth 2.0/OIDC claims (`iss`, `aud`, `exp`, `scp`, `groups`, `preferred_username`, etc.) and are validated at each tier using the provider's JWKS public keys.
+
 ### Initial Authentication
 
 ```
 1. User clicks "Sign In with Microsoft"
-2. MSAL.js opens popup to Entra ID login
+2. MSAL.js opens popup to Entra ID login (Authorization Code + PKCE)
 3. User authenticates with credentials/MFA
-4. Entra ID returns tokens:
-   - ID Token (user identity)
-   - Access Token (with custom API scope + Graph scopes)
-5. MSAL.js caches tokens in browser storage
-6. Frontend shows authenticated state
+4. Entra ID returns an authorization code to the SPA
+5. MSAL.js exchanges the code for tokens (PKCE-secured, no client secret):
+   - ID Token (OIDC — user identity claims)
+   - Access Token (OAuth 2.0 — with custom API scope + Graph scopes)
+6. MSAL.js caches tokens in browser storage
+7. Frontend shows authenticated state
 ```
 
 ### Token Acquisition for Requests
@@ -287,7 +293,9 @@ export const graphScopes = {
 const token = await instance.acquireTokenSilent({ scopes, account });
 ```
 
-### Token Validation
+### Token Format and Validation
+
+Access tokens are **JWT (JSON Web Tokens)** signed by Entra ID using RS256. Each backend tier validates the Bearer token independently by fetching public keys from Microsoft's JWKS endpoints and verifying the signature, issuer, audience, and expiry. Entra ID may issue v1.0 tokens (issuer: `sts.windows.net/{tenant}/`) or v2.0 tokens (issuer: `login.microsoftonline.com/{tenant}/v2.0`) — both are supported.
 
 **A2A Server** — manual JWT validation:
 

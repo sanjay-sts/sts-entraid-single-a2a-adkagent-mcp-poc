@@ -29,6 +29,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Entra ID App Registration Setup
 
+The system uses **OAuth 2.0 Authorization Code Flow with PKCE** via Microsoft Entra ID. The frontend (MSAL.js) acquires JWT access tokens which are validated at each backend tier using JWKS (public key verification). No client secret is needed for the SPA — PKCE secures the token exchange.
+
 ### Creating the App Registration
 
 1. Go to [Microsoft Entra admin center](https://entra.microsoft.com)
@@ -51,7 +53,7 @@ After registration, note these values from the **Overview** page:
 
 1. Go to **Authentication** blade
 2. Click **Add a platform**
-3. Select **Single-page application** (NOT "Web")
+3. Select **Single-page application** (NOT "Web") — this enables Authorization Code with PKCE
 4. Add these Redirect URIs:
    - `http://localhost:10003`
    - `http://localhost:10003/redirect`
