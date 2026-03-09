@@ -52,18 +52,24 @@ if os.getenv("CLAUDE_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
 
 
 def mcp_header_provider(readonly_context: ReadonlyContext) -> Dict[str, str]:
-    """Provides Authorization header for MCP calls from session state.
+    """Provides Authorization and X-Assume-Role headers for MCP calls from session state.
 
     This is called by McpToolset to get dynamic headers for each request.
-    The access token is stored in session state with 'user:' prefix.
+    The access token and role are stored in session state with 'user:' prefix.
     """
+    headers = {}
     if readonly_context and readonly_context.state:
         access_token = readonly_context.state.get("user:access_token", "")
+        role = readonly_context.state.get("user:role", "")
         if access_token:
             logger.debug(f"MCP header_provider: Providing auth token (length: {len(access_token)})")
-            return {"Authorization": f"Bearer {access_token}"}
-    logger.warning("MCP header_provider: No access token found in session state")
-    return {}
+            headers["Authorization"] = f"Bearer {access_token}"
+        if role:
+            logger.debug(f"MCP header_provider: Providing X-Assume-Role: {role}")
+            headers["X-Assume-Role"] = role
+    if not headers:
+        logger.warning("MCP header_provider: No access token found in session state")
+    return headers
 
 
 class IdentityAwareAgent:
@@ -145,8 +151,9 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
         logger.info(f"Creating session for user: {user_id}")
         logger.debug(f"User info: {user_info}")
 
-        # Determine role first
-        role = self._determine_role(user_info.get("groups", []))
+        # Use assumed_role if provided, otherwise determine from groups
+        assumed_role = user_info.get("assumed_role", "")
+        role = assumed_role if assumed_role else self._determine_role(user_info.get("groups", []))
 
         # Pass initial state at creation time - this ensures it's stored properly
         # Using user: prefix for persistence across sessions
@@ -367,12 +374,18 @@ async def chat(request: Request):
     message = body.get("message", "")
     user_id = body.get("user_id")
     session_id = body.get("session_id")
-    logger.info(f"Chat request - user: {user_id}, session: {session_id}")
+    role = body.get("role", "")
+    logger.info(f"Chat request - user: {user_id}, session: {session_id}, role: {role}")
     logger.debug(f"Message: {message}")
 
     if not all([message, user_id, session_id]):
         logger.error("Missing required fields: message, user_id, or session_id")
         raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
+
+    # Update role in session state if provided (same pattern as token refresh)
+    if role:
+        agent.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})["role"] = role
+        logger.debug(f"Updated role in user_state: {role}")
 
     # Collect ALL events, then extract the FINAL text response
     # The final response is the last text content after all tool calls complete

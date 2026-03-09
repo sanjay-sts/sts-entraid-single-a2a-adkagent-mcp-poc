@@ -34,6 +34,7 @@ export default function AuditLog({ entries }) {
                   <th>Time</th>
                   <th>Prompt</th>
                   <th>Scope</th>
+                  <th>Role</th>
                   <th>HTTP</th>
                   <th>Denial</th>
                   <th>Latency</th>
@@ -52,6 +53,7 @@ export default function AuditLog({ entries }) {
                         {entry.prompt.length > 40 ? entry.prompt.substring(0, 40) + '...' : entry.prompt}
                       </td>
                       <td><span className="scope-tag scope-tag-sm">{entry.scopeKey}</span></td>
+                      <td>{entry.role ? <span className={`role-badge role-${entry.role}`}>{entry.role}</span> : '--'}</td>
                       <td className={entry.httpStatus >= 400 ? 'http-error' : ''}>{entry.httpStatus || '--'}</td>
                       <td>
                         {entry.denial
@@ -62,7 +64,7 @@ export default function AuditLog({ entries }) {
                     </tr>
                     {expandedRow === i && (
                       <tr className="audit-detail-row">
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <pre className="audit-detail">
                             {JSON.stringify(entry.response, null, 2)}
                           </pre>

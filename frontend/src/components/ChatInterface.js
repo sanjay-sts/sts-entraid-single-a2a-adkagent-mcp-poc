@@ -7,7 +7,7 @@ import DenialIndicator from './DenialIndicator';
 
 const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
 
-export default function ChatInterface({ scopeKey, onAuditEntry }) {
+export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) {
   const { instance, accounts } = useMsal();
   const account = useAccount(accounts[0] || {});
   const [messages, setMessages] = useState([]);
@@ -55,6 +55,7 @@ export default function ChatInterface({ scopeKey, onAuditEntry }) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${accessToken}`,
+          ...(selectedRole && { 'X-Assume-Role': selectedRole }),
         },
         body: JSON.stringify({
           jsonrpc: '2.0',
@@ -89,6 +90,7 @@ export default function ChatInterface({ scopeKey, onAuditEntry }) {
             timestamp: new Date().toISOString(),
             prompt: userMessage,
             scopeKey,
+            role: selectedRole,
             httpStatus,
             denial,
             latency,
@@ -133,6 +135,7 @@ export default function ChatInterface({ scopeKey, onAuditEntry }) {
           timestamp: new Date().toISOString(),
           prompt: userMessage,
           scopeKey,
+          role: selectedRole,
           httpStatus,
           denial,
           latency,
@@ -153,6 +156,7 @@ export default function ChatInterface({ scopeKey, onAuditEntry }) {
           timestamp: new Date().toISOString(),
           prompt: userMessage,
           scopeKey,
+          role: selectedRole,
           httpStatus: 0,
           denial: null,
           latency,

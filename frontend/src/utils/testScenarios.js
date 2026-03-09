@@ -23,7 +23,6 @@ const testScenarios = [
     rolesAllowed: ['admin', 'developer'],
     requiredScopes: ['Files.Read'],
     description: 'List files with basic scopes (missing Files.Read)',
-    expectScopeDenial: true,
   },
   {
     id: 'files_correct',
@@ -44,7 +43,6 @@ const testScenarios = [
     rolesAllowed: ['admin'],
     requiredScopes: ['Mail.Send'],
     description: 'Send email with basic scopes (missing Mail.Send)',
-    expectScopeDenial: true,
   },
   {
     id: 'email_correct',
@@ -65,7 +63,6 @@ const testScenarios = [
     rolesAllowed: ['admin'],
     requiredScopes: ['Files.ReadWrite.All'],
     description: 'Delete resource with basic scopes',
-    expectScopeDenial: true,
   },
   {
     id: 'delete_destructive',
@@ -170,7 +167,7 @@ export function getScenariosForRole(role) {
     return {
       ...scenario,
       shouldSucceed: roleAllowed && hasScope,
-      denialExpected: !roleAllowed ? 'tool' : (!hasScope ? 'scope' : null),
+      denialExpected: !roleAllowed ? 'tool' : (!hasScope ? 'resource' : null),
     };
   });
 }

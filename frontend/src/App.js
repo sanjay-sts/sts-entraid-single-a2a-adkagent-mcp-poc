@@ -12,6 +12,7 @@ function App() {
   const [auditEntries, setAuditEntries] = useState([]);
   const [securityCtx, setSecurityCtx] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [selectedRole, setSelectedRole] = useState(null);
 
   // Current scope key from the active conversation tab (defaults to basic)
   const currentScopeKey = 'basic';
@@ -28,7 +29,8 @@ function App() {
     setAuditEntries([]);
   }, []);
 
-  const role = securityCtx?.security?.role || 'none';
+  // Use highest available role as the base identity role (not the assumed role)
+  const role = securityCtx?.security?.available_roles?.[0] || securityCtx?.security?.role || 'none';
 
   return (
     <div className="app-dashboard">
@@ -60,12 +62,15 @@ function App() {
                 <SecurityContextPanel
                   scopeKey={currentScopeKey}
                   onSecurityContext={handleSecurityContext}
+                  selectedRole={selectedRole}
+                  onRoleChange={setSelectedRole}
                 />
 
                 <TokenInspector scopeKey={currentScopeKey} />
 
                 <RBACTestMatrix
                   role={role}
+                  selectedRole={selectedRole}
                   onAuditEntry={handleAuditEntry}
                 />
               </>
@@ -74,7 +79,7 @@ function App() {
 
           {/* Main Content */}
           <main className="main-content">
-            <ConversationTabs onAuditEntry={handleAuditEntry} />
+            <ConversationTabs onAuditEntry={handleAuditEntry} selectedRole={selectedRole} />
 
             <div className="audit-section">
               <AuditLog entries={auditEntries} />

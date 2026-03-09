@@ -30,7 +30,7 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 | Gateway | A2A Protocol (FastAPI + a2a-sdk) | 10000 | Agent discovery, agent-level ACL, streaming |
 | Agent | Google ADK + LiteLLM + Claude Sonnet 4 | 10001 | LLM orchestration, tool calling, retry |
 | Tools | FastMCP | 10002 | Tool execution, token propagation |
-| Identity | Microsoft Entra ID | - | OAuth 2.0, group claims, scopes |
+| Identity | Microsoft Entra ID | - | OAuth 2.0 + OIDC, Authorization Code with PKCE, JWT tokens |
 | Resources | Microsoft Graph API | - | User data, files, email |
 
 ## Project Structure
@@ -128,7 +128,7 @@ A2A Inspector uses old endpoint `/.well-known/agent.json`. The a2a-sdk now prefe
 
 ### Token Validation (v1.0 and v2.0 Support)
 
-The system supports both Entra ID v1.0 and v2.0 tokens. Microsoft Graph API returns v1.0 tokens even when requesting via v2.0 endpoints.
+The system uses **OAuth 2.0 Authorization Code Flow with PKCE** via Microsoft Entra ID. The frontend (MSAL.js 3.6) acquires JWT access tokens signed by Entra ID (RS256). Each backend tier validates the Bearer token independently via JWKS public key verification. The system supports both Entra ID v1.0 and v2.0 tokens — Microsoft Graph API returns v1.0 tokens even when requesting via v2.0 endpoints.
 
 **A2A Server** — manual JWT validation (unchanged):
 
@@ -657,7 +657,7 @@ uv run pytest tests/test_access_control.py -v
 | httpx client per request | No connection pooling between services | All inter-service calls |
 | Stale `.env.example` | Still lists `ENTRA_AUTHORITY` and `GOOGLE_API_KEY` | `.env.example` |
 | Graph API needs OBO flow | `get_user_profile` falls back to token claims | `mcp_server/server.py:337-344` |
-| X-Assume-Role not sent by ADK | ADK agent doesn't set X-Assume-Role header → MCP tool calls require it | `mcp_server/server.py:243-253` |
+| ~~X-Assume-Role not sent by ADK~~ | **FIXED** — Frontend sends X-Assume-Role, propagated through A2A→ADK→MCP | All servers |
 | Group overage not handled | Entra ID >150 groups → groups missing from token, logged but not fetched | `mcp_server/server.py:88-110` |
 
 ## Timeouts & Configuration Constants

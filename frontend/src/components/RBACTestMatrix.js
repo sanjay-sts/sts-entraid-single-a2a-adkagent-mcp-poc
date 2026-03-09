@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useMsal, useAccount } from '@azure/msal-react';
 import { InteractionRequiredAuthError } from '@azure/msal-browser';
 import { graphScopes } from '../authConfig';
@@ -8,14 +8,20 @@ import DenialIndicator from './DenialIndicator';
 
 const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
 
-export default function RBACTestMatrix({ role, onAuditEntry }) {
+export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
   const { instance, accounts } = useMsal();
   const account = useAccount(accounts[0] || {});
   const [results, setResults] = useState({});
   const [running, setRunning] = useState(null);
   const [runningAll, setRunningAll] = useState(false);
 
-  const scenarios = getScenariosForRole(role);
+  const effectiveRole = selectedRole || role;
+  const scenarios = getScenariosForRole(effectiveRole);
+
+  // Clear results when role changes
+  useEffect(() => {
+    setResults({});
+  }, [selectedRole]);
 
   const getAccessToken = useCallback(async (scopeKey) => {
     const scopes = graphScopes[scopeKey] || graphScopes.basic;
@@ -43,6 +49,7 @@ export default function RBACTestMatrix({ role, onAuditEntry }) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${accessToken}`,
+          ...(selectedRole && { 'X-Assume-Role': selectedRole }),
         },
         body: JSON.stringify({
           jsonrpc: '2.0',
@@ -94,6 +101,7 @@ export default function RBACTestMatrix({ role, onAuditEntry }) {
           timestamp: new Date().toISOString(),
           prompt: `[TEST: ${scenario.id}] ${scenario.prompt}`,
           scopeKey: scenario.scopeKey,
+          role: selectedRole,
           httpStatus,
           denial,
           latency,
@@ -109,7 +117,7 @@ export default function RBACTestMatrix({ role, onAuditEntry }) {
     } finally {
       setRunning(null);
     }
-  }, [getAccessToken, onAuditEntry]);
+  }, [getAccessToken, selectedRole, onAuditEntry]);
 
   const runAll = async () => {
     setRunningAll(true);
@@ -125,7 +133,8 @@ export default function RBACTestMatrix({ role, onAuditEntry }) {
     <div className="rbac-matrix">
       <h3 className="panel-title">RBAC Test Matrix</h3>
       <div className="matrix-role-info">
-        Testing as: <span className={`role-badge role-${role}`}>{role.toUpperCase()}</span>
+        Testing as: <span className={`role-badge role-${effectiveRole}`}>{effectiveRole.toUpperCase()}</span>
+        {role !== effectiveRole && <span className="role-switch-note">(switched from {role})</span>}
       </div>
 
       <div className="matrix-table-wrapper">

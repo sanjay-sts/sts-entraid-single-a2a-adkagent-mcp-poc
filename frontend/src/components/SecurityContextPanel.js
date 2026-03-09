@@ -12,7 +12,7 @@ const ROLE_COLORS = {
   none: 'role-none',
 };
 
-export default function SecurityContextPanel({ scopeKey, onSecurityContext }) {
+export default function SecurityContextPanel({ scopeKey, onSecurityContext, selectedRole, onRoleChange }) {
   const { instance, accounts } = useMsal();
   const account = useAccount(accounts[0] || {});
   const [securityCtx, setSecurityCtx] = useState(null);
@@ -41,7 +41,10 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext }) {
       }
 
       const response = await fetch(`${A2A_SERVER_URL}/me`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` },
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          ...(selectedRole && { 'X-Assume-Role': selectedRole }),
+        },
       });
 
       if (!response.ok) {
@@ -57,7 +60,7 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext }) {
     } finally {
       setLoading(false);
     }
-  }, [instance, account, scopeKey, onSecurityContext]);
+  }, [instance, account, scopeKey, selectedRole, onSecurityContext]);
 
   useEffect(() => {
     fetchSecurityContext();
@@ -89,6 +92,13 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext }) {
     return () => clearInterval(interval);
   }, [securityCtx?.security?.token_expiry]);
 
+  // Auto-select highest available role on initial load
+  useEffect(() => {
+    if (securityCtx?.security?.available_roles?.length && !selectedRole) {
+      onRoleChange(securityCtx.security.available_roles[0]);
+    }
+  }, [securityCtx, selectedRole, onRoleChange]);
+
   if (loading && !securityCtx) {
     return <div className="security-panel"><p className="panel-loading">Loading security context...</p></div>;
   }
@@ -119,9 +129,21 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext }) {
 
       <div className="panel-section">
         <label>Role</label>
-        <span className={`role-badge ${ROLE_COLORS[security.role] || 'role-none'}`}>
-          {security.role.toUpperCase()}
-        </span>
+        {security.available_roles && security.available_roles.length > 0 ? (
+          <select
+            className={`role-select role-${selectedRole || security.role}`}
+            value={selectedRole || security.role}
+            onChange={(e) => onRoleChange(e.target.value)}
+          >
+            {security.available_roles.map(r => (
+              <option key={r} value={r}>{r.toUpperCase()}</option>
+            ))}
+          </select>
+        ) : (
+          <span className={`role-badge ${ROLE_COLORS[security.role] || 'role-none'}`}>
+            {security.role.toUpperCase()}
+          </span>
+        )}
       </div>
 
       <div className="panel-section">

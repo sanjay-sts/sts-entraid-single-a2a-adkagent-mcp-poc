@@ -1,18 +1,36 @@
 # MCP Multi-IdP: Future Roadmap & TODO
 
-## Immediate TODOs (This Iteration)
+## Completed: Multi-IdP MCP Auth (Previous Iteration)
 
-- [ ] Create `mcp_server/policy.py` (PolicyEvaluator interface + TomlPolicyEvaluator)
-- [ ] Create `permissions.toml` and `permissions.example.toml`
-- [ ] Add `permissions.toml` to `.gitignore`
-- [ ] Replace `TokenValidationMiddleware` with `AzureJWTVerifier` + `RemoteAuthProvider`
-- [ ] Add `UserContextMiddleware` with role selection (`X-Assume-Role`)
-- [ ] Remove `require_scopes_from_token()` from all tool decorators
-- [ ] Remove `current_user_scopes` ContextVar
-- [ ] Delete custom JWKS fetching code (~128 lines)
-- [ ] Test with MCP Inspector + Entra ID token
-- [ ] Test role selection flow
-- [ ] Test dev bypass mode
+- [x] Create `mcp_server/policy.py` (PolicyEvaluator interface + TomlPolicyEvaluator)
+- [x] Create `permissions.toml` and `permissions.example.toml`
+- [x] Add `permissions.toml` to `.gitignore`
+- [x] Replace `TokenValidationMiddleware` with `AzureJWTVerifier` + `RemoteAuthProvider`
+- [x] Add `UserContextMiddleware` with role selection (`X-Assume-Role`)
+- [x] Remove `require_scopes_from_token()` from all tool decorators
+- [x] Remove `current_user_scopes` ContextVar
+- [x] Delete custom JWKS fetching code (~128 lines)
+- [x] Test with MCP Inspector + Entra ID token (22/22 tests passed)
+- [x] Test role selection flow
+- [x] Test dev bypass mode
+- [x] Fix case-insensitive email lookup in policy.py
+- [x] Fix dev_config.py per-server logging
+
+## Current: Frontend Role Switching (This Iteration)
+
+See `08-role-switching-plan.md` for full details.
+
+- [ ] A2A server: Add `current_assumed_role` ContextVar, extract X-Assume-Role from headers
+- [ ] A2A server: Forward role to ADK in /chat and /session request bodies
+- [ ] A2A server: Enhance GET /me to return `available_roles`
+- [ ] ADK agent: Update `mcp_header_provider` to include X-Assume-Role
+- [ ] ADK agent: Accept role in /session and /chat endpoints, update session state
+- [ ] Frontend: Add role dropdown in SecurityContextPanel (from available_roles)
+- [ ] Frontend: Send X-Assume-Role header on all A2A requests
+- [ ] Frontend: Update RBACTestMatrix to use selected role
+- [ ] Frontend: Update ChatInterface to pass X-Assume-Role
+- [ ] Frontend: Update testScenarios.js denial expectations
+- [ ] End-to-end testing through UI
 
 ## Near-Term (Next Iteration)
 
@@ -39,10 +57,10 @@
 - [ ] ADK agent becomes fully IdP-agnostic
 
 ### Frontend Changes
-- [ ] Add IdP selector on login page (Option A: multiple buttons)
-- [ ] Add role selector dropdown (show available roles from `/me` endpoint)
-- [ ] Update `GET /me` to return available roles
-- [ ] Pass selected role via header to A2A server
+- [x] Add role selector dropdown (show available roles from `/me` endpoint) — see 08-role-switching-plan.md
+- [x] Update `GET /me` to return available roles — see 08-role-switching-plan.md
+- [x] Pass selected role via header to A2A server — see 08-role-switching-plan.md
+- [ ] Add IdP selector on login page (for multi-IdP, after Auth0 integration)
 
 ## Medium-Term
 

@@ -25,6 +25,7 @@ from dev_config import is_auth_disabled, get_section
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
 current_access_token: ContextVar[str] = ContextVar("current_access_token", default="")
+current_assumed_role: ContextVar[str] = ContextVar("current_assumed_role", default="")
 
 # Configure logging
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -268,6 +269,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                         "message": message_text,
                         "user_id": user_id,
                         "session_id": session_id,
+                        "role": current_assumed_role.get(),
                     },
                     headers={"Authorization": f"Bearer {access_token}"},
                     timeout=60.0,
@@ -355,6 +357,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                             # Try multiple claim names for name
                             "name": user_claims.get("name") or user_claims.get("given_name", ""),
                             "groups": user_claims.get("groups", []),
+                            "assumed_role": current_assumed_role.get(),
                         },
                     },
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -489,6 +492,7 @@ async def auth_middleware(request: Request, call_next):
         }
         current_user_claims.set(mock_claims)
         current_access_token.set("dev-bypass-token")
+        current_assumed_role.set(request.headers.get("X-Assume-Role", "") or get_section("a2a").get("default_role", "admin"))
         request.state.user_claims = mock_claims
         request.state.access_token = "dev-bypass-token"
         logger.warning("AUTH BYPASSED: %s %s", request.method, request.url.path)
@@ -551,6 +555,7 @@ async def auth_middleware(request: Request, call_next):
         # Also set context variables for the agent executor
         current_user_claims.set(claims)
         current_access_token.set(token)
+        current_assumed_role.set(request.headers.get("X-Assume-Role", ""))
 
     except jwt.ExpiredSignatureError:
         logger.warning("Token has expired")
@@ -627,6 +632,13 @@ def _determine_role(groups: list) -> str:
     return "none"
 
 
+def _get_available_roles(groups: list) -> list:
+    """Return all roles the user qualifies for, ordered by priority."""
+    role_priority = ["admin", "developer", "viewer"]
+    user_roles = {GROUP_TO_ROLE.get(g) for g in groups if g in GROUP_TO_ROLE}
+    return [r for r in role_priority if r in user_roles]
+
+
 # Health check endpoint
 @app.get("/health")
 async def health():
@@ -646,8 +658,15 @@ async def get_me(request: Request):
         )
 
     user_groups = claims.get("groups", [])
-    role = _determine_role(user_groups)
+    available_roles = _get_available_roles(user_groups)
     token_scopes = claims.get("scp", "").split()
+
+    # Use assumed role if valid, otherwise highest
+    assumed_role = request.headers.get("X-Assume-Role", "")
+    if assumed_role and assumed_role in available_roles:
+        active_role = assumed_role
+    else:
+        active_role = _determine_role(user_groups)
 
     # Build group names mapping
     group_names = {}
@@ -655,10 +674,10 @@ async def get_me(request: Request):
         if gid in GROUP_TO_ROLE:
             group_names[gid] = GROUP_TO_ROLE[gid]
 
-    # Build permission matrix
+    # Build permission matrix based on active role
     permissions = {}
     for tool, allowed_roles in TOOL_ROLES.items():
-        permissions[tool] = role in allowed_roles
+        permissions[tool] = active_role in allowed_roles
 
     return {
         "user": {
@@ -667,7 +686,8 @@ async def get_me(request: Request):
             "oid": claims.get("oid", ""),
         },
         "security": {
-            "role": role,
+            "role": active_role,
+            "available_roles": available_roles,
             "groups": user_groups,
             "group_names": group_names,
             "token_scopes": token_scopes,
