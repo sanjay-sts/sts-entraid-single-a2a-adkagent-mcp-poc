@@ -200,12 +200,22 @@ class UserContextMiddleware(Middleware):
         self.policy_evaluator = evaluator
 
     def _set_bypass_context(self) -> None:
-        """Dev bypass — sets mock auth context from dev_config.toml."""
+        """Dev bypass — sets mock auth context from dev_config.toml.
+
+        Respects X-Assume-Role header if present, otherwise uses default_role.
+        """
         dev_cfg = get_section("mcp")
         current_user_token.set("dev-bypass-token")
-        current_user_role.set(dev_cfg.get("default_role", "admin"))
         current_user_email.set(dev_cfg.get("default_email", "dev@localhost"))
-        logger.warning("AUTH BYPASSED - role: %s", dev_cfg.get("default_role", "admin"))
+        # Respect X-Assume-Role header from upstream (ADK agent)
+        try:
+            headers = get_http_headers()
+            assumed_role = headers.get("x-assume-role", "")
+        except Exception:
+            assumed_role = ""
+        role = assumed_role or dev_cfg.get("default_role", "admin")
+        current_user_role.set(role)
+        logger.warning("AUTH BYPASSED - role: %s", role)
 
     def _resolve_context(self, raise_on_error: bool = True) -> None:
         """Extract claims from validated token and resolve role.

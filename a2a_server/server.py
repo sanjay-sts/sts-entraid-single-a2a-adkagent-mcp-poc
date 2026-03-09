@@ -661,10 +661,16 @@ async def get_me(request: Request):
     available_roles = _get_available_roles(user_groups)
     token_scopes = claims.get("scp", "").split()
 
-    # Use assumed role if valid, otherwise highest
-    assumed_role = request.headers.get("X-Assume-Role", "")
+    # In dev bypass mode with no group IDs configured, grant all roles
+    if is_auth_disabled("a2a") and not available_roles:
+        available_roles = ["admin", "developer", "viewer"]
+
+    # Use assumed role if valid, otherwise highest from groups or dev bypass default
+    assumed_role = request.headers.get("X-Assume-Role", "") or current_assumed_role.get()
     if assumed_role and assumed_role in available_roles:
         active_role = assumed_role
+    elif available_roles:
+        active_role = available_roles[0]
     else:
         active_role = _determine_role(user_groups)
 
