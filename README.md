@@ -43,7 +43,7 @@ This system implements an identity-aware AI agent using:
 | Level | Location | Mechanism | Enforced By | Denies Access When |
 |-------|----------|-----------|-------------|-------------------|
 | **1. Agent** | A2A Server | Group membership, blocklist | `auth_middleware` | User blocked or not in allowed group |
-| **2. Tool** | FastMCP | Role-based permissions | `auth=` decorators (`require_role`, `require_scopes_from_token`) | User role lacks tool permission |
+| **2. Tool** | FastMCP | Role-based permissions (RBAC) | Built-in auth (JWT verification) + `auth=require_role()` decorators + `UserContextMiddleware` | Token invalid, role not assumed, or role lacks tool permission |
 | **3. Resource** | Graph API | OAuth scopes | Microsoft Graph | Token missing required scope |
 
 ---
@@ -149,19 +149,27 @@ This system implements an identity-aware AI agent using:
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │                              FastMCP Server (Port 10002)                             │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│  │                      TokenValidationMiddleware                                │   │
-│  │  1. Extract Bearer token from Authorization header                           │   │
-│  │  2. Validate JWT signature (JWKS)                                            │   │
-│  │  3. Extract claims: role, email, scopes                                      │   │
-│  │  4. Store in ContextVar for tool access                                      │   │
+│  │                      FastMCP Built-in Auth (MultiAuth)                        │   │
+│  │  1. AzureJWTVerifier (v2.0) — auto-configured from Azure app registration  │   │
+│  │  2. JWTVerifier (v1.0 fallback) — for sts.windows.net issuer tokens         │   │
+│  │  3. Validates JWT signature, issuer, audience, expiry via JWKS              │   │
+│  └──────────────────────────────────────────────────────────────────────────────┘   │
+│                                          │                                           │
+│                                          ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│  │                      UserContextMiddleware                                    │   │
+│  │  1. Detect IdP provider from iss claim (entra/cognito/auth0)                │   │
+│  │  2. Extract email, groups from validated token claims                        │   │
+│  │  3. Resolve available roles via TomlPolicyEvaluator (permissions.toml)      │   │
+│  │  4. Validate X-Assume-Role header against available roles                   │   │
+│  │  5. Set ContextVars: current_user_token, current_user_role, current_user_email│  │
 │  └──────────────────────────────────────────────────────────────────────────────┘   │
 │                                          │                                           │
 │                                          ▼                                           │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
 │  │                      Per-Tool Auth Decorators                                │   │
 │  │  1. auth=require_role() checks user role via ContextVar                      │   │
-│  │  2. auth=require_scopes_from_token() verifies scopes                         │   │
-│  │  3. Raises ToolError with [TOOL_DENIAL] or [SCOPE_DENIAL] prefix             │   │
+│  │  2. Raises ToolError with [TOOL_DENIAL] prefix on denial                    │   │
 │  └──────────────────────────────────────────────────────────────────────────────┘   │
 │                                          │                                           │
 │                                          ▼                                           │
@@ -279,26 +287,38 @@ export const graphScopes = {
 const token = await instance.acquireTokenSilent({ scopes, account });
 ```
 
-### Token Validation (A2A & MCP)
+### Token Validation
 
-Both A2A Server and MCP Server validate tokens using:
+**A2A Server** — manual JWT validation:
 
 ```python
-# Supported JWKS endpoints (v1.0 and v2.0)
+# a2a_server/server.py — manual JWKS fetching, supports v1.0 and v2.0 tokens
 JWKS_URIS = [
     f"https://login.microsoftonline.com/{TENANT_ID}/discovery/v2.0/keys",
     f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",
     "https://login.microsoftonline.com/common/discovery/keys",
 ]
-
-# Supported issuers
 VALID_ISSUERS = [
     f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",
     f"https://sts.windows.net/{TENANT_ID}/",
 ]
+```
 
-# Valid audiences
-valid_audiences = [CLIENT_ID, f"api://{CLIENT_ID}"]
+**MCP Server** — FastMCP 3.1 built-in auth with `MultiAuth`:
+
+```python
+# mcp_server/server.py — uses FastMCP's built-in auth providers
+# v2.0 verifier (primary)
+AzureJWTVerifier(client_id=CLIENT_ID, tenant_id=TENANT_ID, required_scopes=["access_as_user"])
+
+# v1.0 verifier (fallback for sts.windows.net issuer tokens)
+JWTVerifier(
+    jwks_uri=f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys",
+    issuer=f"https://sts.windows.net/{TENANT_ID}/",
+    audience=[CLIENT_ID, f"api://{CLIENT_ID}"],
+    required_scopes=["access_as_user"],
+)
+# Composed via MultiAuth — tries v2.0 first, falls back to v1.0
 ```
 
 ---
@@ -406,14 +426,13 @@ self.mcp_toolset = McpToolset(
 ### MCP Server Context Variables
 
 ```python
-# MCP Server stores validated claims in ContextVar (stateless mode)
+# MCP Server stores validated claims in ContextVar (stateless mode — no ctx.get_state())
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
-current_user_scopes: ContextVar[list] = ContextVar("current_user_scopes", default=[])
 
-# Tools access via ContextVar
-@mcp.tool
+# Set by UserContextMiddleware, read by tools and auth= callables
+@mcp.tool(auth=require_role("admin"))
 async def get_current_time(timezone: str = "UTC") -> dict:
     user_role = current_user_role.get()
     user_email = current_user_email.get()
@@ -433,76 +452,95 @@ viewer     → Access to profile tools only
 none       → No tool access (agent-level denied)
 ```
 
-### Group-to-Role Mapping
+### Group-to-Role Mapping (permissions.toml)
 
-```python
-# Entra ID Security Groups → Roles
-GROUP_TO_ROLE = {
-    os.getenv("ADMIN_GROUP_ID"): "admin",
-    os.getenv("DEVELOPER_GROUP_ID"): "developer",
-    os.getenv("VIEWER_GROUP_ID"): "viewer",
-}
+Roles are defined in `permissions.toml` (agent-owned, gitignored). Copy from `permissions.example.toml`:
 
-# Highest privilege wins when user is in multiple groups
-def _get_highest_role(groups: list) -> str:
-    role_priority = {"admin": 3, "developer": 2, "viewer": 1}
-    highest_role = "none"
-    for group_id in groups:
-        role = GROUP_TO_ROLE.get(group_id)
-        if role and role_priority.get(role, 0) > role_priority.get(highest_role, 0):
-            highest_role = role
-    return highest_role
+```toml
+# permissions.toml — Agent-owned role assignments
+# Group-to-role mapping is the PRIMARY mechanism.
+# User-level overrides are optional for exceptions.
+
+[group_rules.entra]
+"<admin-group-guid>" = "admin"
+"<developer-group-guid>" = "developer"
+"<viewer-group-guid>" = "viewer"
+
+[group_rules.cognito]
+# "platform-admins" = "admin"  # Future: Cognito groups
+
+[group_rules.auth0]
+# "admin" = "admin"  # Future: Auth0 roles
+
+[users]
+# Optional direct user overrides (case-insensitive email lookup)
+# "user@company.com" = { role = "admin" }
+
+[defaults]
+unknown_users = "none"
 ```
+
+The `TomlPolicyEvaluator` (`mcp_server/policy.py`) resolves available roles from group claims and user overrides, with hot-reload on file change. Role priority: admin > developer > viewer.
+
+**Role selection**: Users must set `X-Assume-Role` header for MCP tool calls. `UserContextMiddleware` validates the assumed role against available roles. For tool listing, the highest-priority role is used automatically.
+
+> **Note**: The A2A server still uses `GROUP_TO_ROLE` from env vars (`ADMIN_GROUP_ID`, etc.) for agent-level access control. The MCP server uses `permissions.toml` for tool-level RBAC.
 
 ### Tool Permission Matrix
 
-| Tool | Required Scopes | Allowed Roles | Description |
-|------|-----------------|---------------|-------------|
-| `get_user_profile` | User.Read | admin, developer, viewer | Fetch Microsoft Graph profile |
-| `list_files` | Files.Read | admin, developer | List OneDrive files |
-| `send_email` | Mail.Send | admin | Send email via Graph |
-| `delete_resource` | Files.ReadWrite.All | admin | Delete resources |
-| `get_current_time` | (none) | admin | Get time in timezone |
-| `convert_timezone` | (none) | admin | Convert between timezones |
-| `get_time_difference` | (none) | admin | Compare timezone offsets |
+| Tool | Allowed Roles | Description |
+|------|---------------|-------------|
+| `get_user_profile` | admin, developer, viewer | Fetch Microsoft Graph profile (or token claims fallback) |
+| `list_files` | admin, developer | List OneDrive files |
+| `send_email` | admin | Send email via Graph |
+| `delete_resource` | admin | Delete resources |
+| `get_current_time` | admin | Get time in timezone |
+| `convert_timezone` | admin | Convert between timezones |
+| `get_time_difference` | admin | Compare timezone offsets |
 
 ### Permission Enforcement Code
 
 ```python
-# MCP Server: Per-tool auth= decorators
-@mcp.tool(auth=[require_role("admin", "developer", "viewer"), require_scopes_from_token("User.Read")])
+# MCP Server: Per-tool auth= decorators (require_role only — IdP scope checking removed)
+@mcp.tool(auth=require_role("admin", "developer", "viewer"))
 async def get_user_profile() -> dict: ...
 
-@mcp.tool(auth=[require_role("admin", "developer"), require_scopes_from_token("Files.Read")])
+@mcp.tool(auth=require_role("admin", "developer"))
 async def list_files(folder_path: str = "/") -> dict: ...
 
-# Auth helpers with denial tags
-def require_role(*allowed_roles):
-    # Raises: "[TOOL_DENIAL] Access denied: Role '...' cannot use this tool."
-    ...
+@mcp.tool(auth=require_role("admin"))
+async def send_email(to: str, subject: str, body: str) -> dict: ...
 
-def require_scopes_from_token(*required_scopes):
-    # Raises: "[SCOPE_DENIAL] Insufficient permissions: Missing scopes [...]"
+# Auth helper
+def require_role(*allowed_roles):
+    # Reads current_user_role ContextVar (set by UserContextMiddleware)
+    # Raises: "[TOOL_DENIAL] Access denied: Role '...' cannot use this tool. Required roles: [...]"
     ...
 ```
 
 ### Access Denied Examples
 
 ```
+No X-Assume-Role header:
+  → [ROLE_SELECTION] Role selection required. Set X-Assume-Role header to one of: ['admin']
+
 Viewer tries to list files:
   → [TOOL_DENIAL] Access denied: Role 'viewer' cannot use this tool. Required roles: ['admin', 'developer']
 
 Developer tries to send email:
   → [TOOL_DENIAL] Access denied: Role 'developer' cannot use this tool. Required roles: ['admin']
 
-Admin uses basic scope for list_files:
-  → [SCOPE_DENIAL] Insufficient permissions: Missing scopes ['Files.Read']
+User tries to assume a role they don't have:
+  → [TOOL_DENIAL] Cannot assume role 'admin'. Available roles: ['developer']
 
-User without groups tries anything:
-  → A2A auth_middleware: 403 {"error": "access_denied", "denial_level": "agent", "denial_reason": "no_group_membership"}
+No-group user (not in permissions.toml):
+  → [TOOL_DENIAL] No roles available for user@domain.com. Contact admin to assign group membership.
+
+User without groups at A2A gateway:
+  → 403 {"error": "access_denied", "denial_level": "agent", "denial_reason": "no_group_membership"}
 
 Blocked user:
-  → A2A auth_middleware: 403 {"error": "access_denied", "denial_level": "agent", "denial_reason": "blocked_user"}
+  → 403 {"error": "access_denied", "denial_level": "agent", "denial_reason": "blocked_user"}
 ```
 
 ---
@@ -723,6 +761,10 @@ cd frontend && cp .env.example .env
 
 REACT_APP_ENTRA_CLIENT_ID=<app-registration-client-id>
 REACT_APP_ENTRA_TENANT_ID=<directory-tenant-id>
+
+# MCP Permissions (group-to-role mapping)
+cp permissions.example.toml permissions.toml
+# Edit permissions.toml with your Entra ID security group GUIDs
 ```
 
 ### 3. Install Dependencies
@@ -774,7 +816,7 @@ The frontend includes a comprehensive Security Testing Dashboard for testing and
 | RBAC Test Matrix | Left sidebar | One-click test grid with pass/fail tracking |
 | Conversation Tabs | Main area | Multi-tab chat with per-tab scope selection (max 4) |
 | Audit Log | Main area (bottom) | Request history with denial classification |
-| Denial Indicator | Inline badges | Color-coded denial tier: AGENT (red), TOOL (orange), SCOPE (amber), RESOURCE (purple) |
+| Denial Indicator | Inline badges | Color-coded denial tier: AGENT (red), TOOL (orange), RESOURCE (purple) |
 | Account Switcher | Header | Multi-account support for testing different roles |
 
 ### Denial Classification
@@ -785,7 +827,6 @@ Denials are automatically classified into four tiers:
 |------|------------|---------|
 | AGENT | HTTP 401/403 + `denial_level` in response body | User not in any group |
 | TOOL | `[TOOL_DENIAL]` tag in response text | Viewer trying `list_files` |
-| SCOPE | `[SCOPE_DENIAL]` tag in response text | `basic` scope for `list_files` |
 | RESOURCE | Graph API 403 in response text | Insufficient Graph permissions |
 
 ### Frontend File Structure

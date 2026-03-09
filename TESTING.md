@@ -85,11 +85,13 @@ After registration, note these values from the **Overview** page:
 
 Create these security groups in Entra ID and note their Object IDs:
 
-| Group Name | Purpose | Environment Variable |
-|------------|---------|---------------------|
-| AI-Agent-Admins | Full access to all tools | `ADMIN_GROUP_ID` |
-| AI-Agent-Developers | Access to profile and files | `DEVELOPER_GROUP_ID` |
-| AI-Agent-Viewers | Access to profile only | `VIEWER_GROUP_ID` |
+| Group Name | Purpose | A2A Server (.env) | MCP Server (permissions.toml) |
+|------------|---------|-------------------|-------------------------------|
+| AI-Agent-Admins | Full access to all tools | `ADMIN_GROUP_ID` | `[group_rules.entra]` → `"admin"` |
+| AI-Agent-Developers | Access to profile and files | `DEVELOPER_GROUP_ID` | `[group_rules.entra]` → `"developer"` |
+| AI-Agent-Viewers | Access to profile only | `VIEWER_GROUP_ID` | `[group_rules.entra]` → `"viewer"` |
+
+> **Note**: The A2A server uses env vars for agent-level group checks. The MCP server uses `permissions.toml` for tool-level RBAC. Copy `permissions.example.toml` to `permissions.toml` and configure your group GUIDs.
 
 To create groups:
 1. Go to **Identity** > **Groups** > **All groups**
@@ -413,21 +415,50 @@ uv pip install -r requirements.txt
 
 ## Testing Different User Roles
 
-To test role-based access control:
+### MCP Server Role Configuration
 
-1. **Admin User**: Add user to Admin security group
-   - Can use all tools: profile, files, email, delete
+Role assignment uses `permissions.toml` (agent-owned, gitignored). Map Entra ID security group GUIDs to roles:
 
-2. **Developer User**: Add user to Developer security group
-   - Can use: profile, files
-   - Cannot use: email, delete
+```toml
+[group_rules.entra]
+"<admin-group-guid>" = "admin"
+"<developer-group-guid>" = "developer"
+"<viewer-group-guid>" = "viewer"
 
-3. **Viewer User**: Add user to Viewer security group
-   - Can use: profile only
-   - Cannot use: files, email, delete
+[users]
+# Optional overrides (case-insensitive email)
+# "user@company.com" = { role = "viewer" }
+```
 
-4. **Blocked User**: Add user's Object ID to `BLOCKED_USERS` in `.env`
-   - Cannot access the agent at all (403 at gateway)
+**Role selection**: MCP tool calls require an `X-Assume-Role` header set to one of the user's available roles. Available roles are resolved from group claims + user overrides in `permissions.toml`.
+
+### Testing via MCP Inspector
+
+1. Start MCP server: `uv run python mcp_server/server.py`
+2. Open MCP Inspector: `npx @modelcontextprotocol/inspector`
+3. Connect to `http://localhost:10002/mcp` (Streamable HTTP)
+4. Set auth header name to `Authorization`, value to `Bearer <token>`
+5. Add custom header: `X-Assume-Role: admin` (or `developer`/`viewer`)
+
+### Role-Specific Expectations
+
+1. **Admin User**: Add user to Admin security group, set `X-Assume-Role: admin`
+   - Can use all 7 tools: profile, files, email, delete, time tools
+   - Can step down to viewer via user override + `X-Assume-Role: viewer`
+
+2. **Developer User**: Add user to Developer security group, set `X-Assume-Role: developer`
+   - Can use: profile, files (2 tools)
+   - Cannot use: email, delete, time tools
+
+3. **Viewer User**: Add user to Viewer security group, set `X-Assume-Role: viewer`
+   - Can use: profile only (1 tool)
+   - Cannot use: files, email, delete, time tools
+
+4. **No-Group User**: User not in any configured group
+   - Gets `[TOOL_DENIAL] No roles available` unless added to `[users]` in `permissions.toml`
+
+5. **Blocked User**: Add user's Object ID to `BLOCKED_USERS` in `.env`
+   - Cannot access the agent at all (403 at A2A gateway)
 
 ---
 
@@ -503,7 +534,7 @@ The main area supports up to 4 conversation tabs, each with its own scope preset
 | `destructive` | `api://...`, `User.Read`, `Files.Read`, `Files.ReadWrite.All`, `Mail.Send` | Delete operations |
 
 **How to test scope differences:**
-1. Open a "basic" tab and ask "List my OneDrive files" → Should fail (scope denial)
+1. Open a "basic" tab and ask "List my OneDrive files" → May fail at resource level (Graph API 401)
 2. Open a "files" tab and ask "List my OneDrive files" → Should succeed (if role allows)
 
 ### RBAC Test Matrix
@@ -522,14 +553,13 @@ The sidebar includes a one-click test grid that automatically runs predefined te
 
 | Scenario | Admin | Developer | Viewer |
 |----------|-------|-----------|--------|
-| `get_user_profile` (basic) | ALLOW | ALLOW | ALLOW |
-| `list_files` (basic) | SCOPE DENY | SCOPE DENY | SCOPE DENY |
-| `list_files` (files) | ALLOW | ALLOW | TOOL DENY |
-| `send_email` (basic) | SCOPE DENY | TOOL DENY | TOOL DENY |
-| `send_email` (email) | ALLOW | TOOL DENY | TOOL DENY |
-| `delete_resource` (basic) | SCOPE DENY | TOOL DENY | TOOL DENY |
-| `delete_resource` (destructive) | ALLOW | TOOL DENY | TOOL DENY |
-| `get_current_time` (basic) | ALLOW | TOOL DENY | TOOL DENY |
+| `get_user_profile` | ALLOW | ALLOW | ALLOW |
+| `list_files` | ALLOW | ALLOW | TOOL DENY |
+| `send_email` | ALLOW | TOOL DENY | TOOL DENY |
+| `delete_resource` | ALLOW | TOOL DENY | TOOL DENY |
+| `get_current_time` | ALLOW | TOOL DENY | TOOL DENY |
+| `convert_timezone` | ALLOW | TOOL DENY | TOOL DENY |
+| `get_time_difference` | ALLOW | TOOL DENY | TOOL DENY |
 
 ### Denial Classification
 
@@ -539,13 +569,11 @@ The dashboard classifies denials into four tiers, shown as color-coded badges:
 |------|------------|---------|---------|
 | **AGENT** | Red | A2A gateway blocked the request | User not in any group (403) |
 | **TOOL** | Orange | MCP tool denied by role check | Viewer trying `list_files` |
-| **SCOPE** | Amber | Token missing required OAuth scopes | Using `basic` scope for `list_files` |
 | **RESOURCE** | Purple | Microsoft Graph API rejected the call | Insufficient Graph permissions |
 
 **Detection mechanism:**
 - HTTP 401/403 → `AGENT` (reads `denial_reason` from response body)
 - Response contains `[TOOL_DENIAL]` → `TOOL`
-- Response contains `[SCOPE_DENIAL]` → `SCOPE`
 - Response mentions Graph API 403 or `insufficient_scope` → `RESOURCE`
 
 ### Audit Log
@@ -685,6 +713,6 @@ After successful local testing:
 1. Review the [CLAUDE.md](./CLAUDE.md) for development patterns and code conventions
 2. Use the Security Testing Dashboard to verify role-based access control
 3. Run the RBAC Test Matrix for each role (admin, developer, viewer)
-4. Customize tool permissions in `mcp_server/server.py`
+4. Customize role mappings in `permissions.toml` and tool permissions in `mcp_server/server.py`
 5. Add additional tools as needed
 6. Configure production environment variables
