@@ -46,9 +46,8 @@ MCP_SERVER_URL = f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}/mcp"
 ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 ADK_SERVER_PORT = int(os.getenv("ADK_SERVER_PORT", 10001))
 
-# Map CLAUDE_API_KEY to ANTHROPIC_API_KEY for LiteLLM compatibility
-if os.getenv("CLAUDE_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
-    os.environ["ANTHROPIC_API_KEY"] = os.getenv("CLAUDE_API_KEY")
+# AWS Bedrock configuration for LiteLLM
+# Set AWS_BEARER_TOKEN_BEDROCK in .env (12-hour token, refresh before expiry)
 
 
 def mcp_header_provider(readonly_context: ReadonlyContext) -> Dict[str, str]:
@@ -109,7 +108,7 @@ class IdentityAwareAgent:
         # Create the agent with both local tools and MCP toolset
         # Using LlmAgent (recommended for LiteLLM) with Claude Sonnet 4
         self.agent = LlmAgent(
-            model=LiteLlm(model="anthropic/claude-sonnet-4-20250514"),
+            model=LiteLlm(model="bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"),
             name="identity_aware_agent",
             description="An agent that provides user identity information and time utilities",
             instruction="""You are a helpful assistant for identity and time queries.
