@@ -26,6 +26,14 @@ export function classifyDenial(httpStatus, responseBody, responseText) {
   if (/Role.*cannot use/i.test(text)) {
     return { level: 'tool', reason: 'role_denied' };
   }
+  // 4b. LLM soft denial — tool not exposed for this role (LLM says it can't do it)
+  if (/don't have the ability to/i.test(text) ||
+      /don't have access to.*tool/i.test(text) ||
+      /don't have permission to/i.test(text) ||
+      /restricted to admin/i.test(text) ||
+      /tools available to me are limited/i.test(text)) {
+    return { level: 'tool', reason: 'tool_not_available' };
+  }
   if (/Missing scopes/i.test(text) || /Insufficient permissions/i.test(text)) {
     return { level: 'scope', reason: 'missing_scopes' };
   }

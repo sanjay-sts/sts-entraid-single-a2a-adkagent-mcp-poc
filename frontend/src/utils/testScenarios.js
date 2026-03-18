@@ -11,7 +11,7 @@
 // Flip to true when OBO is configured: ENTRA_CLIENT_SECRET set in .env,
 // Azure app has delegated Graph permissions (User.Read, Files.Read, Mail.Send),
 // and admin consent is granted. Graph tools will then use OBO token exchange.
-const GRAPH_OBO_ENABLED = false;
+const GRAPH_OBO_ENABLED = true;
 
 const testScenarios = [
   // === get_user_profile ===
@@ -178,23 +178,14 @@ const testScenarios = [
  * and the scopes the scenario's scopeKey would request.
  *
  * Decision logic:
- *   1. Role not allowed           → TOOL denial
- *   2. OBO disabled + Graph req'd → RESOURCE denial (Graph 401)
- *   3. OBO enabled + scope miss   → RESOURCE denial (Graph 403)
- *   4. Otherwise                  → ALLOW
+ *   1. Role not allowed             → TOOL denial
+ *   2. OBO disabled + Graph req'd   → RESOURCE denial (Graph 401)
+ *   3. OBO enabled + role allowed   → ALLOW (OBO uses app registration permissions)
+ *   4. Fallback/none graph dep      → ALLOW
  */
 export function getScenariosForRole(role) {
-  // Import dynamically to avoid circular deps - graphScopes is a plain object
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { graphScopes } = require('../authConfig');
-
   return testScenarios.map(scenario => {
     const roleAllowed = scenario.rolesAllowed.includes(role);
-
-    // Check scopes that the scenario's scopeKey would provide
-    const scenarioScopes = graphScopes[scenario.scopeKey] || [];
-    const hasScope = scenario.requiredScopes.length === 0 ||
-      scenario.requiredScopes.every(s => scenarioScopes.includes(s));
 
     let shouldSucceed;
     let denialExpected;
@@ -204,14 +195,13 @@ export function getScenariosForRole(role) {
       shouldSucceed = false;
       denialExpected = 'tool';
     } else if (!GRAPH_OBO_ENABLED && scenario.graphDependency === 'required') {
-      // Role allowed, but Graph API will 401 because OBO isn't implemented
-      shouldSucceed = false;
-      denialExpected = 'resource';
-    } else if (GRAPH_OBO_ENABLED && !hasScope) {
-      // OBO works, but the token lacks the required Graph scope
+      // Role allowed, but Graph API will 401 because OBO isn't configured
       shouldSucceed = false;
       denialExpected = 'resource';
     } else {
+      // OBO enabled: MCP server exchanges token using app registration permissions,
+      // so frontend scope preset is irrelevant for Graph tools.
+      // OBO disabled + fallback/none: succeeds without Graph.
       shouldSucceed = true;
       denialExpected = null;
     }
