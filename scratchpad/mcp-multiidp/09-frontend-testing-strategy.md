@@ -4,8 +4,54 @@ Testing MCP RBAC via the Security Testing Dashboard (React frontend).
 Covers the full chain: **Frontend → A2A Gateway → ADK Agent → MCP Server → Graph API**.
 
 Companion to `04-testing-strategy.md` (MCP Inspector).
-Key difference: frontend adds the **scope dimension** (Graph API OAuth scopes),
+Key difference: frontend adds the **scope dimension** (Graph API OAuth scopes)
+and the **OBO dimension** (On-Behalf-Of token exchange for Graph API),
 producing four denial tiers instead of two.
+
+This document covers **both** OBO-disabled and OBO-enabled modes.
+When OBO is disabled, Graph-dependent tools always fail (RESOURCE denial).
+When OBO is enabled, Graph-dependent tools succeed if the role allows.
+
+---
+
+## OBO Configuration
+
+OBO (On-Behalf-Of) token exchange allows MCP tools to call Graph API on behalf of the
+authenticated user. Without OBO, Graph-dependent tools fail because the user's token
+has audience `api://...` instead of `https://graph.microsoft.com`.
+
+### Prerequisites for OBO
+
+1. **`ENTRA_CLIENT_SECRET`** set in `.env` — the app registration's client secret
+2. **Delegated Graph permissions** added to the app registration with **admin consent**:
+   - `User.Read` — for `get_user_profile`
+   - `Files.Read` — for `list_files`
+   - `Mail.Send` — for `send_email`
+3. MCP server startup log confirms: `"OBO exchanger initialized (tenant: ...)"`.
+   Without client secret, log shows: `"OBO disabled -- ENTRA_CLIENT_SECRET not set"`
+
+### `GRAPH_OBO_ENABLED` flag
+
+In `testScenarios.js`, flip `GRAPH_OBO_ENABLED = true` after OBO setup is complete.
+This changes the `shouldSucceed` computation for `graphDependency: 'required'` scenarios
+from RESOURCE denial to ALLOW.
+
+### How OBO changes the scope dimension
+
+With OBO **disabled**: frontend scope preset is irrelevant for Graph tools — the token
+audience is wrong regardless, so Graph always returns 401.
+
+With OBO **enabled**: the MCP server exchanges the user's custom-audience token for a
+Graph-scoped token using `OnBehalfOfCredential`. The scopes OBO requests are based on
+the **app registration's consented permissions**, not the frontend scope preset. This
+means `files_basic` (basic scope, missing `Files.Read`) succeeds just as well as
+`files_correct` (files scope) — OBO requests `Files.Read` from Graph directly.
+
+### Observability
+
+- **`_obo_used: true`** in Graph tool responses indicates OBO was used
+- **`_obo_used: false`** or absent indicates fallback to user token / token claims
+- **`source: "token_claims"`** on `get_user_profile` means Graph failed, showing claims fallback
 
 ---
 
@@ -53,14 +99,18 @@ producing four denial tiers instead of two.
 - `'fallback'` — calls Graph but falls back to token claims on 401 (get_user_profile)
 - `'required'` — calls Graph with no fallback; fails when OBO flow unavailable
 
-`GRAPH_OBO_ENABLED = false` — OBO flow not yet implemented. Graph-dependent tools always
-return 401 because the token audience is `api://...` not `https://graph.microsoft.com`.
+`GRAPH_OBO_ENABLED = false` — set to `true` after configuring OBO (see OBO Configuration above).
 
-`shouldSucceed` is computed:
-1. Role not in `rolesAllowed` → TOOL denial
-2. OBO disabled + `graphDependency === 'required'` → RESOURCE denial (Graph 401)
-3. OBO enabled + scope missing → RESOURCE denial (Graph 403)
-4. Otherwise → ALLOW
+`shouldSucceed` decision paths:
+
+| # | Condition | Outcome | Notes |
+|---|-----------|---------|-------|
+| 1 | Role not in `rolesAllowed` | TOOL denial | Role check fires before Graph call |
+| 2 | OBO disabled + `graphDependency === 'required'` | RESOURCE denial (Graph 401) | Token audience mismatch |
+| 3 | OBO enabled + `graphDependency === 'required'` + role allowed | **ALLOW** | OBO exchanges token for Graph-scoped token |
+| 4 | OBO enabled + scope missing in app registration | RESOURCE denial (Graph 403) | Edge case: app lacks consented permission |
+| 5 | `graphDependency === 'fallback'` | ALLOW regardless | Without OBO: token claims. With OBO: full Graph profile |
+| 6 | `graphDependency === 'none'` | ALLOW if role allowed | No Graph dependency (time tools, simulated delete) |
 
 | # | ID | Tool | Scope Preset | Roles Allowed | Graph Dep | Required Scopes |
 |---|-----|------|-------------|---------------|-----------|-----------------|
@@ -98,6 +148,40 @@ return 401 because the token audience is `api://...` not `https://graph.microsof
 | 13 | dev_email | RESOURCE (Graph 401, no OBO) | TOOL deny | TOOL deny |
 | 14 | dev_time | ALLOW | TOOL deny | TOOL deny |
 
+**Expected outcome by role** (with `GRAPH_OBO_ENABLED = true`):
+
+| # | ID | Admin | Developer | Viewer |
+|---|-----|-------|-----------|--------|
+| 1 | profile_basic | ALLOW (full Graph profile, `_obo_used: true`) | ALLOW (full Graph profile) | ALLOW (full Graph profile) |
+| 2 | files_basic | ALLOW (`_obo_used: true`) | ALLOW (`_obo_used: true`) | TOOL deny |
+| 3 | files_correct | ALLOW (`_obo_used: true`) | ALLOW (`_obo_used: true`) | TOOL deny |
+| 4 | email_basic | ALLOW (`_obo_used: true`) | TOOL deny | TOOL deny |
+| 5 | email_correct | ALLOW (`_obo_used: true`) | TOOL deny | TOOL deny |
+| 6 | delete_basic | ALLOW (simulated, no Graph) | TOOL deny | TOOL deny |
+| 7 | delete_destructive | ALLOW (simulated, no Graph) | TOOL deny | TOOL deny |
+| 8 | time_current | ALLOW | TOOL deny | TOOL deny |
+| 9 | time_convert | ALLOW | TOOL deny | TOOL deny |
+| 10 | time_diff | ALLOW | TOOL deny | TOOL deny |
+| 11 | viewer_files | ALLOW (`_obo_used: true`) | ALLOW (`_obo_used: true`) | TOOL deny |
+| 12 | viewer_email | ALLOW (`_obo_used: true`) | TOOL deny | TOOL deny |
+| 13 | dev_email | ALLOW (`_obo_used: true`) | TOOL deny | TOOL deny |
+| 14 | dev_time | ALLOW | TOOL deny | TOOL deny |
+
+**Key differences (OBO-disabled → OBO-enabled)**:
+
+| Scenario change | Without OBO | With OBO |
+|----------------|-------------|----------|
+| Admin + Graph tools (#2-5, 11-13) | RESOURCE (Graph 401) | ALLOW (`_obo_used: true`) |
+| Developer + files tools (#2, 3, 11) | RESOURCE (Graph 401) | ALLOW (`_obo_used: true`) |
+| Viewer + profile (#1) | ALLOW (token claims) | ALLOW (full Graph profile) |
+| All role denials | TOOL deny | TOOL deny (unchanged) |
+| Non-Graph tools (#6-10, 14) | ALLOW / TOOL deny | Unchanged |
+
+> **Note**: With OBO, the frontend scope preset becomes less relevant for Graph tools.
+> OBO uses the app registration's consented permissions, not the scopes in the user's
+> token. This means `files_basic` (basic scope) and `files_correct` (files scope)
+> both succeed — OBO requests `Files.Read` from Graph directly.
+
 ## Denial Tier Reference
 
 | Badge | Color | Trigger | Layer |
@@ -122,6 +206,12 @@ Classification order (first match wins):
 | 6 | Regex: `/graph_api_unavailable/i`, `/(401\|403).*graph/i`, `/graph.*(401\|403)/i`, `/401.*unauthorized/i`, `/OBO flow/i`, `/insufficient_scope/i`, `/Access is denied/i` | resource | graph_api_denied |
 | 7 | Regex `/Access denied/i` (but NOT `/Role.*cannot/i`) | tool | access_denied |
 | 8 | None of above | *(null)* | success |
+
+> **OBO note**: With OBO enabled, the `/OBO flow/i` pattern (priority 6) is less likely
+> to match — OBO errors are caught in `_get_graph_token()` and result in a `None` return
+> (graceful fallback), not error messages containing "OBO flow". The
+> `graph_api_unavailable` pattern remains relevant for OBO failure fallback on
+> `list_files` and `send_email`.
 
 ---
 
@@ -182,6 +272,36 @@ Note: scenarios 11-13 are named viewer_*/dev_* but when running as admin,
 the admin HAS role access — the denial comes from Graph API, not role check.
 ```
 
+### A2-OBO: Admin role — RBAC Test Matrix (with OBO enabled)
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true in testScenarios.js
+Role selector: admin
+Scope preset: destructive
+Click: Run All
+
+Expected results (all 14 should show PASS):
+| # | Scenario           | Expected  | Denial   | Why                              |
+|---|--------------------|-----------|----------|----------------------------------|
+| 1 | profile_basic      | ALLOW     | —        | full Graph profile (_obo_used)   |
+| 2 | files_basic        | ALLOW     | —        | OBO exchanges token for Graph    |
+| 3 | files_correct      | ALLOW     | —        | OBO exchanges token for Graph    |
+| 4 | email_basic        | ALLOW     | —        | OBO exchanges token for Graph    |
+| 5 | email_correct      | ALLOW     | —        | OBO exchanges token for Graph    |
+| 6 | delete_basic       | ALLOW     | —        | simulated, no Graph call         |
+| 7 | delete_destructive | ALLOW     | —        | simulated, no Graph call         |
+| 8 | time_current       | ALLOW     | —        | no Graph dependency              |
+| 9 | time_convert       | ALLOW     | —        | no Graph dependency              |
+| 10| time_diff          | ALLOW     | —        | no Graph dependency              |
+| 11| viewer_files       | ALLOW     | —        | admin has role, OBO works        |
+| 12| viewer_email       | ALLOW     | —        | admin has role, OBO works        |
+| 13| dev_email          | ALLOW     | —        | admin has role, OBO works        |
+| 14| dev_time           | ALLOW     | —        | no Graph dependency              |
+
+Key difference from A2: scenarios 2-5, 11-13 change from RESOURCE → ALLOW.
+All responses for Graph tools include `_obo_used: true`.
+```
+
 ### A3: Admin — Graph API denial (correct role, Graph returns 401)
 
 ```
@@ -197,6 +317,24 @@ Chat prompts and expected denial badges:
 
 Note: With OBO not implemented, Graph-dependent tools fail with 401 regardless
 of scope preset. The scope distinction only matters once OBO is enabled.
+```
+
+### A3-OBO: Admin — Graph tools succeed with OBO
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Role selector: admin
+Scope preset: basic  (scope preset is irrelevant with OBO)
+
+Chat prompts and expected outcomes:
+"List my OneDrive files"         → SUCCESS (no badge) — OBO exchanges token (_obo_used: true)
+"Send email to test@example.com" → SUCCESS (no badge) — OBO exchanges token (_obo_used: true)
+"Delete resource abc123"         → SUCCESS (no badge) — simulated, never calls Graph
+"What time is it in Tokyo?"      → SUCCESS (no badge) — time tools need no scope
+"What's my email?"               → SUCCESS (no badge) — full Graph profile (_obo_used: true)
+
+Key difference from A3: Graph-dependent tools now succeed.
+The `_obo_used: true` flag in responses confirms OBO was used.
 ```
 
 ### A4: Admin — RBAC Matrix with basic scope
@@ -287,6 +425,35 @@ Note: files_basic/files_correct/viewer_files — developer HAS role access to
 list_files, so the role check passes. Denial comes from Graph API 401 (no OBO).
 ```
 
+### B2-OBO: Developer role — RBAC Test Matrix (with OBO enabled)
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Role selector: developer
+Scope preset: full
+Click: Run All
+
+| # | Scenario           | Expected  | Denial   | Why                              |
+|---|--------------------|-----------|----------|----------------------------------|
+| 1 | profile_basic      | ALLOW     | —        | full Graph profile (_obo_used)   |
+| 2 | files_basic        | ALLOW     | —        | dev has role + OBO works         |
+| 3 | files_correct      | ALLOW     | —        | dev has role + OBO works         |
+| 4 | email_basic        | TOOL      | role     | developer lacks send_email       |
+| 5 | email_correct      | TOOL      | role     | developer lacks send_email       |
+| 6 | delete_basic       | TOOL      | role     | developer lacks delete_resource  |
+| 7 | delete_destructive | TOOL      | role     | developer lacks delete_resource  |
+| 8 | time_current       | TOOL      | role     | developer lacks time tools       |
+| 9 | time_convert       | TOOL      | role     | developer lacks time tools       |
+| 10| time_diff          | TOOL      | role     | developer lacks time tools       |
+| 11| viewer_files       | ALLOW     | —        | dev has role + OBO works         |
+| 12| viewer_email       | TOOL      | role     | developer lacks send_email       |
+| 13| dev_email          | TOOL      | role     | developer lacks send_email       |
+| 14| dev_time           | TOOL      | role     | developer lacks time tools       |
+
+Key difference from B2: scenarios 2, 3, 11 change from RESOURCE → ALLOW.
+Role denials (#4-10, 12-14) are identical — role check is OBO-independent.
+```
+
 ### B3: Developer — chat denial badges
 
 ```
@@ -298,6 +465,22 @@ Scope preset: full
 "What time is it in Tokyo?"     → TOOL (orange) — role restriction
 "Send email to test@example.com"→ TOOL (orange) — role restriction
 "Delete resource abc123"        → TOOL (orange) — role restriction
+```
+
+### B3-OBO: Developer — chat denial badges (with OBO enabled)
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Role selector: developer
+Scope preset: full
+
+"What's my email?"              → SUCCESS (no badge) — full Graph profile (_obo_used: true)
+"List my OneDrive files"        → SUCCESS (no badge) — OBO works, dev has role
+"What time is it in Tokyo?"     → TOOL (orange) — role restriction (unchanged)
+"Send email to test@example.com"→ TOOL (orange) — role restriction (unchanged)
+"Delete resource abc123"        → TOOL (orange) — role restriction (unchanged)
+
+Key difference from B3: "List my OneDrive files" changes from RESOURCE → SUCCESS.
 ```
 
 ### B4: Developer — Graph dependency vs scope
@@ -386,6 +569,35 @@ Scope preset: full
 "Delete resource abc123"        → TOOL (orange)
 ```
 
+### C2-OBO / C3-OBO: Viewer with OBO enabled
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Role selector: viewer
+Scope preset: full
+
+RBAC Matrix (Run All):
+| # | Scenario           | Expected | Denial |
+|---|--------------------|----------|--------|
+| 1 | profile_basic      | ALLOW    | —      | ← full Graph profile (_obo_used: true)
+| 2 | files_correct      | DENY     | TOOL   |
+| 3 | email_correct      | DENY     | TOOL   |
+| 4 | delete_correct     | DENY     | TOOL   |
+| 5 | time_basic         | DENY     | TOOL   |
+| 6 | time_convert       | DENY     | TOOL   |
+| 7 | time_diff          | DENY     | TOOL   |
+
+Chat denial badges:
+"What's my email?"              → SUCCESS — full Graph profile (_obo_used: true)
+"List my OneDrive files"        → TOOL (orange) — unchanged
+"What time is it in Tokyo?"     → TOOL (orange) — unchanged
+"Send email to test@example.com"→ TOOL (orange) — unchanged
+"Delete resource abc123"        → TOOL (orange) — unchanged
+
+Key difference: profile_basic now returns full Graph profile instead of
+token claims fallback. All role denials unchanged — role check fires before Graph.
+```
+
 ### C4: Viewer promoted via user override
 
 ```
@@ -459,6 +671,16 @@ Chat: "What time is it?" → TOOL (orange) — developer cannot use time tools
 Chat: "List my files"    → RESOURCE (purple) — Graph 401, OBO not implemented
 ```
 
+### D3.2-OBO: stsadmin as developer (with OBO enabled)
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Role selector: switch to developer
+
+Chat: "What time is it?" → TOOL (orange) — developer cannot use time tools (unchanged)
+Chat: "List my files"    → SUCCESS (no badge) — dev has role + OBO works (_obo_used: true)
+```
+
 ### D3.3: stsadmin steps down to viewer
 
 ```
@@ -483,6 +705,14 @@ Chat: "What's my email?" → SUCCESS
    - TOOL denials for email/delete/time tools
    - RESOURCE for files scenarios (dev has role, Graph fails)
 3. Switch role: viewer → results clear → Run All → verify all non-profile are TOOL deny
+
+With OBO enabled (GRAPH_OBO_ENABLED = true):
+1. Role: admin, scope: destructive → Run All → all 14 ALLOW (no denials at all)
+2. Switch role: developer → results clear → Run All → verify:
+   - ALLOW for profile + files scenarios (OBO works)
+   - TOOL denials for email/delete/time tools (unchanged)
+3. Switch role: viewer → all non-profile are TOOL deny (unchanged)
+   - profile_basic: ALLOW with full Graph profile (_obo_used: true)
 ```
 
 ---
@@ -568,16 +798,18 @@ Switch back to AdeleV:
    Tab 1: scope = basic
    Tab 2: scope = files
 3. Switch to DiegoS account
-4. Tab 2 chat: "List my OneDrive files" → RESOURCE (Graph 401, OBO not implemented)
+4. Tab 2 chat: "List my OneDrive files" → RESOURCE (Graph 401, no OBO)
+   With OBO: → SUCCESS (_obo_used: true) — dev has role, OBO works
 5. Switch back to AdeleV
-6. Tab 1 chat: "List my OneDrive files" → RESOURCE (Graph 401, OBO not implemented)
+6. Tab 1 chat: "List my OneDrive files" → RESOURCE (Graph 401, no OBO)
+   With OBO: → SUCCESS (_obo_used: true) — admin has role, OBO works
 ```
 
 ---
 
 ## Test Suite G: Scope × Role Interaction
 
-### G1: Role allows but Graph API fails (RESOURCE denial, not TOOL)
+### G1: Role allows but Graph API fails (RESOURCE denial, not TOOL) — OBO disabled
 
 ```
 Sign in as: AdeleV (admin)
@@ -587,7 +819,21 @@ Role selector: admin
 "List my OneDrive files" → RESOURCE (purple), NOT TOOL
 Rationale: admin has role permission, but Graph API returns 401 because OBO
 flow is not implemented. The token audience is api://... not https://graph.microsoft.com.
-Once OBO is implemented, this would become SCOPE (amber) if Files.Read is missing.
+```
+
+### G1-OBO: Role allows and OBO exchanges token → SUCCESS
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Sign in as: AdeleV (admin)
+Scope preset: basic (no Files.Read — doesn't matter with OBO)
+Role selector: admin
+
+"List my OneDrive files" → SUCCESS (no badge)
+Rationale: admin has role permission, and OBO exchanges the user's token for a
+Graph-scoped token with Files.Read. The frontend scope preset is irrelevant
+because OBO uses the app registration's consented permissions.
+Response includes: _obo_used: true
 ```
 
 ### G2: Scope present but role missing (TOOL denial, not SCOPE)
@@ -622,6 +868,25 @@ Role selector: admin
 "What time is it in Tokyo?"  → SUCCESS — time tools require no Graph scope
 "Convert 3pm EST to PST"     → SUCCESS
 "Time difference NYC London" → SUCCESS
+```
+
+### G5-OBO: Scope preset irrelevant with OBO
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true
+Sign in as: AdeleV (admin)
+Scope preset: basic (minimal scopes — missing Files.Read, Mail.Send)
+Role selector: admin
+
+"List my OneDrive files"         → SUCCESS — OBO gets Files.Read from app registration
+"Send email to test@example.com" → SUCCESS — OBO gets Mail.Send from app registration
+"What's my email?"               → SUCCESS — OBO gets User.Read (full Graph profile)
+
+Demonstrates: with OBO, the frontend scope preset does not gate Graph API access.
+The MCP server exchanges the user's token for a Graph-scoped token using
+app registration permissions, bypassing the user token's scope list entirely.
+
+All responses include _obo_used: true.
 ```
 
 ---
@@ -746,6 +1011,10 @@ Click "Clear":
 | No role header | TOOL (orange) | 200 | "[ROLE_SELECTION] Role selection required..." |
 | No roles available | TOOL (orange) | 200 | "[TOOL_DENIAL] No roles available for {email}" |
 | Missing Graph scope | SCOPE (amber) | 200 | Response contains Graph API 403 or scope error |
+| Non-Entra provider (Graph tool) | *(none)* | 200 | `"error": "provider_not_supported"` — Graph not available for {provider} |
+| OBO exchange failed (list_files/send_email) | RESOURCE (purple) | 200 | `"error": "graph_api_unavailable"` with `_obo_used: false` |
+| OBO exchange failed (get_user_profile) | *(none)* | 200 | `"source": "token_claims"` with `_obo_used: false` — fallback to claims |
+| OBO success (any Graph tool) | *(none)* | 200 | Full Graph response with `_obo_used: true` |
 
 ---
 
@@ -1030,6 +1299,105 @@ After running tests:
    ✓ AGENT (red) badge in chat
    ✓ Audit Log shows 401 status
 4. MSAL should trigger silent refresh on next request
+```
+
+---
+
+## Test Suite N: OBO-Specific Scenarios
+
+### N1: OBO startup verification
+
+```
+Check MCP server startup log (logs/mcp_server.log or console):
+
+With ENTRA_CLIENT_SECRET set in .env:
+✓ Log message: "OBO exchanger initialized (tenant: <tenant-id>)"
+
+Without ENTRA_CLIENT_SECRET:
+✓ Log message: "OBO disabled -- ENTRA_CLIENT_SECRET not set"
+```
+
+### N2: `_obo_used` flag in responses
+
+```
+Prerequisites: GRAPH_OBO_ENABLED = true, OBO configured
+Sign in as: AdeleV (admin)
+Role selector: admin
+
+With OBO active:
+Chat: "What's my email?"
+✓ Response includes full Graph profile (displayName, mail, jobTitle, etc.)
+✓ Response includes `_obo_used: true`
+✓ No `source: "token_claims"` — real Graph data
+
+Without OBO (disable by removing ENTRA_CLIENT_SECRET, restart MCP):
+Chat: "What's my email?"
+✓ Response includes `source: "token_claims"`
+✓ Response includes `_obo_used: false` (or absent)
+✓ Only shows email and role from token claims, not full Graph profile
+```
+
+### N3: OBO credential cache
+
+```
+Prerequisites: OBO configured
+Sign in as: AdeleV (admin)
+Role selector: admin
+
+1. Chat: "What's my email?" — check MCP server log for OBO exchange
+   ✓ Log shows OBO token exchange activity
+
+2. Chat: "List my OneDrive files" — check MCP server log
+   ✓ OBO uses cached credential (OnBehalfOfCredential bound to same assertion)
+   ✓ No duplicate credential creation log for same user token
+
+3. Re-acquire token (e.g., change scope preset, wait for silent refresh)
+   ✓ New token triggers new OBO credential (different assertion hash)
+```
+
+### N4: OBO failure fallback
+
+```
+Prerequisites: Set ENTRA_CLIENT_SECRET to an invalid/expired value, restart MCP
+Sign in as: AdeleV (admin)
+Role selector: admin
+
+Chat: "What's my email?"
+✓ get_user_profile: falls back to token claims (not crash)
+✓ Response has `source: "token_claims"`, `_obo_used: false`
+✓ No 500 error — graceful degradation
+
+Chat: "List my OneDrive files"
+✓ list_files: returns `error: "graph_api_unavailable"` (not crash)
+✓ Response has `_obo_used: false`
+✓ Denial badge: RESOURCE (purple)
+
+Chat: "Send email to test@example.com with subject Test and body Hello"
+✓ send_email: fails gracefully
+✓ Denial badge: RESOURCE (purple)
+
+Chat: "What time is it in Tokyo?"
+✓ time tools: SUCCESS — unaffected by OBO failure (no Graph dependency)
+```
+
+### N5: Provider guard (future multi-IdP)
+
+```
+Non-Entra user (e.g., Cognito/Auth0 user, when multi-IdP support is active):
+
+Graph tools return provider_not_supported:
+✓ get_user_profile → {"error": "provider_not_supported", "provider": "cognito", ...}
+✓ list_files → {"error": "provider_not_supported", "provider": "cognito", ...}
+✓ send_email → {"error": "provider_not_supported", "provider": "cognito", ...}
+
+Non-Graph tools still work:
+✓ delete_resource → SUCCESS (simulated)
+✓ get_current_time → SUCCESS
+✓ convert_timezone → SUCCESS
+✓ get_time_difference → SUCCESS
+
+Note: currently all users are Entra. This scenario is testable only with
+dev_config.toml override (set default_provider = "cognito" under [mcp]).
 ```
 
 ---
