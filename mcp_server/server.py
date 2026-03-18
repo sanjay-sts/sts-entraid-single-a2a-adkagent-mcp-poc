@@ -28,12 +28,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 from dev_config import is_auth_disabled, get_section
 from policy import TomlPolicyEvaluator
+from graph_obo import init_obo_exchanger, get_obo_exchanger
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
 # Removed current_user_scopes — IdP scopes are no longer checked at tool level.
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
+current_user_provider: ContextVar[str] = ContextVar("current_user_provider", default="")
 
 # Load environment variables
 load_dotenv()
@@ -207,6 +209,7 @@ class UserContextMiddleware(Middleware):
         dev_cfg = get_section("mcp")
         current_user_token.set("dev-bypass-token")
         current_user_email.set(dev_cfg.get("default_email", "dev@localhost"))
+        current_user_provider.set(dev_cfg.get("default_provider", "entra"))
         # Respect X-Assume-Role header from upstream (ADK agent)
         try:
             headers = get_http_headers()
@@ -268,6 +271,7 @@ class UserContextMiddleware(Middleware):
         current_user_token.set(token.token)
         current_user_email.set(email)
         current_user_role.set(assumed_role)
+        current_user_provider.set(provider)
 
         logger.info(
             "User %s assumed role '%s' (available: %s)",
@@ -313,10 +317,35 @@ def require_role(*allowed_roles: str):
     return check
 
 
+async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
+    """Get a Graph API token via OBO exchange.
+
+    Returns None (preserving existing fallback behavior) when:
+      - Dev bypass mode (no real token to exchange)
+      - Non-Entra provider (OBO is Entra-only)
+      - ENTRA_CLIENT_SECRET not configured (exchanger not initialized)
+      - OBO exchange fails (logged, not raised)
+    """
+    provider = current_user_provider.get()
+    if provider != "entra":
+        return None
+
+    exchanger = get_obo_exchanger()
+    if not exchanger:
+        return None
+
+    user_token = current_user_token.get()
+    if not user_token or user_token == "dev-bypass-token":
+        return None
+
+    return await exchanger.get_graph_token(user_token, scopes)
+
+
 # --- Initialize FastMCP with built-in auth + middleware ---
 
 mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())
 mcp.add_middleware(UserContextMiddleware(policy_evaluator))
+init_obo_exchanger()
 
 
 # ============================================================================
@@ -327,20 +356,34 @@ mcp.add_middleware(UserContextMiddleware(policy_evaluator))
 async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
     logger.info("Executing tool: get_user_profile")
-    access_token = current_user_token.get()
     user_email = current_user_email.get()
     user_role = current_user_role.get()
+    provider = current_user_provider.get()
     logger.debug(f"Getting profile for user: {user_email}")
 
-    # Try Graph API first
+    # Non-Entra users can't access Graph API
+    if provider and provider != "entra":
+        return {
+            "error": "provider_not_supported",
+            "provider": provider,
+            "email": user_email,
+            "role": user_role,
+            "note": f"Graph API is not available for {provider} users. Use Entra ID for Graph access.",
+        }
+
+    # Try OBO exchange for a Graph-scoped token, fall back to user token
+    graph_token = await _get_graph_token(["https://graph.microsoft.com/User.Read"])
+    effective_token = graph_token or current_user_token.get()
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
             "https://graph.microsoft.com/v1.0/me",
-            headers={"Authorization": f"Bearer {access_token}"}
+            headers={"Authorization": f"Bearer {effective_token}"}
         )
 
         if response.status_code == 200:
             result = response.json()
+            result["_obo_used"] = graph_token is not None
             logger.debug(f"Graph API response: {result.get('displayName', 'N/A')}")
             return result
 
@@ -350,15 +393,26 @@ async def get_user_profile() -> dict:
             "source": "token_claims",
             "email": user_email,
             "role": user_role,
-            "note": "Graph API requires OBO flow for delegated access. Showing token claims."
+            "_obo_used": graph_token is not None,
+            "note": "Graph API returned error. Showing token claims as fallback.",
         }
 
 
 @mcp.tool(auth=require_role("admin", "developer"))
 async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
-    access_token = current_user_token.get()
     user_role = current_user_role.get()
+    provider = current_user_provider.get()
+
+    if provider and provider != "entra":
+        return {
+            "error": "provider_not_supported",
+            "provider": provider,
+            "note": f"OneDrive is not available for {provider} users. Use Entra ID for Graph access.",
+        }
+
+    graph_token = await _get_graph_token(["https://graph.microsoft.com/Files.Read"])
+    effective_token = graph_token or current_user_token.get()
 
     endpoint = "https://graph.microsoft.com/v1.0/me/drive/root/children"
     if folder_path != "/":
@@ -367,20 +421,23 @@ async def list_files(folder_path: str = "/") -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.get(
             endpoint,
-            headers={"Authorization": f"Bearer {access_token}"}
+            headers={"Authorization": f"Bearer {effective_token}"}
         )
 
         if response.status_code == 200:
             data = response.json()
-            return {"files": [f["name"] for f in data.get("value", [])]}
+            return {
+                "files": [f["name"] for f in data.get("value", [])],
+                "_obo_used": graph_token is not None,
+            }
 
-        # If Graph fails, return informative message
         logger.warning(f"Graph API returned {response.status_code} for list_files")
         return {
             "error": "graph_api_unavailable",
             "status_code": response.status_code,
             "role": user_role,
-            "note": "Graph API requires OBO flow. Token validated but cannot access OneDrive."
+            "_obo_used": graph_token is not None,
+            "note": "Graph API returned error. Ensure ENTRA_CLIENT_SECRET is set for OBO flow.",
         }
 
 
@@ -391,14 +448,24 @@ async def send_email(
     body: str,
 ) -> dict:
     """Send an email via Microsoft Graph (admin only)."""
-    access_token = current_user_token.get()
     user_email = current_user_email.get()
+    provider = current_user_provider.get()
+
+    if provider and provider != "entra":
+        return {
+            "error": "provider_not_supported",
+            "provider": provider,
+            "note": f"Email sending is not available for {provider} users. Use Entra ID for Graph access.",
+        }
+
+    graph_token = await _get_graph_token(["https://graph.microsoft.com/Mail.Send"])
+    effective_token = graph_token or current_user_token.get()
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://graph.microsoft.com/v1.0/me/sendMail",
             headers={
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"Bearer {effective_token}",
                 "Content-Type": "application/json"
             },
             json={
@@ -414,7 +481,7 @@ async def send_email(
             return {"error": "insufficient_scope", "message": "Token lacks Mail.Send scope"}
 
         response.raise_for_status()
-        return {"status": "sent", "from": user_email, "to": to}
+        return {"status": "sent", "from": user_email, "to": to, "_obo_used": graph_token is not None}
 
 
 @mcp.tool(auth=require_role("admin"))

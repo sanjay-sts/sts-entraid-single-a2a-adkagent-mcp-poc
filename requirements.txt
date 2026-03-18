@@ -25,6 +25,9 @@ httpx>=0.26.0
 PyJWT>=2.8.0
 cryptography>=42.0.0
 
+# Azure Identity (OBO token exchange for Graph API)
+azure-identity>=1.19.0
+
 # Environment variables
 python-dotenv>=1.0.0
 

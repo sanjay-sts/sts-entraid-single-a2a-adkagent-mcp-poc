@@ -42,7 +42,8 @@ This project implements a **secure, multi-tier AI agent system** where user iden
 ├── adk_agent/
 │   └── agent.py               # Google ADK agent (443 lines) - session mgmt, streaming, retry
 ├── mcp_server/
-│   ├── server.py              # FastMCP tools (~633 lines) - built-in auth, UserContextMiddleware, 7 tools
+│   ├── server.py              # FastMCP tools (~700 lines) - built-in auth, UserContextMiddleware, OBO, 7 tools
+│   ├── graph_obo.py           # OBO token exchange for Graph API (~110 lines) - GraphOBOExchanger singleton
 │   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator (~110 lines)
 ├── frontend/
 │   ├── public/
@@ -120,7 +121,7 @@ cp dev_config.example.toml dev_config.toml
 - `dev_config.toml` is gitignored; `dev_config.example.toml` ships with all options set to `false`
 - Prominent WARNING banners are logged when bypass is active
 
-**Configuration sections**: `[a2a]`, `[adk]`, `[mcp]` — each has `disable_auth` boolean. The `[mcp]` section also has `default_role`, `default_email`, and `default_scopes` to control the mock identity.
+**Configuration sections**: `[a2a]`, `[adk]`, `[mcp]` — each has `disable_auth` boolean. The `[mcp]` section also has `default_role`, `default_email`, `default_provider`, and `default_scopes` to control the mock identity.
 
 ### Deprecation Warning
 
@@ -375,42 +376,48 @@ Between chat requests, the A2A server may forward a fresh token. This directly m
 ### FastMCP: Context Variables
 
 ```python
-# mcp_server/server.py:34-36
+# mcp_server/server.py:34-37
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
+current_user_provider: ContextVar[str] = ContextVar("current_user_provider", default="")
 ```
 
-The MCP server uses 3 `ContextVar`s (vs A2A server's 2) because FastMCP runs in **stateless HTTP mode** (`stateless_http=True`), meaning `ctx.get_state()` / `ctx.set_state()` are not available. `UserContextMiddleware` sets these variables; tools and `auth=` callables read them. `current_user_scopes` was removed — IdP scopes are no longer checked at tool level.
+The MCP server uses 4 `ContextVar`s (vs A2A server's 2) because FastMCP runs in **stateless HTTP mode** (`stateless_http=True`), meaning `ctx.get_state()` / `ctx.set_state()` are not available. `UserContextMiddleware` sets these variables; tools and `auth=` callables read them. `current_user_provider` is used by the OBO helper to determine if Graph token exchange is possible (Entra-only).
 
 ### FastMCP: Token Access in Tools
 
 ```python
-# mcp_server/server.py:316-323
+# mcp_server/server.py - tool example
 @mcp.tool(auth=require_role("admin", "developer", "viewer"))
 async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
-    access_token = current_user_token.get()
     user_email = current_user_email.get()
     user_role = current_user_role.get()
+    provider = current_user_provider.get()
+    # OBO exchange: custom-audience token → Graph-scoped token
+    graph_token = await _get_graph_token(["https://graph.microsoft.com/User.Read"])
+    effective_token = graph_token or current_user_token.get()
 ```
 
-Tools read auth context from `ContextVar`s set by `UserContextMiddleware`, not from `ctx.get_state()`. Authorization is enforced by `auth=` callables on each tool decorator. IdP scope checking has been removed from tool decorators.
+Tools read auth context from `ContextVar`s set by `UserContextMiddleware`, not from `ctx.get_state()`. Authorization is enforced by `auth=` callables on each tool decorator. Graph-calling tools use `_get_graph_token()` for OBO exchange, falling back to the user's token when OBO is unavailable.
 
-**Graph API Fallback**: `get_user_profile` returns token claims with `"source": "token_claims"` when Graph API returns 401/403. This happens because the token uses a custom API audience, not the Graph API audience (OBO flow would be needed).
+**OBO Token Exchange**: When `ENTRA_CLIENT_SECRET` is set, Graph tools exchange the user's custom-audience token for a Graph-scoped token via `GraphOBOExchanger` (`mcp_server/graph_obo.py`). When OBO is not configured, `get_user_profile` falls back to token claims; `list_files` and `send_email` return informative error responses. Non-Entra users get `{"error": "provider_not_supported"}`. Responses include `_obo_used: true/false` for observability.
 
 ### FastMCP: Auth + Middleware + Auth Decorators
 
 ```python
-# mcp_server/server.py:308-309
+# mcp_server/server.py
 mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())  # Built-in JWT verification
 mcp.add_middleware(UserContextMiddleware(policy_evaluator))            # Role resolution + ContextVars
+init_obo_exchanger()                                                   # OBO for Graph API (if configured)
 ```
 
 **Execution order**: FastMCP built-in auth (JWT verification via `MultiAuth`) → `UserContextMiddleware.on_call_tool` (provider detection, role resolution, ContextVar setup) → `auth=` callables (read ContextVars, enforce role) → tool function.
 
-**Auth helpers** (`mcp_server/server.py:288-303`):
+**Auth helpers** (`mcp_server/server.py`):
 - `require_role(*roles)` -- checks `current_user_role` ContextVar; raises `ToolError` prefixed with `[TOOL_DENIAL]`
+- `_get_graph_token(scopes)` -- OBO exchange helper; returns Graph token or `None` (safe to call always — returns `None` for non-Entra, bypass mode, or missing client secret)
 - `require_scopes_from_token` -- **removed**. IdP scopes are no longer checked at tool level. The agent owns permissions via `permissions.toml`.
 
 **Policy evaluation** (`mcp_server/policy.py`):
@@ -570,6 +577,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
 # Microsoft Entra ID
 ENTRA_CLIENT_ID=<app-registration-client-id>
 ENTRA_TENANT_ID=<directory-tenant-id>
+ENTRA_CLIENT_SECRET=<client-secret>  # Required for OBO Graph token exchange
 
 # Access Control Group IDs
 ADMIN_GROUP_ID=<admin-security-group-id>
@@ -656,7 +664,7 @@ uv run pytest tests/test_access_control.py -v
 | A2A Inspector requires auth bypass | Can't test without workaround | `a2a_server/server.py` |
 | httpx client per request | No connection pooling between services | All inter-service calls |
 | Stale `.env.example` | Still lists `ENTRA_AUTHORITY` and `GOOGLE_API_KEY` | `.env.example` |
-| Graph API needs OBO flow | `get_user_profile` falls back to token claims | `mcp_server/server.py:337-344` |
+| Graph API OBO optional | Without `ENTRA_CLIENT_SECRET`, Graph tools fall back to token claims / error. With it, OBO exchanges for Graph-scoped tokens | `mcp_server/graph_obo.py` |
 | ~~X-Assume-Role not sent by ADK~~ | **FIXED** — Frontend sends X-Assume-Role, propagated through A2A→ADK→MCP | All servers |
 | Group overage not handled | Entra ID >150 groups → groups missing from token, logged but not fetched | `mcp_server/server.py:88-110` |
 

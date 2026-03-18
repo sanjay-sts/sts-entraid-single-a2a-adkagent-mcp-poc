@@ -23,4 +23,5 @@ disable_auth = false
 # Mock identity when auth is disabled (controls which tools are accessible)
 default_role = "admin"                  # admin | developer | viewer
 default_email = "dev@localhost"
+default_provider = "entra"              # entra | cognito | auth0
 default_scopes = ["User.Read", "Files.Read", "Mail.Send", "Files.ReadWrite.All"]

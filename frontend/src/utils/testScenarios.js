@@ -8,8 +8,9 @@
  *   'required' – calls Graph with no fallback; fails when OBO flow unavailable
  */
 
-// Flip to true when OBO (On-Behalf-Of) flow is implemented and Graph API
-// calls succeed with the custom-audience token.
+// Flip to true when OBO is configured: ENTRA_CLIENT_SECRET set in .env,
+// Azure app has delegated Graph permissions (User.Read, Files.Read, Mail.Send),
+// and admin consent is granted. Graph tools will then use OBO token exchange.
 const GRAPH_OBO_ENABLED = false;
 
 const testScenarios = [
