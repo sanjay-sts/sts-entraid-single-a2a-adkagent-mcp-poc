@@ -30,8 +30,14 @@ export function classifyDenial(httpStatus, responseBody, responseText) {
     return { level: 'scope', reason: 'missing_scopes' };
   }
 
-  // 5. Graph API resource-level denial
-  if (/403.*graph/i.test(text) || /insufficient_scope/i.test(text) || /Access is denied/i.test(text)) {
+  // 5. Graph API resource-level denial (401 or 403)
+  if (/graph_api_unavailable/i.test(text) ||
+      /(401|403).*graph/i.test(text) ||
+      /graph.*(401|403)/i.test(text) ||
+      /401.*unauthorized/i.test(text) ||
+      /OBO flow/i.test(text) ||
+      /insufficient_scope/i.test(text) ||
+      /Access is denied/i.test(text)) {
     return { level: 'resource', reason: 'graph_api_denied' };
   }
 

@@ -1,7 +1,17 @@
 /**
  * Predefined test scenarios covering the tool x scope x role matrix.
  * Each scenario specifies the expected outcome for different roles.
+ *
+ * graphDependency:
+ *   'none'     – tool never calls Graph API (time tools, simulated delete)
+ *   'fallback' – calls Graph but falls back to token claims on 401 (get_user_profile)
+ *   'required' – calls Graph with no fallback; fails when OBO flow unavailable
  */
+
+// Flip to true when OBO (On-Behalf-Of) flow is implemented and Graph API
+// calls succeed with the custom-audience token.
+const GRAPH_OBO_ENABLED = false;
+
 const testScenarios = [
   // === get_user_profile ===
   {
@@ -11,6 +21,7 @@ const testScenarios = [
     prompt: 'Show my Microsoft profile',
     rolesAllowed: ['admin', 'developer', 'viewer'],
     requiredScopes: ['User.Read'],
+    graphDependency: 'fallback',
     description: 'Fetch profile with basic scopes',
   },
 
@@ -22,6 +33,7 @@ const testScenarios = [
     prompt: 'List my OneDrive files',
     rolesAllowed: ['admin', 'developer'],
     requiredScopes: ['Files.Read'],
+    graphDependency: 'required',
     description: 'List files with basic scopes (missing Files.Read)',
   },
   {
@@ -31,6 +43,7 @@ const testScenarios = [
     prompt: 'List my OneDrive files',
     rolesAllowed: ['admin', 'developer'],
     requiredScopes: ['Files.Read'],
+    graphDependency: 'required',
     description: 'List files with files scope',
   },
 
@@ -42,6 +55,7 @@ const testScenarios = [
     prompt: 'Send an email to test@example.com with subject "Test" and body "Hello"',
     rolesAllowed: ['admin'],
     requiredScopes: ['Mail.Send'],
+    graphDependency: 'required',
     description: 'Send email with basic scopes (missing Mail.Send)',
   },
   {
@@ -51,6 +65,7 @@ const testScenarios = [
     prompt: 'Send an email to test@example.com with subject "Test" and body "Hello"',
     rolesAllowed: ['admin'],
     requiredScopes: ['Mail.Send'],
+    graphDependency: 'required',
     description: 'Send email with email scope',
   },
 
@@ -61,8 +76,9 @@ const testScenarios = [
     scopeKey: 'basic',
     prompt: 'Delete resource with ID test-resource-123',
     rolesAllowed: ['admin'],
-    requiredScopes: ['Files.ReadWrite.All'],
-    description: 'Delete resource with basic scopes',
+    requiredScopes: [],
+    graphDependency: 'none',
+    description: 'Delete resource with basic scopes (simulated)',
   },
   {
     id: 'delete_destructive',
@@ -70,8 +86,9 @@ const testScenarios = [
     scopeKey: 'destructive',
     prompt: 'Delete resource with ID test-resource-123',
     rolesAllowed: ['admin'],
-    requiredScopes: ['Files.ReadWrite.All'],
-    description: 'Delete resource with destructive scope',
+    requiredScopes: [],
+    graphDependency: 'none',
+    description: 'Delete resource with destructive scope (simulated)',
   },
 
   // === get_current_time ===
@@ -82,6 +99,7 @@ const testScenarios = [
     prompt: 'What time is it in Tokyo?',
     rolesAllowed: ['admin'],
     requiredScopes: [],
+    graphDependency: 'none',
     description: 'Get current time (admin only, no Graph scopes)',
   },
 
@@ -93,6 +111,7 @@ const testScenarios = [
     prompt: 'Convert 3pm EST to PST',
     rolesAllowed: ['admin'],
     requiredScopes: [],
+    graphDependency: 'none',
     description: 'Convert timezone (admin only)',
   },
 
@@ -104,6 +123,7 @@ const testScenarios = [
     prompt: 'What is the time difference between New York and London?',
     rolesAllowed: ['admin'],
     requiredScopes: [],
+    graphDependency: 'none',
     description: 'Time difference (admin only)',
   },
 
@@ -115,6 +135,7 @@ const testScenarios = [
     prompt: 'List my OneDrive files',
     rolesAllowed: ['admin', 'developer'],
     requiredScopes: ['Files.Read'],
+    graphDependency: 'required',
     description: 'Viewer trying to list files (role denied)',
   },
   {
@@ -124,6 +145,7 @@ const testScenarios = [
     prompt: 'Send an email to test@example.com with subject "Test" and body "Hello"',
     rolesAllowed: ['admin'],
     requiredScopes: ['Mail.Send'],
+    graphDependency: 'required',
     description: 'Viewer trying to send email (role denied)',
   },
 
@@ -135,6 +157,7 @@ const testScenarios = [
     prompt: 'Send an email to test@example.com with subject "Test" and body "Hello"',
     rolesAllowed: ['admin'],
     requiredScopes: ['Mail.Send'],
+    graphDependency: 'required',
     description: 'Developer trying to send email (role denied)',
   },
   {
@@ -144,13 +167,20 @@ const testScenarios = [
     prompt: 'What time is it in Tokyo?',
     rolesAllowed: ['admin'],
     requiredScopes: [],
+    graphDependency: 'none',
     description: 'Developer trying time tool (role denied)',
   },
 ];
 
 /**
- * Compute scenarios with `shouldSucceed` based on role + the scopes the
- * scenario's own scopeKey would request (from graphScopes config).
+ * Compute scenarios with `shouldSucceed` based on role, Graph OBO status,
+ * and the scopes the scenario's scopeKey would request.
+ *
+ * Decision logic:
+ *   1. Role not allowed           → TOOL denial
+ *   2. OBO disabled + Graph req'd → RESOURCE denial (Graph 401)
+ *   3. OBO enabled + scope miss   → RESOURCE denial (Graph 403)
+ *   4. Otherwise                  → ALLOW
  */
 export function getScenariosForRole(role) {
   // Import dynamically to avoid circular deps - graphScopes is a plain object
@@ -159,15 +189,36 @@ export function getScenariosForRole(role) {
 
   return testScenarios.map(scenario => {
     const roleAllowed = scenario.rolesAllowed.includes(role);
+
     // Check scopes that the scenario's scopeKey would provide
     const scenarioScopes = graphScopes[scenario.scopeKey] || [];
     const hasScope = scenario.requiredScopes.length === 0 ||
       scenario.requiredScopes.every(s => scenarioScopes.includes(s));
 
+    let shouldSucceed;
+    let denialExpected;
+
+    if (!roleAllowed) {
+      // Role check fires first — MCP rejects before Graph is called
+      shouldSucceed = false;
+      denialExpected = 'tool';
+    } else if (!GRAPH_OBO_ENABLED && scenario.graphDependency === 'required') {
+      // Role allowed, but Graph API will 401 because OBO isn't implemented
+      shouldSucceed = false;
+      denialExpected = 'resource';
+    } else if (GRAPH_OBO_ENABLED && !hasScope) {
+      // OBO works, but the token lacks the required Graph scope
+      shouldSucceed = false;
+      denialExpected = 'resource';
+    } else {
+      shouldSucceed = true;
+      denialExpected = null;
+    }
+
     return {
       ...scenario,
-      shouldSucceed: roleAllowed && hasScope,
-      denialExpected: !roleAllowed ? 'tool' : (!hasScope ? 'resource' : null),
+      shouldSucceed,
+      denialExpected,
     };
   });
 }
