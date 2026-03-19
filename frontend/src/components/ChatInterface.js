@@ -1,15 +1,12 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { useMsal, useAccount } from '@azure/msal-react';
-import { InteractionRequiredAuthError } from '@azure/msal-browser';
-import { graphScopes } from '../authConfig';
+import { useAuth } from '../AuthProvider';
 import { classifyDenial } from '../utils/denialClassifier';
 import DenialIndicator from './DenialIndicator';
 
 const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
 
 export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) {
-  const { instance, accounts } = useMsal();
-  const account = useAccount(accounts[0] || {});
+  const { getAccessToken } = useAuth();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -18,20 +15,6 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  const getAccessToken = useCallback(async () => {
-    const scopes = graphScopes[scopeKey] || graphScopes.basic;
-    try {
-      const response = await instance.acquireTokenSilent({ scopes, account });
-      return response.accessToken;
-    } catch (error) {
-      if (error instanceof InteractionRequiredAuthError) {
-        const response = await instance.acquireTokenPopup({ scopes });
-        return response.accessToken;
-      }
-      throw error;
-    }
-  }, [instance, account, scopeKey]);
 
   const sendMessage = async (e, overrideMessage) => {
     if (e) e.preventDefault();
@@ -48,7 +31,7 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
     let denial = null;
 
     try {
-      const accessToken = await getAccessToken();
+      const accessToken = await getAccessToken(scopeKey);
 
       const response = await fetch(A2A_SERVER_URL, {
         method: 'POST',
@@ -178,6 +161,7 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
               <li>"What's my email?"</li>
               <li>"Show my profile"</li>
               <li>"List my files"</li>
+              <li>"List my S3 buckets"</li>
               <li>"What time is it in Tokyo?"</li>
             </ul>
           </div>

@@ -163,6 +163,66 @@ body {
   background: #2ea043;
 }
 
+.login-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.login-entra {
+  background: #0078d4;
+}
+
+.login-entra:hover {
+  background: #106ebe;
+}
+
+.login-cognito {
+  background: #ff9900;
+  color: #1a1a1a;
+}
+
+.login-cognito:hover {
+  background: #ffad33;
+}
+
+.login-status {
+  margin-top: 12px;
+  color: #8b949e;
+  font-size: 0.85rem;
+}
+
+/* ---- Provider Badges ---- */
+
+.provider-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.provider-entra {
+  background: rgba(0, 120, 212, 0.2);
+  color: #58a6ff;
+  border: 1px solid rgba(0, 120, 212, 0.4);
+}
+
+.provider-cognito {
+  background: rgba(255, 153, 0, 0.15);
+  color: #ffad33;
+  border: 1px solid rgba(255, 153, 0, 0.4);
+}
+
+.provider-unknown {
+  background: rgba(139, 148, 158, 0.15);
+  color: #8b949e;
+  border: 1px solid rgba(139, 148, 158, 0.3);
+}
+
 /* ---- Sidebar ---- */
 
 .sidebar {

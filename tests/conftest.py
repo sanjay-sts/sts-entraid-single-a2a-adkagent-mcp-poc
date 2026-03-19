@@ -2,7 +2,7 @@
 import pytest
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Load environment variables for tests
@@ -56,6 +56,65 @@ def viewer_token():
         user_id="viewer-user",
         groups=[os.getenv("VIEWER_GROUP_ID", "viewer-group-id")],
         scopes="User.Read"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cognito mock-token helpers and fixtures
+# ---------------------------------------------------------------------------
+
+def create_cognito_test_token(
+    user_id: str,
+    groups: list,
+    email: str = "test@cognito.example.com",
+) -> str:
+    """Create a mock Cognito JWT token (HS256 for testing)."""
+    import jwt as pyjwt
+    return pyjwt.encode(
+        {
+            "sub": user_id,
+            "cognito:groups": groups,
+            "cognito:username": user_id,
+            "email": email,
+            "token_use": "access",
+            "scope": "openid profile email ai-agent-api/access_as_user",
+            "aud": os.getenv("COGNITO_CLIENT_ID", "test-cognito-client"),
+            "iss": f"https://cognito-idp.{os.getenv('COGNITO_REGION', 'us-east-1')}.amazonaws.com/{os.getenv('COGNITO_USER_POOL_ID', 'us-east-1_test')}",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "iat": datetime.now(timezone.utc),
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+
+@pytest.fixture
+def cognito_admin_token():
+    """Generate a Cognito admin test token (HS256 mock)."""
+    return create_cognito_test_token(
+        user_id="cognito-admin",
+        groups=["platform-admins"],
+        email="admin@test.com",
+    )
+
+
+@pytest.fixture
+def cognito_developer_token():
+    """Generate a Cognito developer test token (HS256 mock)."""
+    return create_cognito_test_token(
+        user_id="cognito-developer",
+        groups=["platform-developers"],
+        email="dev@test.com",
+    )
+
+
+@pytest.fixture
+def cognito_viewer_token():
+    """Generate a Cognito viewer test token (HS256 mock)."""
+    return create_cognito_test_token(
+        user_id="cognito-viewer",
+        groups=["platform-viewers"],
+        email="viewer@test.com",
     )
 
 

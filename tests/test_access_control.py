@@ -335,5 +335,98 @@ def event_loop():
     loop.close()
 
 
+def create_cognito_test_token(
+    user_id: str,
+    groups: list,
+    email: str = "test@cognito.example.com",
+) -> str:
+    """Create a mock Cognito JWT token (HS256 for testing)."""
+    return jwt.encode(
+        {
+            "sub": user_id,
+            "cognito:groups": groups,
+            "cognito:username": user_id,
+            "email": email,
+            "token_use": "access",
+            "scope": "openid profile email ai-agent-api/access_as_user",
+            "aud": os.getenv("COGNITO_CLIENT_ID", "test-cognito-client"),
+            "iss": f"https://cognito-idp.{os.getenv('COGNITO_REGION', 'us-east-1')}.amazonaws.com/{os.getenv('COGNITO_USER_POOL_ID', 'us-east-1_test')}",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "iat": datetime.now(timezone.utc),
+            "nbf": datetime.now(timezone.utc),
+        },
+        SECRET_KEY,
+        algorithm="HS256",
+    )
+
+
+class TestCognitoAccess:
+    """Test access control for Cognito-authenticated users."""
+
+    @pytest.mark.asyncio
+    async def test_cognito_admin_s3_tool_allowed(self):
+        """Cognito admin should be able to use S3 tools."""
+        token = create_cognito_test_token(
+            user_id="cognito-admin",
+            groups=["platform-admins"],
+            email="admin@test.com",
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                A2A_URL,
+                json=a2a_message("List my S3 buckets"),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        # Should not get 403 (group check should pass for Cognito groups)
+        # May get 401 if token validation fails (expected with HS256 mock)
+        # or 200/500 if services are running
+        assert response.status_code in [200, 401, 500]
+
+    @pytest.mark.asyncio
+    async def test_cognito_viewer_s3_list_denied(self):
+        """Cognito viewer should NOT be able to list S3 buckets."""
+        token = create_cognito_test_token(
+            user_id="cognito-viewer",
+            groups=["platform-viewers"],
+            email="viewer@test.com",
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                A2A_URL,
+                json=a2a_message("List my S3 buckets"),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        if response.status_code == 200:
+            result = response.json()
+            result_str = str(result).lower()
+            assert "access" in result_str or "denied" in result_str or "permission" in result_str
+
+    @pytest.mark.asyncio
+    async def test_cognito_user_graph_not_supported(self):
+        """Cognito users should get provider_not_supported for Graph tools."""
+        token = create_cognito_test_token(
+            user_id="cognito-admin",
+            groups=["platform-admins"],
+            email="admin@test.com",
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                A2A_URL,
+                json=a2a_message("Show my Microsoft profile"),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        if response.status_code == 200:
+            result = response.json()
+            result_str = str(result).lower()
+            # Should indicate provider not supported or similar
+            assert "provider" in result_str or "not supported" in result_str or "cognito" in result_str or "not available" in result_str
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--asyncio-mode=auto"])

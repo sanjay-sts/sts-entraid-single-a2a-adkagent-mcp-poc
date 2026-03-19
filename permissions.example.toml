@@ -11,9 +11,9 @@
 # "cde4fa16-7717-44e5-a502-ce2a17ef4385" = "viewer"
 
 [group_rules.cognito]
-# Cognito group names → role (for future use)
-# "platform-admins" = "admin"
-# "developers" = "developer"
+"platform-admins" = "admin"
+"platform-developers" = "developer"
+"platform-viewers" = "viewer"
 
 [group_rules.auth0]
 # Auth0 roles/groups → role (for future use)

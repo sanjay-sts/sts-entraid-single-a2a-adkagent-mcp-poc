@@ -100,6 +100,9 @@ class IdentityAwareAgent:
                 "get_current_time",
                 "convert_timezone",
                 "get_time_difference",
+                "list_s3_buckets",
+                "list_s3_objects",
+                "get_s3_object_info",
             ],
             # Dynamic header provider for per-request auth
             header_provider=mcp_header_provider,
@@ -111,7 +114,7 @@ class IdentityAwareAgent:
             model=LiteLlm(model="bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"),
             name="identity_aware_agent",
             description="An agent that provides user identity information and time utilities",
-            instruction="""You are a helpful assistant for identity and time queries.
+            instruction="""You are a helpful assistant for identity, time, and cloud storage queries.
 
 When a user asks a question:
 1. Call the appropriate tool to get the information
@@ -126,6 +129,9 @@ Available tools:
 - get_current_time: Get current time in a timezone (ADMIN ONLY)
 - convert_timezone: Convert time between timezones (ADMIN ONLY)
 - get_time_difference: Get difference between timezones (ADMIN ONLY)
+- list_s3_buckets: List all S3 buckets (admin/developer only)
+- list_s3_objects: List objects in an S3 bucket (admin/developer only)
+- get_s3_object_info: Get metadata about a specific S3 object (all roles)
 
 For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "Asia/Tokyo", "America/New_York".""",
             tools=[
@@ -224,6 +230,8 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
                 "can_send_email": True,
                 "can_delete_resources": True,
                 "can_use_time_tools": True,
+                "can_list_s3": True,
+                "can_view_s3_object": True,
             },
             "developer": {
                 "can_read_profile": True,
@@ -231,6 +239,8 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
                 "can_send_email": False,
                 "can_delete_resources": False,
                 "can_use_time_tools": False,
+                "can_list_s3": True,
+                "can_view_s3_object": True,
             },
             "viewer": {
                 "can_read_profile": True,
@@ -238,6 +248,8 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
                 "can_send_email": False,
                 "can_delete_resources": False,
                 "can_use_time_tools": False,
+                "can_list_s3": False,
+                "can_view_s3_object": True,
             },
             "none": {
                 "can_read_profile": False,
@@ -245,6 +257,8 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
                 "can_send_email": False,
                 "can_delete_resources": False,
                 "can_use_time_tools": False,
+                "can_list_s3": False,
+                "can_view_s3_object": False,
             },
         }
 

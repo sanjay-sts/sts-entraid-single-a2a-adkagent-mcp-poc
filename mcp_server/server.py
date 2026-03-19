@@ -14,11 +14,10 @@ from contextvars import ContextVar
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers, get_access_token
 from fastmcp.server.middleware import Middleware, MiddlewareContext
-from fastmcp.server.auth import AuthContext, RemoteAuthProvider, MultiAuth
+from fastmcp.server.auth import AuthContext, MultiAuth
 from fastmcp.server.auth.providers.azure import AzureJWTVerifier
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.exceptions import ToolError
-from pydantic import AnyHttpUrl
 import sys
 import httpx
 from dotenv import load_dotenv
@@ -58,6 +57,10 @@ logger = logging.getLogger("mcp_server")
 TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 CLIENT_ID = os.getenv("ENTRA_CLIENT_ID")
 
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
+COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID")
+COGNITO_REGION = os.getenv("COGNITO_REGION", "us-east-1")
+
 # Provider-specific email claim mapping
 EMAIL_CLAIMS = {
     "entra": ["preferred_username", "unique_name", "upn", "email"],
@@ -95,6 +98,10 @@ def _extract_groups(claims: dict) -> list[str]:
     In that case, groups must be fetched via Graph API /me/memberOf.
     For POC, we log a warning. Production: call Graph API.
     """
+    # Cognito uses cognito:groups claim
+    if "cognito:groups" in claims:
+        return claims["cognito:groups"]
+
     if "groups" in claims:
         return claims["groups"]
 
@@ -149,25 +156,19 @@ def _build_auth():
             required_scopes=["access_as_user"],
         ))
 
-    # Add more verifiers here for other IdPs:
-    # verifiers.append(JWTVerifier(
-    #     jwks_uri="https://cognito-idp.us-east-1.amazonaws.com/{pool_id}/.well-known/jwks.json",
-    #     issuer="https://cognito-idp.us-east-1.amazonaws.com/{pool_id}",
-    #     audience="your-cognito-client-id",
-    # ))
+    # Cognito verifier — User Pool JWT validation
+    # NOTE: audience is intentionally omitted. Cognito access tokens use
+    # "client_id" instead of "aud". We validate client_id in UserContextMiddleware.
+    if COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID:
+        cognito_iss = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
+        verifiers.append(JWTVerifier(
+            jwks_uri=f"{cognito_iss}/.well-known/jwks.json",
+            issuer=cognito_iss,
+        ))
 
     if not verifiers:
         logger.warning("No auth providers configured — all requests will be unauthenticated!")
         return None
-
-    if len(verifiers) == 1:
-        return RemoteAuthProvider(
-            token_verifier=verifiers[0],
-            authorization_servers=[
-                AnyHttpUrl(f"https://login.microsoftonline.com/{TENANT_ID}/v2.0")
-            ],
-            base_url=f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}",
-        )
 
     return MultiAuth(
         verifiers=verifiers,
@@ -234,6 +235,15 @@ class UserContextMiddleware(Middleware):
             return  # ContextVars stay at defaults → tools hidden during listing
 
         provider = _detect_provider(token.claims)
+
+        # Cognito access tokens use client_id instead of aud — validate manually
+        if provider == "cognito" and COGNITO_CLIENT_ID:
+            token_client_id = token.claims.get("client_id", "")
+            if token_client_id != COGNITO_CLIENT_ID:
+                raise ToolError(
+                    f"[TOOL_DENIAL] Invalid Cognito client_id: {token_client_id}"
+                )
+
         email = _extract_email(token.claims, provider)
         groups = _extract_groups(token.claims)
 
@@ -492,6 +502,145 @@ async def delete_resource(resource_id: str) -> dict:
 
     # Simulated deletion
     return {"status": "deleted", "resource_id": resource_id}
+
+
+# ============================================================================
+# S3 TOOLS - Multi-cloud storage (any authenticated user, server-side AWS creds)
+# ============================================================================
+
+@mcp.tool(auth=require_role("admin", "developer"))
+async def list_s3_buckets() -> dict:
+    """List all S3 buckets accessible with server-side AWS credentials (admin/developer only)."""
+    import asyncio
+    logger.info("Executing tool: list_s3_buckets")
+    user_email = current_user_email.get()
+    user_role = current_user_role.get()
+
+    try:
+        import boto3
+        from botocore.exceptions import NoCredentialsError, ClientError
+
+        def _list_buckets():
+            s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+            response = s3.list_buckets()
+            return [
+                {"name": b["Name"], "created": b["CreationDate"].isoformat()}
+                for b in response.get("Buckets", [])
+            ]
+
+        buckets = await asyncio.to_thread(_list_buckets)
+        return {
+            "buckets": buckets,
+            "count": len(buckets),
+            "requested_by": user_email,
+            "role": user_role,
+        }
+    except NoCredentialsError:
+        return {"error": "aws_not_configured", "message": "AWS credentials not configured on server"}
+    except ClientError as e:
+        error_code = e.response["Error"]["Code"]
+        return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
+    except ImportError:
+        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
+
+
+@mcp.tool(auth=require_role("admin", "developer"))
+async def list_s3_objects(bucket: str, prefix: str = "", max_keys: int = 20) -> dict:
+    """List objects in an S3 bucket (admin/developer only).
+
+    Args:
+        bucket: S3 bucket name
+        prefix: Key prefix to filter objects (e.g., 'documents/')
+        max_keys: Maximum number of objects to return (default 20, max 100)
+    """
+    import asyncio
+    logger.info(f"Executing tool: list_s3_objects (bucket={bucket}, prefix={prefix})")
+    user_email = current_user_email.get()
+    user_role = current_user_role.get()
+    max_keys = min(max_keys, 100)
+
+    try:
+        import boto3
+        from botocore.exceptions import NoCredentialsError, ClientError
+
+        def _list_objects():
+            s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+            params = {"Bucket": bucket, "MaxKeys": max_keys}
+            if prefix:
+                params["Prefix"] = prefix
+            response = s3.list_objects_v2(**params)
+            return [
+                {
+                    "key": obj["Key"],
+                    "size": obj["Size"],
+                    "last_modified": obj["LastModified"].isoformat(),
+                }
+                for obj in response.get("Contents", [])
+            ]
+
+        objects = await asyncio.to_thread(_list_objects)
+        return {
+            "bucket": bucket,
+            "prefix": prefix,
+            "objects": objects,
+            "count": len(objects),
+            "requested_by": user_email,
+            "role": user_role,
+        }
+    except NoCredentialsError:
+        return {"error": "aws_not_configured", "message": "AWS credentials not configured on server"}
+    except ClientError as e:
+        error_code = e.response["Error"]["Code"]
+        if error_code == "NoSuchBucket":
+            return {"error": "bucket_not_found", "bucket": bucket, "message": f"Bucket '{bucket}' does not exist"}
+        return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
+    except ImportError:
+        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
+
+
+@mcp.tool(auth=require_role("admin", "developer", "viewer"))
+async def get_s3_object_info(bucket: str, key: str) -> dict:
+    """Get metadata about a specific S3 object (all roles).
+
+    Args:
+        bucket: S3 bucket name
+        key: Object key (full path in the bucket)
+    """
+    import asyncio
+    logger.info(f"Executing tool: get_s3_object_info (bucket={bucket}, key={key})")
+    user_email = current_user_email.get()
+    user_role = current_user_role.get()
+
+    try:
+        import boto3
+        from botocore.exceptions import NoCredentialsError, ClientError
+
+        def _head_object():
+            s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+            response = s3.head_object(Bucket=bucket, Key=key)
+            return {
+                "bucket": bucket,
+                "key": key,
+                "size": response["ContentLength"],
+                "content_type": response.get("ContentType", "unknown"),
+                "last_modified": response["LastModified"].isoformat(),
+                "etag": response.get("ETag", ""),
+                "metadata": dict(response.get("Metadata", {})),
+            }
+
+        info = await asyncio.to_thread(_head_object)
+        info["requested_by"] = user_email
+        info["role"] = user_role
+        return info
+    except NoCredentialsError:
+        return {"error": "aws_not_configured", "message": "AWS credentials not configured on server"}
+    except ClientError as e:
+        error_code = e.response["Error"]["Code"]
+        if error_code == "404" or error_code == "NoSuchKey":
+            return {"error": "object_not_found", "bucket": bucket, "key": key, "message": f"Object '{key}' not found in bucket '{bucket}'"}
+        return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
+    except ImportError:
+        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
 
 
 # ============================================================================

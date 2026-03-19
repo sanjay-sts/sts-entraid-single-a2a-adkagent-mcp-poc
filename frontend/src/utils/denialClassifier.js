@@ -50,6 +50,11 @@ export function classifyDenial(httpStatus, responseBody, responseText) {
     return { level: 'resource', reason: 'graph_api_denied' };
   }
 
+  // 5b. S3/AWS errors (resource-level)
+  if (/aws_not_configured/i.test(text) || /s3_access_denied/i.test(text)) {
+    return { level: 'resource', reason: 'aws_error' };
+  }
+
   // 6. Generic access denied in response text
   if (/Access denied/i.test(text) && !/Role.*cannot/i.test(text)) {
     return { level: 'tool', reason: 'access_denied' };

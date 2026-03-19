@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useMsal, useAccount } from '@azure/msal-react';
-import { InteractionRequiredAuthError } from '@azure/msal-browser';
-import { graphScopes } from '../authConfig';
+import { useAuth } from '../AuthProvider';
 
 const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
 
@@ -12,32 +10,28 @@ const ROLE_COLORS = {
   none: 'role-none',
 };
 
+const PROVIDER_LABELS = {
+  entra: 'ENTRA ID',
+  cognito: 'COGNITO',
+  unknown: 'UNKNOWN',
+};
+
 export default function SecurityContextPanel({ scopeKey, onSecurityContext, selectedRole, onRoleChange }) {
-  const { instance, accounts } = useMsal();
-  const account = useAccount(accounts[0] || {});
+  const { isAuthenticated, getAccessToken, provider } = useAuth();
   const [securityCtx, setSecurityCtx] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [expiryCountdown, setExpiryCountdown] = useState('');
 
   const fetchSecurityContext = useCallback(async () => {
-    if (!account) return;
+    if (!isAuthenticated) return;
     setLoading(true);
     setError(null);
 
     try {
-      const scopes = graphScopes[scopeKey] || graphScopes.basic;
-      let accessToken;
-      try {
-        const resp = await instance.acquireTokenSilent({ scopes, account });
-        accessToken = resp.accessToken;
-      } catch (err) {
-        if (err instanceof InteractionRequiredAuthError) {
-          const resp = await instance.acquireTokenPopup({ scopes });
-          accessToken = resp.accessToken;
-        } else {
-          throw err;
-        }
+      const accessToken = await getAccessToken(scopeKey);
+      if (!accessToken) {
+        throw new Error('No access token available');
       }
 
       const response = await fetch(`${A2A_SERVER_URL}/me`, {
@@ -60,7 +54,7 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
     } finally {
       setLoading(false);
     }
-  }, [instance, account, scopeKey, selectedRole, onSecurityContext]);
+  }, [isAuthenticated, getAccessToken, scopeKey, selectedRole, onSecurityContext]);
 
   useEffect(() => {
     fetchSecurityContext();
@@ -115,12 +109,20 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
   if (!securityCtx) return null;
 
   const { security, user, permissions } = securityCtx;
+  const detectedProvider = security.provider || provider || 'unknown';
   const expiryClass = expiryCountdown === 'EXPIRED' ? 'expiry-expired'
     : (securityCtx.security.token_expiry - Math.floor(Date.now() / 1000) < 300 ? 'expiry-warning' : 'expiry-ok');
 
   return (
     <div className="security-panel">
       <h3 className="panel-title">Security Context</h3>
+
+      <div className="panel-section">
+        <label>Provider</label>
+        <span className={`provider-badge provider-${detectedProvider}`}>
+          {PROVIDER_LABELS[detectedProvider] || detectedProvider.toUpperCase()}
+        </span>
+      </div>
 
       <div className="panel-section">
         <label>User</label>
@@ -150,10 +152,12 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
         <label>Groups</label>
         <div className="panel-groups">
           {security.groups.length === 0 && <span className="panel-muted">None</span>}
-          {security.groups.map(gid => (
-            <div key={gid} className="group-item">
-              <span className="group-role">{security.group_names[gid] || 'unknown'}</span>
-              <span className="group-id" title={gid}>{gid.substring(0, 8)}...</span>
+          {security.groups.map((gid, idx) => (
+            <div key={gid + idx} className="group-item">
+              <span className="group-role">{security.group_names?.[gid] || gid}</span>
+              {gid.length > 20 && (
+                <span className="group-id" title={gid}>{gid.substring(0, 8)}...</span>
+              )}
             </div>
           ))}
         </div>
@@ -162,8 +166,8 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
       <div className="panel-section">
         <label>Token Scopes</label>
         <div className="scope-tags">
-          {security.token_scopes.length === 0 && <span className="panel-muted">None</span>}
-          {security.token_scopes.map(s => (
+          {(!security.token_scopes || security.token_scopes.length === 0) && <span className="panel-muted">None</span>}
+          {security.token_scopes && security.token_scopes.map(s => (
             <span key={s} className="scope-tag">{s}</span>
           ))}
         </div>

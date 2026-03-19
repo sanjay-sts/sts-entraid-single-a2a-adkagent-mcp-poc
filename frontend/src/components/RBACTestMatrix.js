@@ -1,7 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { useMsal, useAccount } from '@azure/msal-react';
-import { InteractionRequiredAuthError } from '@azure/msal-browser';
-import { graphScopes } from '../authConfig';
+import { useAuth } from '../AuthProvider';
 import { classifyDenial } from '../utils/denialClassifier';
 import { getScenariosForRole } from '../utils/testScenarios';
 import DenialIndicator from './DenialIndicator';
@@ -9,8 +7,7 @@ import DenialIndicator from './DenialIndicator';
 const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
 
 export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
-  const { instance, accounts } = useMsal();
-  const account = useAccount(accounts[0] || {});
+  const { getAccessToken } = useAuth();
   const [results, setResults] = useState({});
   const [running, setRunning] = useState(null);
   const [runningAll, setRunningAll] = useState(false);
@@ -22,20 +19,6 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
   useEffect(() => {
     setResults({});
   }, [selectedRole]);
-
-  const getAccessToken = useCallback(async (scopeKey) => {
-    const scopes = graphScopes[scopeKey] || graphScopes.basic;
-    try {
-      const resp = await instance.acquireTokenSilent({ scopes, account });
-      return resp.accessToken;
-    } catch (err) {
-      if (err instanceof InteractionRequiredAuthError) {
-        const resp = await instance.acquireTokenPopup({ scopes });
-        return resp.accessToken;
-      }
-      throw err;
-    }
-  }, [instance, account]);
 
   const runScenario = useCallback(async (scenario) => {
     setRunning(scenario.id);

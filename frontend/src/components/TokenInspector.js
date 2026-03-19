@@ -1,38 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useMsal, useAccount } from '@azure/msal-react';
-import { InteractionRequiredAuthError } from '@azure/msal-browser';
-import { graphScopes } from '../authConfig';
+import { useAuth } from '../AuthProvider';
 import { decodeToken } from '../utils/tokenDecoder';
 
-const HIGHLIGHT_FIELDS = ['groups', 'scp', 'aud', 'iss', 'exp', 'oid', 'sub', 'preferred_username'];
+const HIGHLIGHT_FIELDS = ['groups', 'cognito:groups', 'scp', 'scope', 'aud', 'iss', 'exp', 'oid', 'sub', 'preferred_username', 'email'];
 
 export default function TokenInspector({ scopeKey }) {
-  const { instance, accounts } = useMsal();
-  const account = useAccount(accounts[0] || {});
+  const { isAuthenticated, getAccessToken } = useAuth();
   const [collapsed, setCollapsed] = useState(true);
   const [decoded, setDecoded] = useState(null);
 
   const refresh = useCallback(async () => {
-    if (!account) return;
+    if (!isAuthenticated) return;
     try {
-      const scopes = graphScopes[scopeKey] || graphScopes.basic;
-      let accessToken;
-      try {
-        const resp = await instance.acquireTokenSilent({ scopes, account });
-        accessToken = resp.accessToken;
-      } catch (err) {
-        if (err instanceof InteractionRequiredAuthError) {
-          const resp = await instance.acquireTokenPopup({ scopes });
-          accessToken = resp.accessToken;
-        } else {
-          throw err;
-        }
-      }
-      setDecoded(decodeToken(accessToken));
+      const accessToken = await getAccessToken(scopeKey);
+      setDecoded(accessToken ? decodeToken(accessToken) : null);
     } catch {
       setDecoded(null);
     }
-  }, [instance, account, scopeKey]);
+  }, [isAuthenticated, getAccessToken, scopeKey]);
 
   useEffect(() => {
     refresh();

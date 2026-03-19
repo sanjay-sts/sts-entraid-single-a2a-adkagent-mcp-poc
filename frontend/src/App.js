@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { AuthenticatedTemplate, UnauthenticatedTemplate } from '@azure/msal-react';
+import { useAuth } from './AuthProvider';
 import AuthStatus from './components/AuthStatus';
 import LoginPrompt from './components/LoginPrompt';
 import SecurityContextPanel from './components/SecurityContextPanel';
@@ -9,6 +9,7 @@ import ConversationTabs from './components/ConversationTabs';
 import AuditLog from './components/AuditLog';
 
 function App() {
+  const { isAuthenticated, provider } = useAuth();
   const [auditEntries, setAuditEntries] = useState([]);
   const [securityCtx, setSecurityCtx] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -39,13 +40,20 @@ function App() {
         <AuthStatus />
       </header>
 
-      <UnauthenticatedTemplate>
+      {!isAuthenticated && !provider && (
         <main className="main-unauthenticated">
           <LoginPrompt />
         </main>
-      </UnauthenticatedTemplate>
+      )}
 
-      <AuthenticatedTemplate>
+      {/* Show login prompt when provider selected but not yet authenticated */}
+      {!isAuthenticated && provider && (
+        <main className="main-unauthenticated">
+          <LoginPrompt />
+        </main>
+      )}
+
+      {isAuthenticated && (
         <div className="dashboard-body">
           {/* Left Sidebar */}
           <aside className={`sidebar ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -91,7 +99,7 @@ function App() {
             </div>
           </main>
         </div>
-      </AuthenticatedTemplate>
+      )}
     </div>
   );
 }

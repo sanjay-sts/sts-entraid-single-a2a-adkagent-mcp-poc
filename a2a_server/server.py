@@ -8,6 +8,7 @@ import jwt
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from contextvars import ContextVar
 from pathlib import Path
 from typing import AsyncIterable
@@ -69,16 +70,10 @@ load_dotenv()
 ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 ENTRA_CLIENT_ID = os.getenv("ENTRA_CLIENT_ID")
 
-# Support both v1.0 and v2.0 tokens (Graph API uses v1.0 tokens)
-JWKS_URIS = [
-    f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys",  # v2.0
-    f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/keys",  # v1.0
-    "https://login.microsoftonline.com/common/discovery/keys",  # common
-]
-VALID_ISSUERS = [
-    f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0",  # v2.0 issuer
-    f"https://sts.windows.net/{ENTRA_TENANT_ID}/",  # v1.0 issuer (Graph tokens)
-]
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
+COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID")
+COGNITO_REGION = os.getenv("COGNITO_REGION", "us-east-1")
+
 A2A_SERVER_PORT = int(os.getenv("A2A_SERVER_PORT", 10000))
 ADK_SERVER_URL = f"http://localhost:{os.getenv('ADK_SERVER_PORT', 10001)}"
 FRONTEND_PORT = os.getenv("FRONTEND_PORT", 10003)
@@ -92,12 +87,74 @@ ALLOWED_GROUPS = [
 ]
 ALLOWED_GROUPS = [g for g in ALLOWED_GROUPS if g]
 
+# Cognito group names for agent-level access control
+COGNITO_ALLOWED_GROUPS = [
+    os.getenv("COGNITO_ADMIN_GROUP", "platform-admins"),
+    os.getenv("COGNITO_DEVELOPER_GROUP", "platform-developers"),
+    os.getenv("COGNITO_VIEWER_GROUP", "platform-viewers"),
+]
+COGNITO_ALLOWED_GROUPS = [g for g in COGNITO_ALLOWED_GROUPS if g]
+
+
+@dataclass
+class IdPConfig:
+    """Configuration for an Identity Provider."""
+    name: str
+    jwks_uris: list[str]
+    valid_issuers: list[str]
+    valid_audiences: list[str]
+    algorithms: list[str] = None
+    audience_claim: str = "aud"  # "aud" for standard, "client_id" for Cognito
+
+    def __post_init__(self):
+        if self.algorithms is None:
+            self.algorithms = ["RS256"]
+
+
+def _build_idp_configs() -> list[IdPConfig]:
+    """Build IdP configurations from environment variables."""
+    configs = []
+
+    # Entra ID
+    if ENTRA_TENANT_ID and ENTRA_CLIENT_ID:
+        configs.append(IdPConfig(
+            name="entra",
+            jwks_uris=[
+                f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys",
+                f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/keys",
+                "https://login.microsoftonline.com/common/discovery/keys",
+            ],
+            valid_issuers=[
+                f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0",
+                f"https://sts.windows.net/{ENTRA_TENANT_ID}/",
+            ],
+            valid_audiences=[
+                ENTRA_CLIENT_ID,
+                f"api://{ENTRA_CLIENT_ID}",
+            ],
+        ))
+
+    # Cognito
+    if COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID:
+        cognito_iss = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
+        configs.append(IdPConfig(
+            name="cognito",
+            jwks_uris=[f"{cognito_iss}/.well-known/jwks.json"],
+            valid_issuers=[cognito_iss],
+            valid_audiences=[COGNITO_CLIENT_ID],
+            audience_claim="client_id",  # Cognito access tokens use client_id, not aud
+        ))
+
+    return configs
+
+IDP_CONFIGS = _build_idp_configs()
+
 
 class TokenValidator:
-    """Validates Entra ID tokens using JWKS (supports both v1.0 and v2.0 tokens)."""
+    """Validates JWT tokens from multiple IdPs using JWKS."""
 
     def __init__(self):
-        self._jwks_cache = {}  # Cache per URI
+        self._jwks_cache = {}
 
     async def get_jwks(self, uri: str):
         """Fetch and cache JWKS from a specific URI."""
@@ -113,10 +170,24 @@ class TokenValidator:
         logger.debug("Clearing JWKS cache")
         self._jwks_cache = {}
 
-    async def _get_all_keys(self, kid: str):
-        """Get all RSA keys matching the kid from all JWKS endpoints."""
+    def _detect_idp(self, token: str) -> IdPConfig | None:
+        """Detect which IdP issued the token by peeking at the iss claim."""
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        token_iss = unverified.get("iss", "")
+        for config in IDP_CONFIGS:
+            if token_iss in config.valid_issuers:
+                return config
+        # Fallback: try substring matching for partial issuer matches
+        for config in IDP_CONFIGS:
+            for valid_iss in config.valid_issuers:
+                if valid_iss in token_iss or token_iss in valid_iss:
+                    return config
+        return None
+
+    async def _get_keys_for_idp(self, kid: str, idp: IdPConfig):
+        """Get RSA keys matching kid from an IdP's JWKS endpoints."""
         keys = []
-        for uri in JWKS_URIS:
+        for uri in idp.jwks_uris:
             try:
                 jwks = await self.get_jwks(uri)
                 for key in jwks.get("keys", []):
@@ -125,76 +196,86 @@ class TokenValidator:
                         keys.append((uri, jwt.algorithms.RSAAlgorithm.from_jwk(key)))
             except Exception as e:
                 logger.debug(f"Failed to fetch/parse JWKS from {uri}: {e}")
-                continue
         return keys
 
     async def validate(self, token: str) -> dict:
-        """Validate token and return claims."""
+        """Validate token against the matching IdP and return claims."""
         logger.debug(f"Validating token (first 50 chars): {token[:50]}...")
 
-        # Decode without verification to inspect claims
+        # Detect which IdP issued this token
+        idp = self._detect_idp(token)
+        if not idp:
+            unverified = jwt.decode(token, options={"verify_signature": False})
+            logger.error(f"No IdP config found for issuer: {unverified.get('iss', 'unknown')}")
+            raise ValueError(f"Unknown token issuer: {unverified.get('iss', 'unknown')}")
+
+        logger.debug(f"Token matched IdP: {idp.name}")
+
         unverified = jwt.decode(token, options={"verify_signature": False})
         token_iss = unverified.get("iss", "")
         token_aud = unverified.get("aud", "")
         logger.debug(f"Token claims (unverified): iss={token_iss}, aud={token_aud}")
-        logger.debug(f"Valid issuers: {VALID_ISSUERS}")
 
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
         logger.debug(f"Token kid: {kid}")
 
-        # Get all matching keys from all endpoints
-        keys = await self._get_all_keys(kid)
+        # Get keys from the matching IdP's endpoints
+        keys = await self._get_keys_for_idp(kid, idp)
         if not keys:
-            # Clear cache and retry
             logger.debug("Key not found, clearing cache and retrying")
             self.clear_cache()
-            keys = await self._get_all_keys(kid)
+            keys = await self._get_keys_for_idp(kid, idp)
 
         if not keys:
-            logger.error(f"Key {kid} not found in any JWKS endpoint")
-            raise ValueError("Key not found in JWKS")
+            logger.error(f"Key {kid} not found in {idp.name} JWKS endpoints")
+            raise ValueError(f"Key not found in {idp.name} JWKS")
 
-        # Accept your custom API audience (tokens with api://{client-id}/access_as_user scope)
-        valid_audiences = [
-            ENTRA_CLIENT_ID,
-            f"api://{ENTRA_CLIENT_ID}",  # Custom API scope audience
-        ]
+        # Try each key
+        # Cognito access tokens use "client_id" instead of "aud", so we skip
+        # PyJWT's audience check and validate the audience claim manually.
+        skip_aud = idp.audience_claim != "aud"
+        decode_options = {"verify_aud": False} if skip_aud else {}
 
-        # Try each key until one works
         last_error = None
         for uri, rsa_key in keys:
             try:
                 payload = jwt.decode(
                     token,
                     rsa_key,
-                    algorithms=["RS256"],
-                    audience=valid_audiences,
-                    issuer=VALID_ISSUERS,  # Accept multiple issuers
+                    algorithms=idp.algorithms,
+                    audience=None if skip_aud else idp.valid_audiences,
+                    issuer=idp.valid_issuers,
+                    options=decode_options,
                 )
-                logger.info(f"Token validated successfully using key from {uri}")
-                logger.info(f"User: {payload.get('preferred_username', payload.get('unique_name', payload.get('sub')))}")
-                # Log all claims to see what's available
+
+                # Manual audience check for non-standard audience claims (e.g., Cognito client_id)
+                if skip_aud:
+                    actual = payload.get(idp.audience_claim, "")
+                    if actual not in idp.valid_audiences:
+                        raise jwt.InvalidAudienceError(
+                            f"Invalid {idp.audience_claim}: {actual}, expected one of {idp.valid_audiences}"
+                        )
+
+                logger.info(f"Token validated successfully via {idp.name} using key from {uri}")
+                email = payload.get("preferred_username") or payload.get("email") or payload.get("cognito:username") or payload.get("sub", "")
+                logger.info(f"User: {email}")
                 logger.debug(f"All token claims: {list(payload.keys())}")
-                logger.debug(f"Token claims details: preferred_username={payload.get('preferred_username')}, unique_name={payload.get('unique_name')}, upn={payload.get('upn')}, name={payload.get('name')}, groups={payload.get('groups', [])}")
                 return payload
             except jwt.InvalidSignatureError as e:
-                logger.debug(f"Signature verification failed with key from {uri}, trying next...")
+                logger.debug(f"Signature verification failed with key from {uri}")
                 last_error = e
-                continue
             except jwt.InvalidAudienceError:
-                logger.error(f"Invalid audience: token aud={token_aud}, expected one of {valid_audiences}")
+                logger.error(f"Invalid audience: token {idp.audience_claim}={token_aud}, expected one of {idp.valid_audiences}")
                 raise
             except jwt.InvalidIssuerError:
-                logger.error(f"Invalid issuer: token iss={token_iss}, expected one of {VALID_ISSUERS}")
+                logger.error(f"Invalid issuer: token iss={token_iss}, expected one of {idp.valid_issuers}")
                 raise
             except Exception as e:
                 logger.debug(f"Validation failed with key from {uri}: {type(e).__name__}: {e}")
                 last_error = e
-                continue
 
-        # All keys failed
-        logger.error(f"Token validation failed with all {len(keys)} keys: {last_error}")
+        logger.error(f"Token validation failed with all {len(keys)} keys for {idp.name}: {last_error}")
         raise last_error or ValueError("Token validation failed")
 
 
@@ -352,11 +433,11 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                     json={
                         "user_id": user_id,
                         "user_info": {
-                            # Try multiple claim names for email (v2.0: preferred_username, v1.0: unique_name, upn)
-                            "email": user_claims.get("preferred_username") or user_claims.get("unique_name") or user_claims.get("upn", ""),
+                            # Try multiple claim names for email (v2.0: preferred_username, v1.0: unique_name, upn, Cognito: email/cognito:username)
+                            "email": user_claims.get("preferred_username") or user_claims.get("unique_name") or user_claims.get("upn") or user_claims.get("email") or user_claims.get("cognito:username", ""),
                             # Try multiple claim names for name
                             "name": user_claims.get("name") or user_claims.get("given_name", ""),
-                            "groups": user_claims.get("groups", []),
+                            "groups": user_claims.get("cognito:groups") or user_claims.get("groups", []),
                             "assumed_role": current_assumed_role.get(),
                         },
                     },
@@ -373,7 +454,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
 # Create the Agent Card
 agent_card = AgentCard(
     name="Identity-Aware AI Agent",
-    description="An AI agent with Entra ID authentication that enforces role-based access control via MCP tools.",
+    description="A multi-IdP AI agent with Entra ID and Cognito authentication that enforces role-based access control via MCP tools.",
     url=f"http://localhost:{A2A_SERVER_PORT}/",
     version="1.0.0",
     defaultInputModes=["text/plain"],
@@ -436,6 +517,27 @@ agent_card = AgentCard(
             description="Get the time difference between two timezones (ADMIN ONLY)",
             tags=["time", "timezone", "difference", "admin"],
             examples=["Time difference between NYC and London", "How many hours ahead is Tokyo from LA?"],
+        ),
+        AgentSkill(
+            id="s3_buckets",
+            name="S3 Bucket List",
+            description="List S3 buckets accessible with server-side AWS credentials (admin/developer only)",
+            tags=["s3", "aws", "storage"],
+            examples=["List my S3 buckets", "What S3 buckets are available?"],
+        ),
+        AgentSkill(
+            id="s3_objects",
+            name="S3 Object Browser",
+            description="Browse objects in an S3 bucket (admin/developer only)",
+            tags=["s3", "aws", "storage", "files"],
+            examples=["List objects in my-bucket", "Show files in bucket test-data"],
+        ),
+        AgentSkill(
+            id="s3_info",
+            name="S3 Object Info",
+            description="Get metadata about a specific S3 object (all authenticated users)",
+            tags=["s3", "aws", "storage", "metadata"],
+            examples=["Get info about file.txt in my-bucket"],
         ),
     ],
 )
@@ -552,15 +654,29 @@ async def auth_middleware(request: Request, call_next):
                 headers=_cors_headers(request),
             )
 
-        # Check group membership
-        if ALLOWED_GROUPS and not any(g in ALLOWED_GROUPS for g in user_groups):
-            logger.warning(f"User {user_id} not in allowed groups. Has: {user_groups}, Allowed: {ALLOWED_GROUPS}")
-            return Response(
-                status_code=403,
-                content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
-                media_type="application/json",
-                headers=_cors_headers(request),
-            )
+        # Check group membership (provider-aware)
+        provider = _detect_provider(claims)
+        if provider == "cognito":
+            # Cognito uses cognito:groups claim with group names
+            user_groups = claims.get("cognito:groups", [])
+            if COGNITO_ALLOWED_GROUPS and not any(g in COGNITO_ALLOWED_GROUPS for g in user_groups):
+                logger.warning(f"Cognito user not in allowed groups. Has: {user_groups}, Allowed: {COGNITO_ALLOWED_GROUPS}")
+                return Response(
+                    status_code=403,
+                    content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
+                    media_type="application/json",
+                    headers=_cors_headers(request),
+                )
+        else:
+            # Entra ID uses groups claim with GUIDs
+            if ALLOWED_GROUPS and not any(g in ALLOWED_GROUPS for g in user_groups):
+                logger.warning(f"User {user_id} not in allowed groups. Has: {user_groups}, Allowed: {ALLOWED_GROUPS}")
+                return Response(
+                    status_code=403,
+                    content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
+                    media_type="application/json",
+                    headers=_cors_headers(request),
+                )
 
         logger.debug("Access control passed, storing claims in request state")
         # Store claims in request state for the agent executor
@@ -615,6 +731,10 @@ GROUP_TO_ROLE = {
     os.getenv("ADMIN_GROUP_ID"): "admin",
     os.getenv("DEVELOPER_GROUP_ID"): "developer",
     os.getenv("VIEWER_GROUP_ID"): "viewer",
+    # Cognito group names
+    os.getenv("COGNITO_ADMIN_GROUP", "platform-admins"): "admin",
+    os.getenv("COGNITO_DEVELOPER_GROUP", "platform-developers"): "developer",
+    os.getenv("COGNITO_VIEWER_GROUP", "platform-viewers"): "viewer",
 }
 
 # Tool permission matrix (matches auth= decorators on MCP tools)
@@ -626,6 +746,9 @@ TOOL_ROLES = {
     "get_current_time": ["admin"],
     "convert_timezone": ["admin"],
     "get_time_difference": ["admin"],
+    "list_s3_buckets": ["admin", "developer"],
+    "list_s3_objects": ["admin", "developer"],
+    "get_s3_object_info": ["admin", "developer", "viewer"],
 }
 
 TOOL_SCOPES = {
@@ -636,7 +759,20 @@ TOOL_SCOPES = {
     "get_current_time": [],
     "convert_timezone": [],
     "get_time_difference": [],
+    "list_s3_buckets": [],
+    "list_s3_objects": [],
+    "get_s3_object_info": [],
 }
+
+
+def _detect_provider(claims: dict) -> str:
+    """Detect IdP from token issuer claim."""
+    iss = claims.get("iss", "")
+    if "login.microsoftonline.com" in iss or "sts.windows.net" in iss:
+        return "entra"
+    if "cognito-idp" in iss:
+        return "cognito"
+    return "unknown"
 
 
 def _determine_role(groups: list) -> str:
@@ -674,9 +810,20 @@ async def get_me(request: Request):
             media_type="application/json",
         )
 
-    user_groups = claims.get("groups", [])
+    provider = _detect_provider(claims)
+
+    # Provider-specific claim extraction
+    if provider == "cognito":
+        user_email = claims.get("email") or claims.get("cognito:username", "")
+        user_name = claims.get("name") or claims.get("email", "")
+        user_groups = claims.get("cognito:groups", [])
+    else:
+        user_email = claims.get("preferred_username") or claims.get("unique_name") or claims.get("upn", "")
+        user_name = claims.get("name") or claims.get("given_name", "")
+        user_groups = claims.get("groups", [])
+
     available_roles = _get_available_roles(user_groups)
-    token_scopes = claims.get("scp", "").split()
+    token_scopes = claims.get("scp", "").split() if isinstance(claims.get("scp", ""), str) else claims.get("scope", "").split() if isinstance(claims.get("scope", ""), str) else []
 
     # In dev bypass mode with no group IDs configured, grant all roles
     if is_auth_disabled("a2a") and not available_roles:
@@ -704,11 +851,12 @@ async def get_me(request: Request):
 
     return {
         "user": {
-            "email": claims.get("preferred_username") or claims.get("unique_name") or claims.get("upn", ""),
-            "name": claims.get("name") or claims.get("given_name", ""),
-            "oid": claims.get("oid", ""),
+            "email": user_email,
+            "name": user_name,
+            "oid": claims.get("oid") or claims.get("sub", ""),
         },
         "security": {
+            "provider": provider,
             "role": active_role,
             "available_roles": available_roles,
             "groups": user_groups,

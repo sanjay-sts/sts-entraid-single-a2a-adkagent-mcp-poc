@@ -171,6 +171,48 @@ const testScenarios = [
     graphDependency: 'none',
     description: 'Developer trying time tool (role denied)',
   },
+
+  // === S3 Tools ===
+  {
+    id: 's3_buckets',
+    tool: 'list_s3_buckets',
+    scopeKey: 'basic',
+    prompt: 'List my S3 buckets',
+    rolesAllowed: ['admin', 'developer'],
+    requiredScopes: [],
+    graphDependency: 'none',
+    description: 'List S3 buckets (no Graph dependency)',
+  },
+  {
+    id: 's3_objects',
+    tool: 'list_s3_objects',
+    scopeKey: 'basic',
+    prompt: 'List objects in bucket sts-use1-mcp-poc-data',
+    rolesAllowed: ['admin', 'developer'],
+    requiredScopes: [],
+    graphDependency: 'none',
+    description: 'List S3 objects (no Graph dependency)',
+  },
+  {
+    id: 's3_info',
+    tool: 'get_s3_object_info',
+    scopeKey: 'basic',
+    prompt: 'Get info about sample.txt in bucket sts-use1-mcp-poc-data',
+    rolesAllowed: ['admin', 'developer', 'viewer'],
+    requiredScopes: [],
+    graphDependency: 'none',
+    description: 'Get S3 object metadata (all roles)',
+  },
+  {
+    id: 'viewer_s3_buckets',
+    tool: 'list_s3_buckets',
+    scopeKey: 'basic',
+    prompt: 'List my S3 buckets',
+    rolesAllowed: ['admin', 'developer'],
+    requiredScopes: [],
+    graphDependency: 'none',
+    description: 'Viewer trying to list S3 buckets (role denied)',
+  },
 ];
 
 /**

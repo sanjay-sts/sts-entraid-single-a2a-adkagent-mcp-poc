@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAuth } from '../AuthProvider';
 import { graphScopes } from '../authConfig';
 import ChatInterface from './ChatInterface';
 
@@ -6,11 +7,15 @@ const MAX_TABS = 4;
 const SCOPE_OPTIONS = Object.keys(graphScopes);
 
 export default function ConversationTabs({ onAuditEntry, selectedRole }) {
+  const { provider } = useAuth();
   const [tabs, setTabs] = useState([
     { id: 1, scopeKey: 'basic', label: 'basic' },
   ]);
   const [activeTab, setActiveTab] = useState(1);
   const [showScopePicker, setShowScopePicker] = useState(false);
+
+  // Cognito users don't have Graph scope presets — hide scope picker
+  const isCognito = provider === 'cognito';
 
   const addTab = (scopeKey) => {
     if (tabs.length >= MAX_TABS) return;
@@ -41,7 +46,7 @@ export default function ConversationTabs({ onAuditEntry, selectedRole }) {
             onClick={() => setActiveTab(tab.id)}
           >
             <span className="tab-label">{tab.label}</span>
-            <span className="tab-scope-badge">{tab.scopeKey}</span>
+            {!isCognito && <span className="tab-scope-badge">{tab.scopeKey}</span>}
             {tabs.length > 1 && (
               <button
                 className="tab-close"
@@ -53,13 +58,13 @@ export default function ConversationTabs({ onAuditEntry, selectedRole }) {
           </div>
         ))}
 
-        {tabs.length < MAX_TABS && (
+        {!isCognito && tabs.length < MAX_TABS && (
           <div className="tab tab-add" onClick={() => setShowScopePicker(true)}>
             +
           </div>
         )}
 
-        {showScopePicker && (
+        {showScopePicker && !isCognito && (
           <div className="scope-picker-dropdown">
             {SCOPE_OPTIONS.map(key => (
               <button
