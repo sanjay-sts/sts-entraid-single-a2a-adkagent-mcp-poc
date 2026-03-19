@@ -459,6 +459,18 @@ app.add_middleware(
 )
 
 
+def _cors_headers(request: Request) -> dict:
+    """Build CORS headers for error responses returned before CORSMiddleware can act."""
+    origin = request.headers.get("origin", "")
+    allowed = [f"http://localhost:{FRONTEND_PORT}", "http://localhost:10003"]
+    if origin in allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    return {}
+
+
 # Authentication middleware
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -507,7 +519,7 @@ async def auth_middleware(request: Request, call_next):
             status_code=401,
             content='{"error": "unauthorized", "message": "Missing Authorization header", "denial_level": "agent", "denial_reason": "missing_token"}',
             media_type="application/json",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": "Bearer", **_cors_headers(request)},
         )
 
     if not auth_header.startswith("Bearer "):
@@ -516,6 +528,7 @@ async def auth_middleware(request: Request, call_next):
             status_code=401,
             content='{"error": "unauthorized", "message": "Invalid Authorization format", "denial_level": "agent", "denial_reason": "invalid_format"}',
             media_type="application/json",
+            headers=_cors_headers(request),
         )
 
     token = auth_header[7:]
@@ -536,6 +549,7 @@ async def auth_middleware(request: Request, call_next):
                 status_code=403,
                 content='{"error": "access_denied", "message": "Your account has been blocked", "denial_level": "agent", "denial_reason": "blocked_user"}',
                 media_type="application/json",
+                headers=_cors_headers(request),
             )
 
         # Check group membership
@@ -545,6 +559,7 @@ async def auth_middleware(request: Request, call_next):
                 status_code=403,
                 content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
                 media_type="application/json",
+                headers=_cors_headers(request),
             )
 
         logger.debug("Access control passed, storing claims in request state")
@@ -563,6 +578,7 @@ async def auth_middleware(request: Request, call_next):
             status_code=401,
             content='{"error": "token_expired", "message": "Token has expired", "denial_level": "agent", "denial_reason": "token_expired"}',
             media_type="application/json",
+            headers=_cors_headers(request),
         )
     except Exception as e:
         logger.error(f"Auth failed: {type(e).__name__}: {str(e)}")
@@ -570,6 +586,7 @@ async def auth_middleware(request: Request, call_next):
             status_code=401,
             content=json.dumps({"error": "auth_failed", "message": str(e), "denial_level": "agent", "denial_reason": "validation_failed"}),
             media_type="application/json",
+            headers=_cors_headers(request),
         )
 
     logger.debug("Auth middleware complete, passing to next handler")

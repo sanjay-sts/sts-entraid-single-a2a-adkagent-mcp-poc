@@ -125,6 +125,8 @@ Confirms OBO uses app registration permissions, not user token scopes.
 | 4 | `permissions.toml` developer group mapped to `"viewer"` | Changed `c6097742...` mapping from `"viewer"` to `"developer"` | `permissions.toml` |
 | 5 | Denial classifier missed LLM soft denials | Added 4 regex patterns for `tool_not_available` | `frontend/src/utils/denialClassifier.js` |
 | 6 | Denial classifier missed "restricted to admin users" | Broadened `/restricted to administrators/i` → `/restricted to admin/i`, added `/don't have permission to/i` | `frontend/src/utils/denialClassifier.js` |
+| 7 | 403 error responses lacked CORS headers | Added `_cors_headers()` helper to auth middleware error responses | `a2a_server/server.py` |
+| 8 | Classifier missed "Tool 'X' not found" and "functions" | Added `/Tool.*not found/i`, broadened to `.*(tool\|function)` | `frontend/src/utils/denialClassifier.js` |
 
 ---
 
@@ -174,6 +176,49 @@ Confirms OBO uses app registration permissions, not user token scopes.
 
 ---
 
+## Test Suite D: No-Group User & Multi-Group User
+
+### D1: PradeepG (No-Group User) — Agent-Level Denial
+
+**User:** PradeepG@2tdgcb.onmicrosoft.com
+**Groups:** Not in AI-Agent-Admins, Developers, or Viewers
+**Result:** PASS — A2A gateway blocks with 403
+
+| Check | Result |
+|-------|--------|
+| Security Context Panel: "Not a member of any authorized group" | PASS |
+| Chat message → AGENT (red) badge | PASS |
+| HTTP status: 403 in Audit Log | PASS |
+| denial_reason: no_group_membership | PASS |
+
+**Issue found:** 403 responses initially returned "Failed to fetch" (HTTP 0) due to missing CORS headers on auth middleware error responses. Fixed by adding `_cors_headers()` helper.
+
+### D3: stsadmin (Multi-Group User) — Role Switching
+
+**User:** stsadmin@2tdgcb.onmicrosoft.com
+**Groups:** AI-Agent-Admins + AI-Agent-Developers + AI-Agent-Viewers (all 3)
+
+**D3.1 Security Context Panel:**
+
+| Check | Result |
+|-------|--------|
+| Role badge: ADMIN (green) — highest privilege wins | PASS |
+| available_roles: admin, developer, viewer (all three) | PASS |
+| Groups: f1c467f2→admin, c6097742→developer, a0cd9a0a→viewer | PASS |
+| Permissions: all 7 tools checked (admin) | PASS |
+
+**D3.1 Admin matrix:** 14/14 PASS
+**D3.2 Developer matrix (role switch):** 14/14 PASS
+**D3.3 Viewer matrix (role switch):** 14/14 PASS
+
+**Key observations:**
+- Role switching works without re-login — results clear on switch
+- stsadmin's OneDrive has real files (amazonq, Apps, Attachments, etc.)
+- `list_files` as admin/developer returns actual files; as viewer returns TOOL denial
+- All 3 roles produce correct permissions and denials
+
+---
+
 ## Summary
 
 | Suite | User | Role | Matrix Result | Chat Tests |
@@ -181,4 +226,5 @@ Confirms OBO uses app registration permissions, not user token scopes.
 | A | AdeleV | admin | 14/14 PASS | A3-OBO: 3/3 PASS |
 | B | DiegoS | developer | 14/14 PASS | — |
 | C | JohannaL | viewer | 14/14 PASS | — |
-| D | no-group / stsadmin | various | *not yet tested* | — |
+| D1 | PradeepG | none (no group) | AGENT 403 PASS | Chat: AGENT badge |
+| D3 | stsadmin | admin/dev/viewer | 14/14 x3 PASS | Role switch verified |
