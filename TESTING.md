@@ -445,7 +445,7 @@ Role assignment uses `permissions.toml` (agent-owned, gitignored). Map Entra ID 
 ### Role-Specific Expectations
 
 1. **Admin User**: Add user to Admin security group, set `X-Assume-Role: admin`
-   - Can use all 7 tools: profile, files, email, delete, time tools
+   - Can use all 10 tools: profile, files, email, delete, time tools
    - Can step down to viewer via user override + `X-Assume-Role: viewer`
 
 2. **Developer User**: Add user to Developer security group, set `X-Assume-Role: developer`
@@ -675,7 +675,7 @@ For detailed manual testing of the Security Testing Dashboard with step-by-step 
 ### Quick Start
 
 1. Sign in as **admin** (AdeleV@2tdgcb.onmicrosoft.com)
-2. Verify Security Context Panel shows green **ADMIN** badge with all 7 permissions checked
+2. Verify Security Context Panel shows green **ADMIN** badge with all 10 permissions checked
 3. Click **Run All** in the RBAC Test Matrix
 4. All rows should show **PASS** (green)
 5. Switch to **developer** and **viewer** accounts and repeat

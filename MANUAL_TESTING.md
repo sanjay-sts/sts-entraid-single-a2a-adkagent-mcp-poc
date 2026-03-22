@@ -56,7 +56,7 @@ Test for **each role** (admin, developer, viewer):
 ### Admin (sign in as AdeleV@)
 
 - [ ] Role badge shows **ADMIN** in green
-- [ ] **Permissions** section shows all 7 tools checked:
+- [ ] **Permissions** section shows all 10 tools checked:
   - [x] get_user_profile
   - [x] list_files
   - [x] send_email
@@ -64,6 +64,9 @@ Test for **each role** (admin, developer, viewer):
   - [x] get_current_time
   - [x] convert_timezone
   - [x] get_time_difference
+  - [x] list_s3_buckets
+  - [x] list_s3_objects
+  - [x] get_s3_object_info
 - [ ] **Groups** section shows group IDs with role name mappings
 - [ ] **Token Scopes** lists scopes matching the selected scope preset
 - [ ] **Token Expiry** countdown is running (green = > 5 min)

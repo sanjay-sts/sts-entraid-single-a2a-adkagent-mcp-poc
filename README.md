@@ -21,25 +21,25 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 
 ### Overview
 
-This system implements an identity-aware AI agent using **OAuth 2.0 with OpenID Connect (OIDC)** for authentication and authorization, powered by Microsoft Entra ID:
+This system implements an identity-aware AI agent using **OAuth 2.0 with OpenID Connect (OIDC)** for authentication and authorization, supporting multiple Identity Providers (Microsoft Entra ID and AWS Cognito):
 
 - **Protocol**: OAuth 2.0 Authorization Code Flow with PKCE (Proof Key for Code Exchange)
-- **Token format**: JWT access tokens signed by Entra ID, validated via JWKS (JSON Web Key Sets)
-- **Frontend**: React with MSAL.js 3.6 — acquires tokens via PKCE (no implicit grant)
+- **Token format**: JWT access tokens signed by IdP, validated via JWKS (JSON Web Key Sets)
+- **Frontend**: React with MSAL.js 3.6 (Entra) + AWS Amplify 6 (Cognito) — unified AuthProvider
 - **Gateway**: A2A Protocol server for agent discovery and request routing
-- **Agent**: Google ADK with Claude Sonnet 4 via LiteLLM
-- **Tools**: FastMCP server providing identity-aware tools
+- **Agent**: Google ADK with Claude Haiku 4.5 via LiteLLM (AWS Bedrock)
+- **Tools**: FastMCP server providing identity-aware tools (Graph API + S3)
 
 ### Technology Stack
 
 | Component | Technology | Port | Purpose |
 |-----------|------------|------|---------|
-| Frontend | React 18 + MSAL.js 3.6 | 10003 | User authentication, token acquisition |
+| Frontend | React 18 + MSAL.js 3.6 + AWS Amplify 6 | 10003 | User authentication, token acquisition |
 | Gateway | A2A Protocol (FastAPI + a2a-sdk) | 10000 | Agent discovery, agent-level ACL, streaming |
-| Agent | Google ADK + LiteLLM + Claude Sonnet 4 | 10001 | LLM orchestration, tool calling |
+| Agent | Google ADK + LiteLLM + Claude Haiku 4.5 (Bedrock) | 10001 | LLM orchestration, tool calling |
 | Tools | FastMCP (Stateless HTTP) | 10002 | Tool execution, token propagation |
-| Identity | Microsoft Entra ID | - | OAuth 2.0 + OIDC, Authorization Code with PKCE |
-| Resources | Microsoft Graph API | - | User data, files, email |
+| Identity | Entra ID + AWS Cognito | - | OAuth 2.0 + OIDC, multi-IdP JWT validation |
+| Resources | Microsoft Graph API, AWS S3 | - | User data, files, email, cloud storage |
 
 ### Three-Tier Security Model
 
@@ -58,21 +58,26 @@ This system implements an identity-aware AI agent using **OAuth 2.0 with OpenID 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Entra ID Authentication | ✅ Working | MSAL.js popup/silent token acquisition |
+| AWS Cognito Authentication | ✅ Working | Amplify Hosted UI redirect flow |
 | Custom API Scope | ✅ Working | `api://{client-id}/access_as_user` |
-| Token Validation (v1.0 & v2.0) | ✅ Working | Supports both Entra ID token versions |
+| Multi-IdP Token Validation | ✅ Working | Entra v1.0/v2.0 + Cognito JWTs |
 | A2A Protocol | ✅ Working | Agent card discovery, message/send |
-| ADK + Claude Sonnet 4 | ✅ Working | Via LiteLLM, no looping issues |
+| ADK + Claude Haiku 4.5 | ✅ Working | Via LiteLLM on AWS Bedrock |
 | MCP Tools (Stateless) | ✅ Working | Token passed via header_provider |
 | Multi-turn Conversations | ✅ Working | Session state preserved in ADK |
 | RBAC Enforcement | ✅ Working | Three-tier access control |
+| OBO Token Exchange | ✅ Working | Graph API via On-Behalf-Of flow |
+| S3 Tools | ✅ Working | Server-side AWS credentials |
+| X-Assume-Role | ✅ Working | End-to-end role propagation |
 
 ### Known Limitations
 
-| Limitation | Impact | Location |
-|-----------|--------|----------|
-| Graph API returns 401 | Using token claims fallback | MCP tools |
-| Session in-memory only | Lost on restart | ADK Agent |
-| No streaming to frontend | Full response only | Frontend |
+| Limitation | Impact |
+|-----------|--------|
+| Frontend uses buffered `/chat` not `/chat/stream` | Response shown all at once |
+| Session service in-memory | Lost on restart |
+| JWKS cache never time-invalidated (A2A) | Stale keys possible (auto-clears on miss) |
+| Group overage not handled | Entra >150 groups logged but not fetched |
 
 ---
 
@@ -133,7 +138,7 @@ This system implements an identity-aware AI agent using **OAuth 2.0 with OpenID 
 │                                          │                                           │
 │                                          ▼                                           │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│  │                    LlmAgent (Claude Sonnet 4 via LiteLLM)                     │   │
+│  │                    LlmAgent (Claude Haiku 4.5 via LiteLLM)                     │   │
 │  │  - Processes user message                                                     │   │
 │  │  - Decides which tools to call                                               │   │
 │  │  - Formats final response                                                     │   │

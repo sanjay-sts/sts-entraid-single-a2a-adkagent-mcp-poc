@@ -1,20 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../AuthProvider';
+import { A2A_SERVER_URL, PROVIDER_LABELS } from '../utils/constants';
 
-const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
-
-const ROLE_COLORS = {
-  admin: 'role-admin',
-  developer: 'role-developer',
-  viewer: 'role-viewer',
-  none: 'role-none',
-};
-
-const PROVIDER_LABELS = {
-  entra: 'ENTRA ID',
-  cognito: 'COGNITO',
-  unknown: 'UNKNOWN',
-};
+const EXPIRY_WARNING_SECONDS = 300;
 
 export default function SecurityContextPanel({ scopeKey, onSecurityContext, selectedRole, onRoleChange }) {
   const { isAuthenticated, getAccessToken, provider } = useAuth();
@@ -110,8 +98,13 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
 
   const { security, user, permissions } = securityCtx;
   const detectedProvider = security.provider || provider || 'unknown';
-  const expiryClass = expiryCountdown === 'EXPIRED' ? 'expiry-expired'
-    : (securityCtx.security.token_expiry - Math.floor(Date.now() / 1000) < 300 ? 'expiry-warning' : 'expiry-ok');
+
+  let expiryClass = 'expiry-ok';
+  if (expiryCountdown === 'EXPIRED') {
+    expiryClass = 'expiry-expired';
+  } else if (security.token_expiry - Math.floor(Date.now() / 1000) < EXPIRY_WARNING_SECONDS) {
+    expiryClass = 'expiry-warning';
+  }
 
   return (
     <div className="security-panel">
@@ -120,7 +113,7 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
       <div className="panel-section">
         <label>Provider</label>
         <span className={`provider-badge provider-${detectedProvider}`}>
-          {PROVIDER_LABELS[detectedProvider] || detectedProvider.toUpperCase()}
+          {(PROVIDER_LABELS[detectedProvider] || detectedProvider).toUpperCase()}
         </span>
       </div>
 
@@ -142,7 +135,7 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
             ))}
           </select>
         ) : (
-          <span className={`role-badge ${ROLE_COLORS[security.role] || 'role-none'}`}>
+          <span className={`role-badge role-${security.role}`}>
             {security.role.toUpperCase()}
           </span>
         )}

@@ -1,9 +1,11 @@
 """Test access control at all three levels."""
+import os
+
 import pytest
 import httpx
 import jwt
 from datetime import datetime, timezone, timedelta
-import os
+from tests.conftest import create_cognito_test_token
 
 # Test configuration
 A2A_URL = os.getenv("A2A_URL", "http://localhost:10000")
@@ -323,41 +325,6 @@ class TestHealthEndpoints:
                 assert response.status_code in [200, 404]
             except httpx.ConnectError:
                 pytest.skip("MCP server not running")
-
-
-# Pytest configuration
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests."""
-    import asyncio
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-def create_cognito_test_token(
-    user_id: str,
-    groups: list,
-    email: str = "test@cognito.example.com",
-) -> str:
-    """Create a mock Cognito JWT token (HS256 for testing)."""
-    return jwt.encode(
-        {
-            "sub": user_id,
-            "cognito:groups": groups,
-            "cognito:username": user_id,
-            "email": email,
-            "token_use": "access",
-            "scope": "openid profile email ai-agent-api/access_as_user",
-            "aud": os.getenv("COGNITO_CLIENT_ID", "test-cognito-client"),
-            "iss": f"https://cognito-idp.{os.getenv('COGNITO_REGION', 'us-east-1')}.amazonaws.com/{os.getenv('COGNITO_USER_POOL_ID', 'us-east-1_test')}",
-            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-            "iat": datetime.now(timezone.utc),
-            "nbf": datetime.now(timezone.utc),
-        },
-        SECRET_KEY,
-        algorithm="HS256",
-    )
 
 
 class TestCognitoAccess:

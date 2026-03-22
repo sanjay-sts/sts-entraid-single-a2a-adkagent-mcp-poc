@@ -11,7 +11,6 @@ tokens for Graph — they get a clean error; agent-owned tools still work.
 import os
 import hashlib
 import logging
-from functools import lru_cache
 
 from azure.identity.aio import OnBehalfOfCredential
 

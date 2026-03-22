@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import DenialIndicator from './DenialIndicator';
 
+const PROMPT_TRUNCATE_LENGTH = 40;
+
 export default function AuditLog({ entries }) {
   const [collapsed, setCollapsed] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
@@ -50,7 +52,7 @@ export default function AuditLog({ entries }) {
                       <td>{i + 1}</td>
                       <td>{new Date(entry.timestamp).toLocaleTimeString()}</td>
                       <td className="audit-prompt" title={entry.prompt}>
-                        {entry.prompt.length > 40 ? entry.prompt.substring(0, 40) + '...' : entry.prompt}
+                        {entry.prompt.length > PROMPT_TRUNCATE_LENGTH ? entry.prompt.substring(0, PROMPT_TRUNCATE_LENGTH) + '...' : entry.prompt}
                       </td>
                       <td><span className="scope-tag scope-tag-sm">{entry.scopeKey}</span></td>
                       <td>{entry.role ? <span className={`role-badge role-${entry.role}`}>{entry.role}</span> : '--'}</td>

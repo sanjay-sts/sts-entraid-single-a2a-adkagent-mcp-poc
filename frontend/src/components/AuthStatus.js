@@ -1,10 +1,6 @@
 import React from 'react';
 import { useAuth } from '../AuthProvider';
-
-const PROVIDER_LABELS = {
-  entra: 'Entra ID',
-  cognito: 'Cognito',
-};
+import { PROVIDER_LABELS } from '../utils/constants';
 
 export default function AuthStatus() {
   const { provider, isAuthenticated, user, login, logout, switchProvider } = useAuth();
@@ -34,9 +30,7 @@ export default function AuthStatus() {
       <button onClick={logout}>Sign Out</button>
       <button
         className="btn-secondary"
-        onClick={() => {
-          switchProvider(null);
-        }}
+        onClick={() => switchProvider(null)}
         title="Switch identity provider"
       >
         Switch IdP

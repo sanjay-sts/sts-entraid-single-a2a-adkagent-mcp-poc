@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '../AuthProvider';
-import { classifyDenial } from '../utils/denialClassifier';
+import { sendA2AMessage, buildAuditEntry } from '../utils/a2aClient';
 import { getScenariosForRole } from '../utils/testScenarios';
 import DenialIndicator from './DenialIndicator';
 
-const A2A_SERVER_URL = process.env.REACT_APP_A2A_SERVER_URL || 'http://localhost:10000';
+const RUN_ALL_DELAY_MS = 2000;
 
 export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
   const { getAccessToken } = useAuth();
@@ -15,87 +15,44 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
   const effectiveRole = selectedRole || role;
   const scenarios = getScenariosForRole(effectiveRole);
 
-  // Clear results when role changes
   useEffect(() => {
     setResults({});
   }, [selectedRole]);
 
   const runScenario = useCallback(async (scenario) => {
     setRunning(scenario.id);
-    const startTime = performance.now();
 
     try {
       const accessToken = await getAccessToken(scenario.scopeKey);
-
-      const response = await fetch(A2A_SERVER_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
-          ...(selectedRole && { 'X-Assume-Role': selectedRole }),
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'message/send',
-          params: {
-            message: {
-              messageId: `test-${scenario.id}-${Date.now()}`,
-              role: 'user',
-              parts: [{ type: 'text', text: scenario.prompt }],
-            },
-          },
-          id: `test-${Date.now()}`,
-        }),
+      const result = await sendA2AMessage({
+        accessToken,
+        message: scenario.prompt,
+        selectedRole,
       });
 
-      const latency = Math.round(performance.now() - startTime);
-      const httpStatus = response.status;
-      let body = null;
-      let responseText = '';
-
-      if (httpStatus === 401 || httpStatus === 403) {
-        body = await response.json().catch(() => ({}));
-        responseText = body.message || '';
-      } else {
-        body = await response.json();
-        // Extract agent text
-        if (body.result?.status?.message?.parts) {
-          responseText = body.result.status.message.parts
-            .filter(p => p.kind === 'text' || p.type === 'text')
-            .map(p => p.text).join('\n');
-        } else if (body.result?.message?.parts) {
-          responseText = body.result.message.parts
-            .filter(p => p.kind === 'text' || p.type === 'text')
-            .map(p => p.text).join('\n');
-        }
-      }
-
-      const denial = classifyDenial(httpStatus, body, responseText);
-      const succeeded = !denial;
+      const succeeded = !result.denial;
       const pass = succeeded === scenario.shouldSucceed;
 
       setResults(prev => ({
         ...prev,
-        [scenario.id]: { pass, denial, latency, httpStatus, succeeded },
+        [scenario.id]: { pass, denial: result.denial, latency: result.latency, httpStatus: result.httpStatus, succeeded },
       }));
 
       if (onAuditEntry) {
-        onAuditEntry({
-          timestamp: new Date().toISOString(),
+        onAuditEntry(buildAuditEntry({
           prompt: `[TEST: ${scenario.id}] ${scenario.prompt}`,
           scopeKey: scenario.scopeKey,
-          role: selectedRole,
-          httpStatus,
-          denial,
-          latency,
-          response: body,
-        });
+          selectedRole,
+          httpStatus: result.httpStatus,
+          denial: result.denial,
+          latency: result.latency,
+          response: result.body,
+        }));
       }
     } catch (err) {
-      const latency = Math.round(performance.now() - startTime);
       setResults(prev => ({
         ...prev,
-        [scenario.id]: { pass: false, error: err.message, latency, httpStatus: 0, succeeded: false },
+        [scenario.id]: { pass: false, error: err.message, latency: 0, httpStatus: 0, succeeded: false },
       }));
     } finally {
       setRunning(null);
@@ -106,11 +63,12 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
     setRunningAll(true);
     for (const scenario of scenarios) {
       await runScenario(scenario);
-      // Small delay to avoid overwhelming the server
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, RUN_ALL_DELAY_MS));
     }
     setRunningAll(false);
   };
+
+  const isDisabled = running !== null || runningAll;
 
   return (
     <div className="rbac-matrix">
@@ -166,7 +124,7 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
                     <button
                       className="btn-small btn-run"
                       onClick={() => runScenario(scenario)}
-                      disabled={running !== null || runningAll}
+                      disabled={isDisabled}
                     >
                       Run
                     </button>
@@ -181,7 +139,7 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
       <button
         className="btn-run-all"
         onClick={runAll}
-        disabled={running !== null || runningAll}
+        disabled={isDisabled}
       >
         {runningAll ? 'Running...' : 'Run All'}
       </button>

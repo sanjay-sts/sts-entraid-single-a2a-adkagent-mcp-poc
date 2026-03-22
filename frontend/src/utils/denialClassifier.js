@@ -1,10 +1,32 @@
+// LLM may paraphrase tool denials -- these patterns catch common phrasings
+const TOOL_SOFT_DENIAL_PATTERNS = [
+  /don't have the ability to/i,
+  /don't have access to.*(tool|function)/i,
+  /don't have permission to/i,
+  /restricted to admin/i,
+  /tools available to me are limited/i,
+  /Tool.*not found/i,
+];
+
+const GRAPH_DENIAL_PATTERNS = [
+  /graph_api_unavailable/i,
+  /(401|403).*graph/i,
+  /graph.*(401|403)/i,
+  /401.*unauthorized/i,
+  /OBO flow/i,
+  /insufficient_scope/i,
+  /Access is denied/i,
+];
+
+function matchesAny(text, patterns) {
+  return patterns.some(p => p.test(text));
+}
+
 /**
  * Classify a denial by tier based on HTTP status and response content.
- *
- * Returns: { level: 'agent'|'tool'|'scope'|'resource', reason: string } or null for success.
+ * Returns { level, reason } or null for success.
  */
 export function classifyDenial(httpStatus, responseBody, responseText) {
-  // 1. HTTP 401/403 from A2A server → agent level
   if (httpStatus === 401 || httpStatus === 403) {
     const reason = responseBody?.denial_reason || responseBody?.error || 'unknown';
     return { level: 'agent', reason };
@@ -12,50 +34,36 @@ export function classifyDenial(httpStatus, responseBody, responseText) {
 
   const text = responseText || '';
 
-  // 2. Explicit TOOL_DENIAL tag from MCP ToolError
+  // Explicit denial tags from MCP ToolError
   if (text.includes('[TOOL_DENIAL]')) {
     return { level: 'tool', reason: 'role_denied' };
   }
-
-  // 3. Explicit SCOPE_DENIAL tag from MCP ToolError
   if (text.includes('[SCOPE_DENIAL]')) {
     return { level: 'scope', reason: 'missing_scopes' };
   }
 
-  // 4. Fallback regex patterns (LLM may paraphrase)
+  // Fallback regex patterns for LLM-paraphrased denials
   if (/Role.*cannot use/i.test(text)) {
     return { level: 'tool', reason: 'role_denied' };
   }
-  // 4b. LLM soft denial — tool not exposed for this role (LLM says it can't do it)
-  if (/don't have the ability to/i.test(text) ||
-      /don't have access to.*(tool|function)/i.test(text) ||
-      /don't have permission to/i.test(text) ||
-      /restricted to admin/i.test(text) ||
-      /tools available to me are limited/i.test(text) ||
-      /Tool.*not found/i.test(text)) {
+  if (matchesAny(text, TOOL_SOFT_DENIAL_PATTERNS)) {
     return { level: 'tool', reason: 'tool_not_available' };
   }
   if (/Missing scopes/i.test(text) || /Insufficient permissions/i.test(text)) {
     return { level: 'scope', reason: 'missing_scopes' };
   }
 
-  // 5. Graph API resource-level denial (401 or 403)
-  if (/graph_api_unavailable/i.test(text) ||
-      /(401|403).*graph/i.test(text) ||
-      /graph.*(401|403)/i.test(text) ||
-      /401.*unauthorized/i.test(text) ||
-      /OBO flow/i.test(text) ||
-      /insufficient_scope/i.test(text) ||
-      /Access is denied/i.test(text)) {
+  // Graph API resource-level denial
+  if (matchesAny(text, GRAPH_DENIAL_PATTERNS)) {
     return { level: 'resource', reason: 'graph_api_denied' };
   }
 
-  // 5b. S3/AWS errors (resource-level)
+  // S3/AWS resource-level errors
   if (/aws_not_configured/i.test(text) || /s3_access_denied/i.test(text)) {
     return { level: 'resource', reason: 'aws_error' };
   }
 
-  // 6. Generic access denied in response text
+  // Generic access denied (but not role-based, which was already caught above)
   if (/Access denied/i.test(text) && !/Role.*cannot/i.test(text)) {
     return { level: 'tool', reason: 'access_denied' };
   }

@@ -2,22 +2,21 @@
 
 Implements the A2A Protocol with proper SSE streaming.
 """
-import os
 import json
-import jwt
-import asyncio
 import logging
+import os
+import sys
 import uuid
 from dataclasses import dataclass
 from contextvars import ContextVar
 from pathlib import Path
-from typing import AsyncIterable
 from contextlib import asynccontextmanager
+
+import httpx
+import jwt
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-import sys
-import httpx
-from dotenv import load_dotenv
 
 # Add project root to path for shared dev_config module
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -57,8 +56,6 @@ from a2a.types import (
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
-    TaskArtifactUpdateEvent,
-    Artifact,
     SecurityScheme,
     HTTPAuthSecurityScheme,
 )
@@ -285,64 +282,61 @@ token_validator = TokenValidator()
 user_sessions = {}
 
 
+def _make_task_event(
+    context: RequestContext, state: TaskState, text: str | None = None, final: bool = True
+) -> TaskStatusUpdateEvent:
+    """Build a TaskStatusUpdateEvent, optionally with a text message."""
+    status_kwargs = {"state": state}
+    if text is not None:
+        status_kwargs["message"] = Message(
+            messageId=str(uuid.uuid4()),
+            role="agent",
+            parts=[Part(root=TextPart(text=text))],
+        )
+    return TaskStatusUpdateEvent(
+        task_id=context.task_id,
+        context_id=context.context_id,
+        status=TaskStatus(**status_kwargs),
+        final=final,
+    )
+
+
+def _extract_message_text(message) -> str:
+    """Extract plain text from an A2A message's parts."""
+    if not message or not message.parts:
+        return ""
+    texts = []
+    for part in message.parts:
+        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+            texts.append(part.root.text)
+        elif hasattr(part, 'text'):
+            texts.append(part.text)
+    return " ".join(texts).strip()
+
+
 class IdentityAwareAgentExecutor(AgentExecutor):
     """Agent executor that forwards requests to the ADK agent with user context."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Execute the agent request with streaming support."""
         try:
-            # Get user context from context variables (set by auth middleware)
             user_claims = current_user_claims.get()
             access_token = current_access_token.get()
-            logger.debug(f"Agent executor - user_claims: {bool(user_claims)}, access_token length: {len(access_token)}")
 
-            # Update task status to working
             await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=context.task_id,
-                    context_id=context.context_id,
-                    status=TaskStatus(state=TaskState.working),
-                    final=False,
-                )
+                _make_task_event(context, TaskState.working, final=False)
             )
 
-            # Extract message text from the request
-            message_text = ""
-            if context.message and context.message.parts:
-                for part in context.message.parts:
-                    if hasattr(part, 'root') and hasattr(part.root, 'text'):
-                        message_text += part.root.text + " "
-                    elif hasattr(part, 'text'):
-                        message_text += part.text + " "
-
-            message_text = message_text.strip()
-            logger.debug(f"Message text: {message_text}")
-
+            message_text = _extract_message_text(context.message)
             if not message_text:
                 await event_queue.enqueue_event(
-                    TaskStatusUpdateEvent(
-                        task_id=context.task_id,
-                        context_id=context.context_id,
-                        status=TaskStatus(
-                            state=TaskState.failed,
-                            message=Message(
-                                messageId=str(uuid.uuid4()),
-                                role="agent",
-                                parts=[Part(root=TextPart(text="No message text provided"))],
-                            ),
-                        ),
-                        final=True,
-                    )
+                    _make_task_event(context, TaskState.failed, "No message text provided")
                 )
                 return
 
-            # Ensure session exists for user
             user_id = user_claims.get("sub", user_claims.get("oid", "anonymous"))
             session_id = await self._ensure_session(user_id, user_claims, access_token)
-            logger.debug(f"Session ID: {session_id} for user: {user_id}")
 
-            # Call ADK agent
-            logger.debug(f"Calling ADK agent at {ADK_SERVER_URL}/chat")
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{ADK_SERVER_URL}/chat",
@@ -358,59 +352,22 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                 response.raise_for_status()
                 data = response.json()
 
-            # Send the response as a completed task
             response_text = data.get("response", "No response from agent")
-            logger.info(f"Agent response received: {response_text[:100]}...")
+            logger.info("Agent response received (length: %d)", len(response_text))
 
             await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=context.task_id,
-                    context_id=context.context_id,
-                    status=TaskStatus(
-                        state=TaskState.completed,
-                        message=Message(
-                            messageId=str(uuid.uuid4()),
-                            role="agent",
-                            parts=[Part(root=TextPart(text=response_text))],
-                        ),
-                    ),
-                    final=True,
-                )
+                _make_task_event(context, TaskState.completed, response_text)
             )
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error calling ADK: {e.response.status_code} - {e.response.text}")
+            logger.error("HTTP error calling ADK: %d - %s", e.response.status_code, e.response.text)
             await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=context.task_id,
-                    context_id=context.context_id,
-                    status=TaskStatus(
-                        state=TaskState.failed,
-                        message=Message(
-                            messageId=str(uuid.uuid4()),
-                            role="agent",
-                            parts=[Part(root=TextPart(text=f"Agent error: {e.response.text}"))],
-                        ),
-                    ),
-                    final=True,
-                )
+                _make_task_event(context, TaskState.failed, f"Agent error: {e.response.text}")
             )
         except Exception as e:
-            logger.error(f"Error in agent executor: {type(e).__name__}: {str(e)}")
+            logger.error("Error in agent executor: %s: %s", type(e).__name__, e)
             await event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=context.task_id,
-                    context_id=context.context_id,
-                    status=TaskStatus(
-                        state=TaskState.failed,
-                        message=Message(
-                            messageId=str(uuid.uuid4()),
-                            role="agent",
-                            parts=[Part(root=TextPart(text=f"Error: {str(e)}"))],
-                        ),
-                    ),
-                    final=True,
-                )
+                _make_task_event(context, TaskState.failed, f"Error: {e}")
             )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -427,17 +384,18 @@ class IdentityAwareAgentExecutor(AgentExecutor):
     async def _ensure_session(self, user_id: str, user_claims: dict, access_token: str) -> str:
         """Ensure a session exists for the user."""
         if user_id not in user_sessions:
+            provider = _detect_provider(user_claims)
+            email, name, groups = _extract_user_info(user_claims, provider)
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{ADK_SERVER_URL}/session",
                     json={
                         "user_id": user_id,
                         "user_info": {
-                            # Try multiple claim names for email (v2.0: preferred_username, v1.0: unique_name, upn, Cognito: email/cognito:username)
-                            "email": user_claims.get("preferred_username") or user_claims.get("unique_name") or user_claims.get("upn") or user_claims.get("email") or user_claims.get("cognito:username", ""),
-                            # Try multiple claim names for name
-                            "name": user_claims.get("name") or user_claims.get("given_name", ""),
-                            "groups": user_claims.get("cognito:groups") or user_claims.get("groups", []),
+                            "email": email,
+                            "name": name,
+                            "groups": groups,
                             "assumed_role": current_assumed_role.get(),
                         },
                     },
@@ -577,7 +535,7 @@ def _cors_headers(request: Request) -> dict:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Validate tokens and enforce agent-level access control."""
-    logger.debug(f"Incoming request: {request.method} {request.url.path}")
+    logger.debug("Incoming request: %s %s", request.method, request.url.path)
 
     # Allow CORS preflight requests without auth
     if request.method == "OPTIONS":
@@ -592,7 +550,7 @@ async def auth_middleware(request: Request, call_next):
         "/docs",
         "/openapi.json",
     ]:
-        logger.debug(f"Allowing unauthenticated access to {request.url.path}")
+        logger.debug("Allowing unauthenticated access to %s", request.url.path)
         return await call_next(request)
 
     # Development auth bypass (dev_config.toml)
@@ -614,7 +572,7 @@ async def auth_middleware(request: Request, call_next):
 
     # Require auth for all other endpoints
     auth_header = request.headers.get("Authorization")
-    logger.debug(f"Authorization header present: {bool(auth_header)}")
+    logger.debug("Authorization header present: %s", bool(auth_header))
     if not auth_header:
         logger.warning("Missing Authorization header")
         return Response(
@@ -625,7 +583,7 @@ async def auth_middleware(request: Request, call_next):
         )
 
     if not auth_header.startswith("Bearer "):
-        logger.warning(f"Invalid Authorization format: {auth_header[:20]}...")
+        logger.warning("Invalid Authorization format: %.20s...", auth_header)
         return Response(
             status_code=401,
             content='{"error": "unauthorized", "message": "Invalid Authorization format", "denial_level": "agent", "denial_reason": "invalid_format"}',
@@ -634,19 +592,18 @@ async def auth_middleware(request: Request, call_next):
         )
 
     token = auth_header[7:]
-    logger.debug(f"Extracted Bearer token (length: {len(token)})")
+    logger.debug("Extracted Bearer token (length: %d)", len(token))
 
     try:
         claims = await token_validator.validate(token)
         user_id = claims.get("sub", "")
         user_groups = claims.get("groups", [])
-        logger.info(f"Token validated for user: {claims.get('preferred_username', user_id)}")
-        logger.debug(f"User groups: {user_groups}")
-        logger.debug(f"Allowed groups: {ALLOWED_GROUPS}")
+        logger.info("Token validated for user: %s", claims.get('preferred_username', user_id))
+        logger.debug("User groups: %s", user_groups)
 
         # Check if user is blocked
         if user_id in BLOCKED_USERS:
-            logger.warning(f"Blocked user attempted access: {user_id}")
+            logger.warning("Blocked user attempted access: %s", user_id)
             return Response(
                 status_code=403,
                 content='{"error": "access_denied", "message": "Your account has been blocked", "denial_level": "agent", "denial_reason": "blocked_user"}',
@@ -657,26 +614,19 @@ async def auth_middleware(request: Request, call_next):
         # Check group membership (provider-aware)
         provider = _detect_provider(claims)
         if provider == "cognito":
-            # Cognito uses cognito:groups claim with group names
             user_groups = claims.get("cognito:groups", [])
-            if COGNITO_ALLOWED_GROUPS and not any(g in COGNITO_ALLOWED_GROUPS for g in user_groups):
-                logger.warning(f"Cognito user not in allowed groups. Has: {user_groups}, Allowed: {COGNITO_ALLOWED_GROUPS}")
-                return Response(
-                    status_code=403,
-                    content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
-                    media_type="application/json",
-                    headers=_cors_headers(request),
-                )
+            allowed = COGNITO_ALLOWED_GROUPS
         else:
-            # Entra ID uses groups claim with GUIDs
-            if ALLOWED_GROUPS and not any(g in ALLOWED_GROUPS for g in user_groups):
-                logger.warning(f"User {user_id} not in allowed groups. Has: {user_groups}, Allowed: {ALLOWED_GROUPS}")
-                return Response(
-                    status_code=403,
-                    content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
-                    media_type="application/json",
-                    headers=_cors_headers(request),
-                )
+            allowed = ALLOWED_GROUPS
+
+        if allowed and not any(g in allowed for g in user_groups):
+            logger.warning("User %s not in allowed groups. Has: %s, Allowed: %s", user_id, user_groups, allowed)
+            return Response(
+                status_code=403,
+                content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
+                media_type="application/json",
+                headers=_cors_headers(request),
+            )
 
         logger.debug("Access control passed, storing claims in request state")
         # Store claims in request state for the agent executor
@@ -697,7 +647,7 @@ async def auth_middleware(request: Request, call_next):
             headers=_cors_headers(request),
         )
     except Exception as e:
-        logger.error(f"Auth failed: {type(e).__name__}: {str(e)}")
+        logger.error("Auth failed: %s: %s", type(e).__name__, e)
         return Response(
             status_code=401,
             content=json.dumps({"error": "auth_failed", "message": str(e), "denial_level": "agent", "denial_reason": "validation_failed"}),
@@ -775,11 +725,34 @@ def _detect_provider(claims: dict) -> str:
     return "unknown"
 
 
+def _extract_user_info(claims: dict, provider: str) -> tuple[str, str, list]:
+    """Extract (email, name, groups) from claims based on provider.
+
+    Returns a tuple of (email, display_name, group_list).
+    """
+    if provider == "cognito":
+        email = claims.get("email") or claims.get("cognito:username", "")
+        name = claims.get("name") or claims.get("email", "")
+        groups = claims.get("cognito:groups", [])
+    else:
+        email = (
+            claims.get("preferred_username")
+            or claims.get("unique_name")
+            or claims.get("upn")
+            or claims.get("email", "")
+        )
+        name = claims.get("name") or claims.get("given_name", "")
+        groups = claims.get("groups", [])
+    return email, name, groups
+
+
+ROLE_PRIORITY = ["admin", "developer", "viewer"]
+
+
 def _determine_role(groups: list) -> str:
     """Map user groups to highest privilege role."""
-    role_priority = ["admin", "developer", "viewer"]
-    user_roles = [GROUP_TO_ROLE.get(g) for g in groups if g in GROUP_TO_ROLE]
-    for role in role_priority:
+    user_roles = {GROUP_TO_ROLE[g] for g in groups if g in GROUP_TO_ROLE}
+    for role in ROLE_PRIORITY:
         if role in user_roles:
             return role
     return "none"
@@ -787,9 +760,8 @@ def _determine_role(groups: list) -> str:
 
 def _get_available_roles(groups: list) -> list:
     """Return all roles the user qualifies for, ordered by priority."""
-    role_priority = ["admin", "developer", "viewer"]
-    user_roles = {GROUP_TO_ROLE.get(g) for g in groups if g in GROUP_TO_ROLE}
-    return [r for r in role_priority if r in user_roles]
+    user_roles = {GROUP_TO_ROLE[g] for g in groups if g in GROUP_TO_ROLE}
+    return [r for r in ROLE_PRIORITY if r in user_roles]
 
 
 # Health check endpoint
@@ -811,19 +783,13 @@ async def get_me(request: Request):
         )
 
     provider = _detect_provider(claims)
-
-    # Provider-specific claim extraction
-    if provider == "cognito":
-        user_email = claims.get("email") or claims.get("cognito:username", "")
-        user_name = claims.get("name") or claims.get("email", "")
-        user_groups = claims.get("cognito:groups", [])
-    else:
-        user_email = claims.get("preferred_username") or claims.get("unique_name") or claims.get("upn", "")
-        user_name = claims.get("name") or claims.get("given_name", "")
-        user_groups = claims.get("groups", [])
+    user_email, user_name, user_groups = _extract_user_info(claims, provider)
 
     available_roles = _get_available_roles(user_groups)
-    token_scopes = claims.get("scp", "").split() if isinstance(claims.get("scp", ""), str) else claims.get("scope", "").split() if isinstance(claims.get("scope", ""), str) else []
+
+    # Extract scopes from the token -- Entra uses "scp", Cognito/Auth0 use "scope"
+    raw_scopes = claims.get("scp", "") or claims.get("scope", "")
+    token_scopes = raw_scopes.split() if isinstance(raw_scopes, str) else []
 
     # In dev bypass mode with no group IDs configured, grant all roles
     if is_auth_disabled("a2a") and not available_roles:
@@ -838,16 +804,8 @@ async def get_me(request: Request):
     else:
         active_role = _determine_role(user_groups)
 
-    # Build group names mapping
-    group_names = {}
-    for gid in user_groups:
-        if gid in GROUP_TO_ROLE:
-            group_names[gid] = GROUP_TO_ROLE[gid]
-
-    # Build permission matrix based on active role
-    permissions = {}
-    for tool, allowed_roles in TOOL_ROLES.items():
-        permissions[tool] = active_role in allowed_roles
+    group_names = {gid: GROUP_TO_ROLE[gid] for gid in user_groups if gid in GROUP_TO_ROLE}
+    permissions = {tool: active_role in roles for tool, roles in TOOL_ROLES.items()}
 
     return {
         "user": {

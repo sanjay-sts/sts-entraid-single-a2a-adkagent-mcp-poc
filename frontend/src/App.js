@@ -9,29 +9,23 @@ import ConversationTabs from './components/ConversationTabs';
 import AuditLog from './components/AuditLog';
 
 function App() {
-  const { isAuthenticated, provider } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [auditEntries, setAuditEntries] = useState([]);
   const [securityCtx, setSecurityCtx] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedRole, setSelectedRole] = useState(null);
 
-  // Current scope key from the active conversation tab (defaults to basic)
   const currentScopeKey = 'basic';
 
   const handleAuditEntry = useCallback((entry) => {
     setAuditEntries(prev => [...prev, entry]);
   }, []);
 
-  const handleSecurityContext = useCallback((ctx) => {
-    setSecurityCtx(ctx);
-  }, []);
-
   const clearAudit = useCallback(() => {
     setAuditEntries([]);
   }, []);
 
-  // Use highest available role as the base identity role (not the assumed role)
-  const role = securityCtx?.security?.available_roles?.[0] || securityCtx?.security?.role || 'none';
+  const identityRole = securityCtx?.security?.available_roles?.[0] || securityCtx?.security?.role || 'none';
 
   return (
     <div className="app-dashboard">
@@ -40,14 +34,7 @@ function App() {
         <AuthStatus />
       </header>
 
-      {!isAuthenticated && !provider && (
-        <main className="main-unauthenticated">
-          <LoginPrompt />
-        </main>
-      )}
-
-      {/* Show login prompt when provider selected but not yet authenticated */}
-      {!isAuthenticated && provider && (
+      {!isAuthenticated && (
         <main className="main-unauthenticated">
           <LoginPrompt />
         </main>
@@ -69,7 +56,7 @@ function App() {
               <>
                 <SecurityContextPanel
                   scopeKey={currentScopeKey}
-                  onSecurityContext={handleSecurityContext}
+                  onSecurityContext={setSecurityCtx}
                   selectedRole={selectedRole}
                   onRoleChange={setSelectedRole}
                 />
@@ -77,7 +64,7 @@ function App() {
                 <TokenInspector scopeKey={currentScopeKey} />
 
                 <RBACTestMatrix
-                  role={role}
+                  role={identityRole}
                   selectedRole={selectedRole}
                   onAuditEntry={handleAuditEntry}
                 />

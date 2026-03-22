@@ -5,12 +5,17 @@ Uses FastMCP's AzureJWTVerifier / JWTVerifier for trusted provider verification
 via the agent-owned permissions.toml policy store.
 """
 
+import asyncio
 import os
+import sys
 import logging
 from datetime import datetime, timezone as tz
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from contextvars import ContextVar
+
+import httpx
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers, get_access_token
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -18,9 +23,6 @@ from fastmcp.server.auth import AuthContext, MultiAuth
 from fastmcp.server.auth.providers.azure import AzureJWTVerifier
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.exceptions import ToolError
-import sys
-import httpx
-from dotenv import load_dotenv
 
 # Add project root and mcp_server/ to path for sibling module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -351,6 +353,33 @@ async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
     return await exchanger.get_graph_token(user_token, scopes)
 
 
+# Graph API base URL
+GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_SCOPE_PREFIX = "https://graph.microsoft.com"
+
+
+def _require_entra_provider() -> dict | None:
+    """Return a provider_not_supported error dict if the user is not Entra, else None."""
+    provider = current_user_provider.get()
+    if provider and provider != "entra":
+        return {
+            "error": "provider_not_supported",
+            "provider": provider,
+            "note": f"Graph API is not available for {provider} users. Use Entra ID for Graph access.",
+        }
+    return None
+
+
+async def _get_effective_graph_token(scope: str) -> tuple[str, bool]:
+    """Get the best available token for Graph API calls.
+
+    Returns (token, obo_used) tuple.
+    """
+    graph_token = await _get_graph_token([f"{GRAPH_SCOPE_PREFIX}/{scope}"])
+    effective_token = graph_token or current_user_token.get()
+    return effective_token, graph_token is not None
+
+
 # --- Initialize FastMCP with built-in auth + middleware ---
 
 mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())
@@ -368,42 +397,31 @@ async def get_user_profile() -> dict:
     logger.info("Executing tool: get_user_profile")
     user_email = current_user_email.get()
     user_role = current_user_role.get()
-    provider = current_user_provider.get()
-    logger.debug(f"Getting profile for user: {user_email}")
 
-    # Non-Entra users can't access Graph API
-    if provider and provider != "entra":
-        return {
-            "error": "provider_not_supported",
-            "provider": provider,
-            "email": user_email,
-            "role": user_role,
-            "note": f"Graph API is not available for {provider} users. Use Entra ID for Graph access.",
-        }
+    provider_error = _require_entra_provider()
+    if provider_error:
+        provider_error.update(email=user_email, role=user_role)
+        return provider_error
 
-    # Try OBO exchange for a Graph-scoped token, fall back to user token
-    graph_token = await _get_graph_token(["https://graph.microsoft.com/User.Read"])
-    effective_token = graph_token or current_user_token.get()
+    effective_token, obo_used = await _get_effective_graph_token("User.Read")
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            "https://graph.microsoft.com/v1.0/me",
+            f"{GRAPH_API_BASE}/me",
             headers={"Authorization": f"Bearer {effective_token}"}
         )
 
         if response.status_code == 200:
             result = response.json()
-            result["_obo_used"] = graph_token is not None
-            logger.debug(f"Graph API response: {result.get('displayName', 'N/A')}")
+            result["_obo_used"] = obo_used
             return result
 
-        # If Graph fails (401/403), return profile from token claims
-        logger.warning(f"Graph API returned {response.status_code}, using token claims instead")
+        logger.warning("Graph API returned %d, using token claims instead", response.status_code)
         return {
             "source": "token_claims",
             "email": user_email,
             "role": user_role,
-            "_obo_used": graph_token is not None,
+            "_obo_used": obo_used,
             "note": "Graph API returned error. Showing token claims as fallback.",
         }
 
@@ -411,22 +429,16 @@ async def get_user_profile() -> dict:
 @mcp.tool(auth=require_role("admin", "developer"))
 async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
-    user_role = current_user_role.get()
-    provider = current_user_provider.get()
+    provider_error = _require_entra_provider()
+    if provider_error:
+        return provider_error
 
-    if provider and provider != "entra":
-        return {
-            "error": "provider_not_supported",
-            "provider": provider,
-            "note": f"OneDrive is not available for {provider} users. Use Entra ID for Graph access.",
-        }
+    effective_token, obo_used = await _get_effective_graph_token("Files.Read")
 
-    graph_token = await _get_graph_token(["https://graph.microsoft.com/Files.Read"])
-    effective_token = graph_token or current_user_token.get()
-
-    endpoint = "https://graph.microsoft.com/v1.0/me/drive/root/children"
-    if folder_path != "/":
-        endpoint = f"https://graph.microsoft.com/v1.0/me/drive/root:/{folder_path}:/children"
+    if folder_path == "/":
+        endpoint = f"{GRAPH_API_BASE}/me/drive/root/children"
+    else:
+        endpoint = f"{GRAPH_API_BASE}/me/drive/root:/{folder_path}:/children"
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -438,15 +450,15 @@ async def list_files(folder_path: str = "/") -> dict:
             data = response.json()
             return {
                 "files": [f["name"] for f in data.get("value", [])],
-                "_obo_used": graph_token is not None,
+                "_obo_used": obo_used,
             }
 
-        logger.warning(f"Graph API returned {response.status_code} for list_files")
+        logger.warning("Graph API returned %d for list_files", response.status_code)
         return {
             "error": "graph_api_unavailable",
             "status_code": response.status_code,
-            "role": user_role,
-            "_obo_used": graph_token is not None,
+            "role": current_user_role.get(),
+            "_obo_used": obo_used,
             "note": "Graph API returned error. Ensure ENTRA_CLIENT_SECRET is set for OBO flow.",
         }
 
@@ -458,22 +470,15 @@ async def send_email(
     body: str,
 ) -> dict:
     """Send an email via Microsoft Graph (admin only)."""
-    user_email = current_user_email.get()
-    provider = current_user_provider.get()
+    provider_error = _require_entra_provider()
+    if provider_error:
+        return provider_error
 
-    if provider and provider != "entra":
-        return {
-            "error": "provider_not_supported",
-            "provider": provider,
-            "note": f"Email sending is not available for {provider} users. Use Entra ID for Graph access.",
-        }
-
-    graph_token = await _get_graph_token(["https://graph.microsoft.com/Mail.Send"])
-    effective_token = graph_token or current_user_token.get()
+    effective_token, obo_used = await _get_effective_graph_token("Mail.Send")
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "https://graph.microsoft.com/v1.0/me/sendMail",
+            f"{GRAPH_API_BASE}/me/sendMail",
             headers={
                 "Authorization": f"Bearer {effective_token}",
                 "Content-Type": "application/json"
@@ -491,14 +496,14 @@ async def send_email(
             return {"error": "insufficient_scope", "message": "Token lacks Mail.Send scope"}
 
         response.raise_for_status()
-        return {"status": "sent", "from": user_email, "to": to, "_obo_used": graph_token is not None}
+        return {"status": "sent", "from": current_user_email.get(), "to": to, "_obo_used": obo_used}
 
 
 @mcp.tool(auth=require_role("admin"))
 async def delete_resource(resource_id: str) -> dict:
     """Delete a resource (admin only with full write scope)."""
     user_role = current_user_role.get()
-    logger.info(f"Delete requested by {user_role} for resource {resource_id}")
+    logger.info("Delete requested by %s for resource %s", user_role, resource_id)
 
     # Simulated deletion
     return {"status": "deleted", "resource_id": resource_id}
@@ -508,40 +513,56 @@ async def delete_resource(resource_id: str) -> dict:
 # S3 TOOLS - Multi-cloud storage (any authenticated user, server-side AWS creds)
 # ============================================================================
 
-@mcp.tool(auth=require_role("admin", "developer"))
-async def list_s3_buckets() -> dict:
-    """List all S3 buckets accessible with server-side AWS credentials (admin/developer only)."""
-    import asyncio
-    logger.info("Executing tool: list_s3_buckets")
-    user_email = current_user_email.get()
-    user_role = current_user_role.get()
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
+
+async def _run_s3_operation(operation, error_map: dict | None = None) -> dict:
+    """Run a boto3 S3 operation with standardized error handling.
+
+    Args:
+        operation: Callable that receives a boto3 S3 client and returns a dict.
+        error_map: Optional mapping of ClientError codes to error dicts.
+    """
     try:
         import boto3
         from botocore.exceptions import NoCredentialsError, ClientError
+    except ImportError:
+        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
 
-        def _list_buckets():
-            s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-            response = s3.list_buckets()
-            return [
-                {"name": b["Name"], "created": b["CreationDate"].isoformat()}
-                for b in response.get("Buckets", [])
-            ]
+    try:
+        def _run():
+            s3 = boto3.client("s3", region_name=AWS_REGION)
+            return operation(s3)
 
-        buckets = await asyncio.to_thread(_list_buckets)
-        return {
-            "buckets": buckets,
-            "count": len(buckets),
-            "requested_by": user_email,
-            "role": user_role,
-        }
+        return await asyncio.to_thread(_run)
     except NoCredentialsError:
         return {"error": "aws_not_configured", "message": "AWS credentials not configured on server"}
     except ClientError as e:
         error_code = e.response["Error"]["Code"]
+        if error_map and error_code in error_map:
+            return error_map[error_code]
         return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
-    except ImportError:
-        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
+
+
+@mcp.tool(auth=require_role("admin", "developer"))
+async def list_s3_buckets() -> dict:
+    """List all S3 buckets accessible with server-side AWS credentials (admin/developer only)."""
+    logger.info("Executing tool: list_s3_buckets")
+
+    def _operation(s3):
+        response = s3.list_buckets()
+        buckets = [
+            {"name": b["Name"], "created": b["CreationDate"].isoformat()}
+            for b in response.get("Buckets", [])
+        ]
+        return {
+            "buckets": buckets,
+            "count": len(buckets),
+            "requested_by": current_user_email.get(),
+            "role": current_user_role.get(),
+        }
+
+    return await _run_s3_operation(_operation)
 
 
 @mcp.tool(auth=require_role("admin", "developer"))
@@ -553,49 +574,41 @@ async def list_s3_objects(bucket: str, prefix: str = "", max_keys: int = 20) -> 
         prefix: Key prefix to filter objects (e.g., 'documents/')
         max_keys: Maximum number of objects to return (default 20, max 100)
     """
-    import asyncio
-    logger.info(f"Executing tool: list_s3_objects (bucket={bucket}, prefix={prefix})")
-    user_email = current_user_email.get()
-    user_role = current_user_role.get()
+    logger.info("Executing tool: list_s3_objects (bucket=%s, prefix=%s)", bucket, prefix)
     max_keys = min(max_keys, 100)
 
-    try:
-        import boto3
-        from botocore.exceptions import NoCredentialsError, ClientError
-
-        def _list_objects():
-            s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-            params = {"Bucket": bucket, "MaxKeys": max_keys}
-            if prefix:
-                params["Prefix"] = prefix
-            response = s3.list_objects_v2(**params)
-            return [
-                {
-                    "key": obj["Key"],
-                    "size": obj["Size"],
-                    "last_modified": obj["LastModified"].isoformat(),
-                }
-                for obj in response.get("Contents", [])
-            ]
-
-        objects = await asyncio.to_thread(_list_objects)
+    def _operation(s3):
+        params = {"Bucket": bucket, "MaxKeys": max_keys}
+        if prefix:
+            params["Prefix"] = prefix
+        response = s3.list_objects_v2(**params)
+        objects = [
+            {
+                "key": obj["Key"],
+                "size": obj["Size"],
+                "last_modified": obj["LastModified"].isoformat(),
+            }
+            for obj in response.get("Contents", [])
+        ]
         return {
             "bucket": bucket,
             "prefix": prefix,
             "objects": objects,
             "count": len(objects),
-            "requested_by": user_email,
-            "role": user_role,
+            "requested_by": current_user_email.get(),
+            "role": current_user_role.get(),
         }
-    except NoCredentialsError:
-        return {"error": "aws_not_configured", "message": "AWS credentials not configured on server"}
-    except ClientError as e:
-        error_code = e.response["Error"]["Code"]
-        if error_code == "NoSuchBucket":
-            return {"error": "bucket_not_found", "bucket": bucket, "message": f"Bucket '{bucket}' does not exist"}
-        return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
-    except ImportError:
-        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
+
+    return await _run_s3_operation(
+        _operation,
+        error_map={
+            "NoSuchBucket": {
+                "error": "bucket_not_found",
+                "bucket": bucket,
+                "message": f"Bucket '{bucket}' does not exist",
+            },
+        },
+    )
 
 
 @mcp.tool(auth=require_role("admin", "developer", "viewer"))
@@ -606,41 +619,32 @@ async def get_s3_object_info(bucket: str, key: str) -> dict:
         bucket: S3 bucket name
         key: Object key (full path in the bucket)
     """
-    import asyncio
-    logger.info(f"Executing tool: get_s3_object_info (bucket={bucket}, key={key})")
-    user_email = current_user_email.get()
-    user_role = current_user_role.get()
+    logger.info("Executing tool: get_s3_object_info (bucket=%s, key=%s)", bucket, key)
 
-    try:
-        import boto3
-        from botocore.exceptions import NoCredentialsError, ClientError
+    def _operation(s3):
+        response = s3.head_object(Bucket=bucket, Key=key)
+        return {
+            "bucket": bucket,
+            "key": key,
+            "size": response["ContentLength"],
+            "content_type": response.get("ContentType", "unknown"),
+            "last_modified": response["LastModified"].isoformat(),
+            "etag": response.get("ETag", ""),
+            "metadata": dict(response.get("Metadata", {})),
+            "requested_by": current_user_email.get(),
+            "role": current_user_role.get(),
+        }
 
-        def _head_object():
-            s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-            response = s3.head_object(Bucket=bucket, Key=key)
-            return {
-                "bucket": bucket,
-                "key": key,
-                "size": response["ContentLength"],
-                "content_type": response.get("ContentType", "unknown"),
-                "last_modified": response["LastModified"].isoformat(),
-                "etag": response.get("ETag", ""),
-                "metadata": dict(response.get("Metadata", {})),
-            }
-
-        info = await asyncio.to_thread(_head_object)
-        info["requested_by"] = user_email
-        info["role"] = user_role
-        return info
-    except NoCredentialsError:
-        return {"error": "aws_not_configured", "message": "AWS credentials not configured on server"}
-    except ClientError as e:
-        error_code = e.response["Error"]["Code"]
-        if error_code == "404" or error_code == "NoSuchKey":
-            return {"error": "object_not_found", "bucket": bucket, "key": key, "message": f"Object '{key}' not found in bucket '{bucket}'"}
-        return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
-    except ImportError:
-        return {"error": "boto3_not_installed", "message": "boto3 package not available"}
+    not_found_error = {
+        "error": "object_not_found",
+        "bucket": bucket,
+        "key": key,
+        "message": f"Object '{key}' not found in bucket '{bucket}'",
+    }
+    return await _run_s3_operation(
+        _operation,
+        error_map={"404": not_found_error, "NoSuchKey": not_found_error},
+    )
 
 
 # ============================================================================
@@ -690,10 +694,6 @@ async def get_current_time(timezone: str = "UTC") -> dict:
     Returns:
         Current time information including ISO format, Unix timestamp, and formatted string
     """
-    user_role = current_user_role.get()
-    user_email = current_user_email.get()
-    logger.info(f"get_current_time called by {user_email} (role: {user_role}) for timezone: {timezone}")
-
     try:
         tz_info = resolve_timezone(timezone)
         now = datetime.now(tz_info)
@@ -707,11 +707,32 @@ async def get_current_time(timezone: str = "UTC") -> dict:
             "time": now.strftime("%H:%M:%S"),
             "day_of_week": now.strftime("%A"),
             "utc_offset": now.strftime("%z"),
-            "requested_by": user_email,
+            "requested_by": current_user_email.get(),
         }
     except ValueError as e:
-        logger.warning(f"Invalid timezone requested: {timezone}")
         return {"error": str(e)}
+
+
+TIME_PARSE_FORMATS = [
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+    "%H:%M:%S",
+    "%H:%M",
+]
+
+
+def _parse_time_string(time_str: str) -> datetime | None:
+    """Try parsing a time string against common formats. Returns None on failure."""
+    for fmt in TIME_PARSE_FORMATS:
+        try:
+            return datetime.strptime(time_str, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 @mcp.tool(auth=require_role("admin"))
@@ -730,34 +751,11 @@ async def convert_timezone(
     Returns:
         Converted time information in both timezones
     """
-    user_role = current_user_role.get()
-    user_email = current_user_email.get()
-    logger.info(f"convert_timezone called by {user_email} (role: {user_role}): {time_str} from {from_timezone} to {to_timezone}")
-
     try:
         from_tz = resolve_timezone(from_timezone)
         to_tz = resolve_timezone(to_timezone)
 
-        # Parse the input time - try multiple formats
-        parsed_time = None
-        formats_to_try = [
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%dT%H:%M",
-            "%m/%d/%Y %H:%M:%S",
-            "%m/%d/%Y %H:%M",
-            "%H:%M:%S",
-            "%H:%M",
-        ]
-
-        for fmt in formats_to_try:
-            try:
-                parsed_time = datetime.strptime(time_str, fmt)
-                break
-            except ValueError:
-                continue
-
+        parsed_time = _parse_time_string(time_str)
         if parsed_time is None:
             return {"error": f"Could not parse time: {time_str}. Use ISO format (YYYY-MM-DDTHH:MM:SS) or common formats."}
 
@@ -766,7 +764,6 @@ async def convert_timezone(
             today = datetime.now(from_tz).date()
             parsed_time = parsed_time.replace(year=today.year, month=today.month, day=today.day)
 
-        # Localize to source timezone and convert to target
         source_time = parsed_time.replace(tzinfo=from_tz)
         target_time = source_time.astimezone(to_tz)
 
@@ -782,10 +779,9 @@ async def convert_timezone(
                 "iso_format": target_time.isoformat(),
             },
             "offset_difference": f"{(target_time.utcoffset().total_seconds() - source_time.utcoffset().total_seconds()) / 3600:+.1f} hours",
-            "requested_by": user_email,
+            "requested_by": current_user_email.get(),
         }
     except ValueError as e:
-        logger.warning(f"Timezone conversion error: {e}")
         return {"error": str(e)}
 
 
@@ -803,10 +799,6 @@ async def get_time_difference(
     Returns:
         Time difference information and current times in both zones
     """
-    user_role = current_user_role.get()
-    user_email = current_user_email.get()
-    logger.info(f"get_time_difference called by {user_email} (role: {user_role}): {timezone1} vs {timezone2}")
-
     try:
         tz1 = resolve_timezone(timezone1)
         tz2 = resolve_timezone(timezone2)
@@ -815,12 +807,10 @@ async def get_time_difference(
         time1 = now_utc.astimezone(tz1)
         time2 = now_utc.astimezone(tz2)
 
-        # Calculate the difference in hours
         offset1 = time1.utcoffset().total_seconds() / 3600
         offset2 = time2.utcoffset().total_seconds() / 3600
         diff_hours = offset2 - offset1
 
-        # Format the difference nicely
         if diff_hours == 0:
             diff_str = "same time"
         elif diff_hours > 0:
@@ -841,10 +831,9 @@ async def get_time_difference(
             },
             "difference_hours": diff_hours,
             "description": diff_str,
-            "requested_by": user_email,
+            "requested_by": current_user_email.get(),
         }
     except ValueError as e:
-        logger.warning(f"Time difference error: {e}")
         return {"error": str(e)}
 
 
