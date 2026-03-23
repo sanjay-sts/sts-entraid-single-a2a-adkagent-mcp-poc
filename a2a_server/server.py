@@ -2,6 +2,7 @@
 
 Implements the A2A Protocol with proper SSE streaming.
 """
+import asyncio
 import json
 import logging
 import os
@@ -156,11 +157,11 @@ class TokenValidator:
     async def get_jwks(self, uri: str):
         """Fetch and cache JWKS from a specific URI."""
         if uri not in self._jwks_cache:
-            logger.debug(f"Fetching JWKS from {uri}")
+            logger.debug("Fetching JWKS from %s", uri)
             async with httpx.AsyncClient() as client:
                 response = await client.get(uri)
                 self._jwks_cache[uri] = response.json()
-            logger.debug(f"JWKS fetched from {uri}, {len(self._jwks_cache[uri].get('keys', []))} keys found")
+            logger.debug("JWKS fetched from %s, %d keys found", uri, len(self._jwks_cache[uri].get('keys', [])))
         return self._jwks_cache[uri]
 
     def clear_cache(self):
@@ -189,33 +190,33 @@ class TokenValidator:
                 jwks = await self.get_jwks(uri)
                 for key in jwks.get("keys", []):
                     if key.get("kid") == kid:
-                        logger.debug(f"Found key {kid} in {uri}")
+                        logger.debug("Found key %s in %s", kid, uri)
                         keys.append((uri, jwt.algorithms.RSAAlgorithm.from_jwk(key)))
             except Exception as e:
-                logger.debug(f"Failed to fetch/parse JWKS from {uri}: {e}")
+                logger.debug("Failed to fetch/parse JWKS from %s: %s", uri, e)
         return keys
 
     async def validate(self, token: str) -> dict:
         """Validate token against the matching IdP and return claims."""
-        logger.debug(f"Validating token (first 50 chars): {token[:50]}...")
+        logger.debug("Validating token (first 50 chars): %s...", token[:50])
 
         # Detect which IdP issued this token
         idp = self._detect_idp(token)
         if not idp:
             unverified = jwt.decode(token, options={"verify_signature": False})
-            logger.error(f"No IdP config found for issuer: {unverified.get('iss', 'unknown')}")
+            logger.error("No IdP config found for issuer: %s", unverified.get('iss', 'unknown'))
             raise ValueError(f"Unknown token issuer: {unverified.get('iss', 'unknown')}")
 
-        logger.debug(f"Token matched IdP: {idp.name}")
+        logger.debug("Token matched IdP: %s", idp.name)
 
         unverified = jwt.decode(token, options={"verify_signature": False})
         token_iss = unverified.get("iss", "")
         token_aud = unverified.get("aud", "")
-        logger.debug(f"Token claims (unverified): iss={token_iss}, aud={token_aud}")
+        logger.debug("Token claims (unverified): iss=%s, aud=%s", token_iss, token_aud)
 
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
-        logger.debug(f"Token kid: {kid}")
+        logger.debug("Token kid: %s", kid)
 
         # Get keys from the matching IdP's endpoints
         keys = await self._get_keys_for_idp(kid, idp)
@@ -225,7 +226,7 @@ class TokenValidator:
             keys = await self._get_keys_for_idp(kid, idp)
 
         if not keys:
-            logger.error(f"Key {kid} not found in {idp.name} JWKS endpoints")
+            logger.error("Key %s not found in %s JWKS endpoints", kid, idp.name)
             raise ValueError(f"Key not found in {idp.name} JWKS")
 
         # Try each key
@@ -254,25 +255,25 @@ class TokenValidator:
                             f"Invalid {idp.audience_claim}: {actual}, expected one of {idp.valid_audiences}"
                         )
 
-                logger.info(f"Token validated successfully via {idp.name} using key from {uri}")
+                logger.info("Token validated successfully via %s using key from %s", idp.name, uri)
                 email = payload.get("preferred_username") or payload.get("email") or payload.get("cognito:username") or payload.get("sub", "")
-                logger.info(f"User: {email}")
-                logger.debug(f"All token claims: {list(payload.keys())}")
+                logger.info("User: %s", email)
+                logger.debug("All token claims: %s", list(payload.keys()))
                 return payload
             except jwt.InvalidSignatureError as e:
-                logger.debug(f"Signature verification failed with key from {uri}")
+                logger.debug("Signature verification failed with key from %s", uri)
                 last_error = e
             except jwt.InvalidAudienceError:
-                logger.error(f"Invalid audience: token {idp.audience_claim}={token_aud}, expected one of {idp.valid_audiences}")
+                logger.error("Invalid audience: token %s=%s, expected one of %s", idp.audience_claim, token_aud, idp.valid_audiences)
                 raise
             except jwt.InvalidIssuerError:
-                logger.error(f"Invalid issuer: token iss={token_iss}, expected one of {idp.valid_issuers}")
+                logger.error("Invalid issuer: token iss=%s, expected one of %s", token_iss, idp.valid_issuers)
                 raise
             except Exception as e:
-                logger.debug(f"Validation failed with key from {uri}: {type(e).__name__}: {e}")
+                logger.debug("Validation failed with key from %s: %s: %s", uri, type(e).__name__, e)
                 last_error = e
 
-        logger.error(f"Token validation failed with all {len(keys)} keys for {idp.name}: {last_error}")
+        logger.error("Token validation failed with all %d keys for %s: %s", len(keys), idp.name, last_error)
         raise last_error or ValueError("Token validation failed")
 
 
@@ -280,6 +281,7 @@ token_validator = TokenValidator()
 
 # User sessions mapping
 user_sessions = {}
+_session_lock = asyncio.Lock()
 
 
 def _make_task_event(
@@ -383,7 +385,14 @@ class IdentityAwareAgentExecutor(AgentExecutor):
 
     async def _ensure_session(self, user_id: str, user_claims: dict, access_token: str) -> str:
         """Ensure a session exists for the user."""
-        if user_id not in user_sessions:
+        if user_id in user_sessions:
+            return user_sessions[user_id]
+
+        async with _session_lock:
+            # Re-check after acquiring lock (another coroutine may have created it)
+            if user_id in user_sessions:
+                return user_sessions[user_id]
+
             provider = _detect_provider(user_claims)
             email, name, groups = _extract_user_info(user_claims, provider)
 

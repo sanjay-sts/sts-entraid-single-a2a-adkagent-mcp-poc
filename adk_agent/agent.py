@@ -315,7 +315,7 @@ app = FastAPI(title="Identity-Aware ADK Agent")
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"http://localhost:{os.getenv('FRONTEND_PORT', 3000)}"],
+    allow_origins=[f"http://localhost:{os.getenv('FRONTEND_PORT', 10003)}"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
