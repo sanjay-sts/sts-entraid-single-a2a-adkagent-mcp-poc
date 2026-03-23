@@ -11,8 +11,6 @@ import uuid
 from dataclasses import dataclass
 from contextvars import ContextVar
 from pathlib import Path
-from contextlib import asynccontextmanager
-
 import httpx
 import jwt
 from dotenv import load_dotenv
@@ -21,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Add project root to path for shared dev_config module
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from dev_config import is_auth_disabled, get_section
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
 
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
@@ -168,10 +166,9 @@ class TokenValidator:
         logger.debug("Clearing JWKS cache")
         self._jwks_cache = {}
 
-    def _detect_idp(self, token: str) -> IdPConfig | None:
-        """Detect which IdP issued the token by peeking at the iss claim."""
-        unverified = jwt.decode(token, options={"verify_signature": False})
-        token_iss = unverified.get("iss", "")
+    def _detect_idp(self, unverified_claims: dict) -> IdPConfig | None:
+        """Detect which IdP issued the token from unverified claims."""
+        token_iss = unverified_claims.get("iss", "")
         for config in IDP_CONFIGS:
             if token_iss in config.valid_issuers:
                 return config
@@ -195,18 +192,17 @@ class TokenValidator:
         """Validate token against the matching IdP and return claims."""
         logger.debug("Validating token (first 50 chars): %s...", token[:50])
 
-        # Detect which IdP issued this token
-        idp = self._detect_idp(token)
-        if not idp:
-            unverified = jwt.decode(token, options={"verify_signature": False})
-            logger.error("No IdP config found for issuer: %s", unverified.get('iss', 'unknown'))
-            raise ValueError(f"Unknown token issuer: {unverified.get('iss', 'unknown')}")
-
-        logger.debug("Token matched IdP: %s", idp.name)
-
+        # Decode once without verification to detect IdP and extract metadata
         unverified = jwt.decode(token, options={"verify_signature": False})
         token_iss = unverified.get("iss", "")
         token_aud = unverified.get("aud", "")
+
+        idp = self._detect_idp(unverified)
+        if not idp:
+            logger.error("No IdP config found for issuer: %s", token_iss or "unknown")
+            raise ValueError(f"Unknown token issuer: {token_iss or 'unknown'}")
+
+        logger.debug("Token matched IdP: %s", idp.name)
         logger.debug("Token claims (unverified): iss=%s, aud=%s", token_iss, token_aud)
 
         unverified_header = jwt.get_unverified_header(token)
@@ -304,10 +300,10 @@ def _extract_message_text(message) -> str:
         return ""
     texts = []
     for part in message.parts:
-        if hasattr(part, 'root') and hasattr(part.root, 'text'):
-            texts.append(part.root.text)
-        elif hasattr(part, 'text'):
-            texts.append(part.text)
+        # A2A SDK parts can be wrapped (part.root.text) or direct (part.text)
+        text = getattr(getattr(part, "root", None), "text", None) or getattr(part, "text", None)
+        if text:
+            texts.append(text)
     return " ".join(texts).strip()
 
 
@@ -370,12 +366,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Cancel the agent execution."""
         await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                task_id=context.task_id,
-                context_id=context.context_id,
-                status=TaskStatus(state=TaskState.canceled),
-                final=True,
-            )
+            _make_task_event(context, TaskState.canceled)
         )
 
     async def _ensure_session(self, user_id: str, user_claims: dict, access_token: str) -> str:
@@ -505,18 +496,14 @@ agent_card = AgentCard(
 )
 
 
-# Create FastAPI app with lifespan
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
+ALLOWED_ORIGINS = [f"http://localhost:{FRONTEND_PORT}", "http://localhost:10003"]
 
-
-app = FastAPI(title="A2A Identity Gateway", lifespan=lifespan)
+app = FastAPI(title="A2A Identity Gateway")
 
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"http://localhost:{FRONTEND_PORT}", "http://localhost:10003"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -526,13 +513,40 @@ app.add_middleware(
 def _cors_headers(request: Request) -> dict:
     """Build CORS headers for error responses returned before CORSMiddleware can act."""
     origin = request.headers.get("origin", "")
-    allowed = [f"http://localhost:{FRONTEND_PORT}", "http://localhost:10003"]
-    if origin in allowed:
+    if origin in ALLOWED_ORIGINS:
         return {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
         }
     return {}
+
+
+def _auth_error(request: Request, status_code: int, error: str, message: str,
+                denial_reason: str, extra_headers: dict | None = None) -> Response:
+    """Build a JSON error response with CORS headers for auth failures."""
+    body = json.dumps({
+        "error": error,
+        "message": message,
+        "denial_level": "agent",
+        "denial_reason": denial_reason,
+    })
+    headers = {**_cors_headers(request), **(extra_headers or {})}
+    return Response(
+        status_code=status_code,
+        content=body,
+        media_type="application/json",
+        headers=headers,
+    )
+
+
+# Paths that don't require authentication
+PUBLIC_PATHS = frozenset([
+    "/.well-known/agent.json",
+    "/.well-known/agent-card.json",
+    "/health",
+    "/docs",
+    "/openapi.json",
+])
 
 
 # Authentication middleware
@@ -547,13 +561,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Allow Agent Card discovery and health without auth
-    if request.url.path in [
-        "/.well-known/agent.json",
-        "/.well-known/agent-card.json",
-        "/health",
-        "/docs",
-        "/openapi.json",
-    ]:
+    if request.url.path in PUBLIC_PATHS:
         logger.debug("Allowing unauthenticated access to %s", request.url.path)
         return await call_next(request)
 
@@ -567,10 +575,10 @@ async def auth_middleware(request: Request, call_next):
             "scp": "User.Read Files.Read Mail.Send Files.ReadWrite.All",
         }
         current_user_claims.set(mock_claims)
-        current_access_token.set("dev-bypass-token")
+        current_access_token.set(DEV_BYPASS_TOKEN)
         current_assumed_role.set(request.headers.get("X-Assume-Role", "") or get_section("a2a").get("default_role", "admin"))
         request.state.user_claims = mock_claims
-        request.state.access_token = "dev-bypass-token"
+        request.state.access_token = DEV_BYPASS_TOKEN
         logger.warning("AUTH BYPASSED: %s %s", request.method, request.url.path)
         return await call_next(request)
 
@@ -579,21 +587,13 @@ async def auth_middleware(request: Request, call_next):
     logger.debug("Authorization header present: %s", bool(auth_header))
     if not auth_header:
         logger.warning("Missing Authorization header")
-        return Response(
-            status_code=401,
-            content='{"error": "unauthorized", "message": "Missing Authorization header", "denial_level": "agent", "denial_reason": "missing_token"}',
-            media_type="application/json",
-            headers={"WWW-Authenticate": "Bearer", **_cors_headers(request)},
-        )
+        return _auth_error(request, 401, "unauthorized", "Missing Authorization header",
+                           "missing_token", {"WWW-Authenticate": "Bearer"})
 
     if not auth_header.startswith("Bearer "):
         logger.warning("Invalid Authorization format: %.20s...", auth_header)
-        return Response(
-            status_code=401,
-            content='{"error": "unauthorized", "message": "Invalid Authorization format", "denial_level": "agent", "denial_reason": "invalid_format"}',
-            media_type="application/json",
-            headers=_cors_headers(request),
-        )
+        return _auth_error(request, 401, "unauthorized", "Invalid Authorization format",
+                           "invalid_format")
 
     token = auth_header[7:]
     logger.debug("Extracted Bearer token (length: %d)", len(token))
@@ -606,12 +606,8 @@ async def auth_middleware(request: Request, call_next):
         # Check if user is blocked
         if user_id in BLOCKED_USERS:
             logger.warning("Blocked user attempted access: %s", user_id)
-            return Response(
-                status_code=403,
-                content='{"error": "access_denied", "message": "Your account has been blocked", "denial_level": "agent", "denial_reason": "blocked_user"}',
-                media_type="application/json",
-                headers=_cors_headers(request),
-            )
+            return _auth_error(request, 403, "access_denied",
+                               "Your account has been blocked", "blocked_user")
 
         # Check group membership (provider-aware)
         provider = _detect_provider(claims)
@@ -625,12 +621,8 @@ async def auth_middleware(request: Request, call_next):
 
         if allowed and not any(g in allowed for g in user_groups):
             logger.warning("User %s not in allowed groups. Has: %s, Allowed: %s", user_id, user_groups, allowed)
-            return Response(
-                status_code=403,
-                content='{"error": "access_denied", "message": "Not a member of any authorized group", "denial_level": "agent", "denial_reason": "no_group_membership"}',
-                media_type="application/json",
-                headers=_cors_headers(request),
-            )
+            return _auth_error(request, 403, "access_denied",
+                               "Not a member of any authorized group", "no_group_membership")
 
         logger.debug("Access control passed, storing claims in request state")
         # Store claims in request state for the agent executor
@@ -644,20 +636,12 @@ async def auth_middleware(request: Request, call_next):
 
     except jwt.ExpiredSignatureError:
         logger.warning("Token has expired")
-        return Response(
-            status_code=401,
-            content='{"error": "token_expired", "message": "Token has expired", "denial_level": "agent", "denial_reason": "token_expired"}',
-            media_type="application/json",
-            headers=_cors_headers(request),
-        )
+        return _auth_error(request, 401, "token_expired",
+                           "Token has expired", "token_expired")
     except Exception as e:
         logger.error("Auth failed: %s: %s", type(e).__name__, e)
-        return Response(
-            status_code=401,
-            content=json.dumps({"error": "auth_failed", "message": str(e), "denial_level": "agent", "denial_reason": "validation_failed"}),
-            media_type="application/json",
-            headers=_cors_headers(request),
-        )
+        return _auth_error(request, 401, "auth_failed",
+                           str(e), "validation_failed")
 
     logger.debug("Auth middleware complete, passing to next handler")
     return await call_next(request)
@@ -753,19 +737,16 @@ def _extract_user_info(claims: dict, provider: str) -> tuple[str, str, list]:
 ROLE_PRIORITY = ["admin", "developer", "viewer"]
 
 
-def _determine_role(groups: list) -> str:
-    """Map user groups to highest privilege role."""
-    user_roles = {GROUP_TO_ROLE[g] for g in groups if g in GROUP_TO_ROLE}
-    for role in ROLE_PRIORITY:
-        if role in user_roles:
-            return role
-    return "none"
-
-
 def _get_available_roles(groups: list) -> list:
     """Return all roles the user qualifies for, ordered by priority."""
     user_roles = {GROUP_TO_ROLE[g] for g in groups if g in GROUP_TO_ROLE}
     return [r for r in ROLE_PRIORITY if r in user_roles]
+
+
+def _determine_role(groups: list) -> str:
+    """Map user groups to highest privilege role."""
+    available = _get_available_roles(groups)
+    return available[0] if available else "none"
 
 
 # Health check endpoint

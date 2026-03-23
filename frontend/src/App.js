@@ -8,14 +8,14 @@ import RBACTestMatrix from './components/RBACTestMatrix';
 import ConversationTabs from './components/ConversationTabs';
 import AuditLog from './components/AuditLog';
 
+const DEFAULT_SCOPE_KEY = 'basic';
+
 function App() {
   const { isAuthenticated } = useAuth();
   const [auditEntries, setAuditEntries] = useState([]);
   const [securityCtx, setSecurityCtx] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedRole, setSelectedRole] = useState(null);
-
-  const currentScopeKey = 'basic';
 
   const handleAuditEntry = useCallback((entry) => {
     setAuditEntries(prev => [...prev, entry]);
@@ -55,13 +55,13 @@ function App() {
             {!sidebarCollapsed && (
               <>
                 <SecurityContextPanel
-                  scopeKey={currentScopeKey}
+                  scopeKey={DEFAULT_SCOPE_KEY}
                   onSecurityContext={setSecurityCtx}
                   selectedRole={selectedRole}
                   onRoleChange={setSelectedRole}
                 />
 
-                <TokenInspector scopeKey={currentScopeKey} />
+                <TokenInspector scopeKey={DEFAULT_SCOPE_KEY} />
 
                 <RBACTestMatrix
                   role={identityRole}

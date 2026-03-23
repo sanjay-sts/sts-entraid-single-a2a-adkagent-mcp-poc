@@ -27,7 +27,7 @@ from fastmcp.exceptions import ToolError
 # Add project root and mcp_server/ to path for sibling module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from dev_config import is_auth_disabled, get_section
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
 from policy import TomlPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
 
@@ -211,7 +211,7 @@ class UserContextMiddleware(Middleware):
         Respects X-Assume-Role header if present, otherwise uses default_role.
         """
         dev_cfg = get_section("mcp")
-        current_user_token.set("dev-bypass-token")
+        current_user_token.set(DEV_BYPASS_TOKEN)
         current_user_email.set(dev_cfg.get("default_email", "dev@localhost"))
         current_user_provider.set(dev_cfg.get("default_provider", "entra"))
         # Respect X-Assume-Role header from upstream (ADK agent)
@@ -302,11 +302,9 @@ class UserContextMiddleware(Middleware):
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         if is_auth_disabled("mcp"):
             self._set_bypass_context()
-            return await call_next(context)
-
-        # Strict: require explicit role selection via X-Assume-Role
-        self._resolve_context(raise_on_error=True)
-
+        else:
+            # Strict: require explicit role selection via X-Assume-Role
+            self._resolve_context(raise_on_error=True)
         return await call_next(context)
 
 
@@ -348,7 +346,7 @@ async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
         return None
 
     user_token = current_user_token.get()
-    if not user_token or user_token == "dev-bypass-token":
+    if not user_token or user_token == DEV_BYPASS_TOKEN:
         return None
 
     return await exchanger.get_graph_token(user_token, scopes)
@@ -356,7 +354,6 @@ async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
 
 # Graph API base URL
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
-GRAPH_SCOPE_PREFIX = "https://graph.microsoft.com"
 
 
 def _require_entra_provider() -> dict | None:
@@ -376,7 +373,7 @@ async def _get_effective_graph_token(scope: str) -> tuple[str, bool]:
 
     Returns (token, obo_used) tuple.
     """
-    graph_token = await _get_graph_token([f"{GRAPH_SCOPE_PREFIX}/{scope}"])
+    graph_token = await _get_graph_token([f"https://graph.microsoft.com/{scope}"])
     effective_token = graph_token or current_user_token.get()
     return effective_token, graph_token is not None
 

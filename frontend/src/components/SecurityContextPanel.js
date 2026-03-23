@@ -4,6 +4,13 @@ import { A2A_SERVER_URL, PROVIDER_LABELS } from '../utils/constants';
 
 const EXPIRY_WARNING_SECONDS = 300;
 
+function getExpiryClass(countdown, tokenExpiry) {
+  if (countdown === 'EXPIRED') return 'expiry-expired';
+  const remaining = tokenExpiry - Math.floor(Date.now() / 1000);
+  if (remaining < EXPIRY_WARNING_SECONDS) return 'expiry-warning';
+  return 'expiry-ok';
+}
+
 export default function SecurityContextPanel({ scopeKey, onSecurityContext, selectedRole, onRoleChange }) {
   const { isAuthenticated, getAccessToken, provider } = useAuth();
   const [securityCtx, setSecurityCtx] = useState(null);
@@ -46,9 +53,8 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
 
   useEffect(() => {
     fetchSecurityContext();
-    const handler = () => fetchSecurityContext();
-    window.addEventListener('msal-account-change', handler);
-    return () => window.removeEventListener('msal-account-change', handler);
+    window.addEventListener('msal-account-change', fetchSecurityContext);
+    return () => window.removeEventListener('msal-account-change', fetchSecurityContext);
   }, [fetchSecurityContext]);
 
   // Token expiry countdown
@@ -98,13 +104,9 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
 
   const { security, user, permissions } = securityCtx;
   const detectedProvider = security.provider || provider || 'unknown';
+  const tokenScopes = security.token_scopes || [];
 
-  let expiryClass = 'expiry-ok';
-  if (expiryCountdown === 'EXPIRED') {
-    expiryClass = 'expiry-expired';
-  } else if (security.token_expiry - Math.floor(Date.now() / 1000) < EXPIRY_WARNING_SECONDS) {
-    expiryClass = 'expiry-warning';
-  }
+  const expiryClass = getExpiryClass(expiryCountdown, security.token_expiry);
 
   return (
     <div className="security-panel">
@@ -159,8 +161,8 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
       <div className="panel-section">
         <label>Token Scopes</label>
         <div className="scope-tags">
-          {(!security.token_scopes || security.token_scopes.length === 0) && <span className="panel-muted">None</span>}
-          {security.token_scopes && security.token_scopes.map(s => (
+          {tokenScopes.length === 0 && <span className="panel-muted">None</span>}
+          {tokenScopes.map(s => (
             <span key={s} className="scope-tag">{s}</span>
           ))}
         </div>

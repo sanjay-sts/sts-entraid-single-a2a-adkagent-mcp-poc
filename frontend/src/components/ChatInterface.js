@@ -16,6 +16,10 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const emitAudit = (entry) => {
+    if (onAuditEntry) onAuditEntry(entry);
+  };
+
   const sendMessage = async (e) => {
     e.preventDefault();
     const userMessage = input.trim();
@@ -36,13 +40,11 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
         denial: result.denial,
       }]);
 
-      if (onAuditEntry) {
-        onAuditEntry(buildAuditEntry({
-          prompt: userMessage, scopeKey, selectedRole,
-          httpStatus: result.httpStatus, denial: result.denial,
-          latency: result.latency, response: result.body,
-        }));
-      }
+      emitAudit(buildAuditEntry({
+        prompt: userMessage, scopeKey, selectedRole,
+        httpStatus: result.httpStatus, denial: result.denial,
+        latency: result.latency, response: result.body,
+      }));
     } catch (err) {
       setMessages(prev => [...prev, {
         role: 'system',
@@ -50,13 +52,11 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
         isError: true,
       }]);
 
-      if (onAuditEntry) {
-        onAuditEntry(buildAuditEntry({
-          prompt: userMessage, scopeKey, selectedRole,
-          httpStatus: 0, denial: null, latency: 0,
-          response: { error: err.message },
-        }));
-      }
+      emitAudit(buildAuditEntry({
+        prompt: userMessage, scopeKey, selectedRole,
+        httpStatus: 0, denial: null, latency: 0,
+        response: { error: err.message },
+      }));
     } finally {
       setLoading(false);
     }

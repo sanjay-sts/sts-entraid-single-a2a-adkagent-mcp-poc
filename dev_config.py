@@ -14,6 +14,9 @@ _CONFIG_PATH = Path(__file__).parent / "dev_config.toml"
 _config: dict[str, Any] | None = None
 _logged_sections: set[str] = set()
 
+# Sentinel token used when auth is bypassed in dev mode
+DEV_BYPASS_TOKEN = "dev-bypass-token"
+
 
 def _load_config() -> dict[str, Any]:
     global _config

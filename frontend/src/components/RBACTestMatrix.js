@@ -4,7 +4,26 @@ import { sendA2AMessage, buildAuditEntry } from '../utils/a2aClient';
 import { getScenariosForRole } from '../utils/testScenarios';
 import DenialIndicator from './DenialIndicator';
 
-const RUN_ALL_DELAY_MS = 2000;
+const RUN_ALL_DELAY_MS = 2000; // Delay between tests to avoid rate limiting
+
+function ResultCell({ scenarioId, running, result }) {
+  if (running === scenarioId) {
+    return <span className="matrix-running">Running...</span>;
+  }
+  if (!result) {
+    return <span className="matrix-pending">--</span>;
+  }
+  return (
+    <div className="matrix-result">
+      <span className={result.pass ? 'result-pass' : 'result-fail'}>
+        {result.pass ? 'PASS' : 'FAIL'}
+      </span>
+      {result.denial && <DenialIndicator level={result.denial.level} reason={result.denial.reason} />}
+      {result.error && <span className="result-error" title={result.error}>ERR</span>}
+      <span className="result-latency">{result.latency}ms</span>
+    </div>
+  );
+}
 
 export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
   const { getAccessToken } = useAuth();
@@ -105,20 +124,7 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
                       : <span className="expect-deny">{scenario.denialExpected?.toUpperCase() || 'DENY'}</span>}
                   </td>
                   <td>
-                    {running === scenario.id ? (
-                      <span className="matrix-running">Running...</span>
-                    ) : result ? (
-                      <div className="matrix-result">
-                        <span className={result.pass ? 'result-pass' : 'result-fail'}>
-                          {result.pass ? 'PASS' : 'FAIL'}
-                        </span>
-                        {result.denial && <DenialIndicator level={result.denial.level} reason={result.denial.reason} />}
-                        {result.error && <span className="result-error" title={result.error}>ERR</span>}
-                        <span className="result-latency">{result.latency}ms</span>
-                      </div>
-                    ) : (
-                      <span className="matrix-pending">--</span>
-                    )}
+                    <ResultCell scenarioId={scenario.id} running={running} result={result} />
                   </td>
                   <td>
                     <button

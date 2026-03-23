@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import AsyncGenerator, Dict
+from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
@@ -23,7 +23,7 @@ from litellm.exceptions import RateLimitError
 
 # Add project root to path for shared dev_config module
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from dev_config import is_auth_disabled
+from dev_config import is_auth_disabled, DEV_BYPASS_TOKEN
 
 # Load environment variables
 load_dotenv()
@@ -44,14 +44,59 @@ logger = logging.getLogger("adk_agent")
 
 # Configuration
 MCP_SERVER_URL = f"http://localhost:{os.getenv('MCP_SERVER_PORT', 10002)}/mcp"
-ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID")
 ADK_SERVER_PORT = int(os.getenv("ADK_SERVER_PORT", 10001))
 
-# AWS Bedrock configuration for LiteLLM
-# Set AWS_BEARER_TOKEN_BEDROCK in .env (12-hour token, refresh before expiry)
+# Group-to-role mapping from env vars
+GROUP_TO_ROLE = {
+    os.getenv("ADMIN_GROUP_ID"): "admin",
+    os.getenv("DEVELOPER_GROUP_ID"): "developer",
+    os.getenv("VIEWER_GROUP_ID"): "viewer",
+}
+
+ROLE_PRIORITY = ["admin", "developer", "viewer"]
+
+# Permission matrix per role (static, matches MCP tool auth= decorators)
+PERMISSION_MAP = {
+    "admin": {
+        "can_read_profile": True,
+        "can_list_files": True,
+        "can_send_email": True,
+        "can_delete_resources": True,
+        "can_use_time_tools": True,
+        "can_list_s3": True,
+        "can_view_s3_object": True,
+    },
+    "developer": {
+        "can_read_profile": True,
+        "can_list_files": True,
+        "can_send_email": False,
+        "can_delete_resources": False,
+        "can_use_time_tools": False,
+        "can_list_s3": True,
+        "can_view_s3_object": True,
+    },
+    "viewer": {
+        "can_read_profile": True,
+        "can_list_files": False,
+        "can_send_email": False,
+        "can_delete_resources": False,
+        "can_use_time_tools": False,
+        "can_list_s3": False,
+        "can_view_s3_object": True,
+    },
+    "none": {
+        "can_read_profile": False,
+        "can_list_files": False,
+        "can_send_email": False,
+        "can_delete_resources": False,
+        "can_use_time_tools": False,
+        "can_list_s3": False,
+        "can_view_s3_object": False,
+    },
+}
 
 
-def mcp_header_provider(readonly_context: ReadonlyContext) -> Dict[str, str]:
+def mcp_header_provider(readonly_context: ReadonlyContext) -> dict[str, str]:
     """Provides Authorization and X-Assume-Role headers for MCP calls from session state.
 
     This is called by McpToolset to get dynamic headers for each request.
@@ -186,13 +231,8 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
 
     def _determine_role(self, groups: list) -> str:
         """Map group IDs to highest-priority role."""
-        group_to_role = {
-            os.getenv("ADMIN_GROUP_ID"): "admin",
-            os.getenv("DEVELOPER_GROUP_ID"): "developer",
-            os.getenv("VIEWER_GROUP_ID"): "viewer",
-        }
-        user_roles = {group_to_role[g] for g in groups if g in group_to_role}
-        for role in ["admin", "developer", "viewer"]:
+        user_roles = {GROUP_TO_ROLE[g] for g in groups if g in GROUP_TO_ROLE}
+        for role in ROLE_PRIORITY:
             if role in user_roles:
                 return role
         return "none"
@@ -220,48 +260,9 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
 
         logger.debug("check_my_permissions called - role: %s", role)
 
-        permission_map = {
-            "admin": {
-                "can_read_profile": True,
-                "can_list_files": True,
-                "can_send_email": True,
-                "can_delete_resources": True,
-                "can_use_time_tools": True,
-                "can_list_s3": True,
-                "can_view_s3_object": True,
-            },
-            "developer": {
-                "can_read_profile": True,
-                "can_list_files": True,
-                "can_send_email": False,
-                "can_delete_resources": False,
-                "can_use_time_tools": False,
-                "can_list_s3": True,
-                "can_view_s3_object": True,
-            },
-            "viewer": {
-                "can_read_profile": True,
-                "can_list_files": False,
-                "can_send_email": False,
-                "can_delete_resources": False,
-                "can_use_time_tools": False,
-                "can_list_s3": False,
-                "can_view_s3_object": True,
-            },
-            "none": {
-                "can_read_profile": False,
-                "can_list_files": False,
-                "can_send_email": False,
-                "can_delete_resources": False,
-                "can_use_time_tools": False,
-                "can_list_s3": False,
-                "can_view_s3_object": False,
-            },
-        }
-
         return {
             "role": role,
-            "permissions": permission_map.get(role, permission_map["none"]),
+            "permissions": PERMISSION_MAP.get(role, PERMISSION_MAP["none"]),
         }
 
     async def chat(self, session_id: str, user_id: str, message: str, access_token: str) -> AsyncGenerator[dict, None]:
@@ -335,7 +336,7 @@ def _extract_bearer_token(request: Request, endpoint: str) -> str:
         return auth_header[7:]
     if is_auth_disabled("adk"):
         logger.warning("AUTH BYPASSED: %s", endpoint)
-        return "dev-bypass-token"
+        return DEV_BYPASS_TOKEN
     raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
 
@@ -356,21 +357,28 @@ async def create_session(request: Request):
     return {"session_id": session_id}
 
 
-@app.post("/chat")
-async def chat(request: Request):
-    """Process a chat message."""
-    access_token = _extract_bearer_token(request, "POST /chat")
+async def _parse_chat_request(request: Request, endpoint: str) -> tuple[str, str, str, str, str]:
+    """Parse and validate a chat request body.
 
+    Returns (access_token, message, user_id, session_id, role).
+    Raises HTTPException(400) if required fields are missing.
+    """
+    access_token = _extract_bearer_token(request, endpoint)
     body = await request.json()
-
     message = body.get("message", "")
     user_id = body.get("user_id")
     session_id = body.get("session_id")
     role = body.get("role", "")
-    logger.info("Chat request - user: %s, session: %s, role: %s", user_id, session_id, role)
-
     if not all([message, user_id, session_id]):
         raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
+    return access_token, message, user_id, session_id, role
+
+
+@app.post("/chat")
+async def chat(request: Request):
+    """Process a chat message."""
+    access_token, message, user_id, session_id, role = await _parse_chat_request(request, "POST /chat")
+    logger.info("Chat request - user: %s, session: %s, role: %s", user_id, session_id, role)
 
     # Update role in session state if provided (same pattern as token refresh)
     if role:
@@ -398,16 +406,7 @@ async def chat(request: Request):
 @app.post("/chat/stream")
 async def chat_stream(request: Request):
     """Process a chat message with streaming response."""
-    access_token = _extract_bearer_token(request, "POST /chat/stream")
-
-    body = await request.json()
-
-    message = body.get("message", "")
-    user_id = body.get("user_id")
-    session_id = body.get("session_id")
-
-    if not all([message, user_id, session_id]):
-        raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
+    access_token, message, user_id, session_id, _ = await _parse_chat_request(request, "POST /chat/stream")
 
     async def generate():
         async for event in agent.chat(session_id, user_id, message, access_token):
