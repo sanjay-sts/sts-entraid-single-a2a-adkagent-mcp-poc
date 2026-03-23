@@ -28,6 +28,9 @@ cryptography>=42.0.0
 # Azure Identity (OBO token exchange for Graph API)
 azure-identity>=1.19.0
 
+# Cedar - ABAC policy engine (in-process, no sidecar)
+cedarpy>=4.0.0
+
 # Environment variables
 python-dotenv>=1.0.0
 

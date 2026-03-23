@@ -183,17 +183,23 @@ Frontend (Bearer token + X-Assume-Role header)
       -> MCP Server (ContextVars: current_user_token, current_user_role, current_user_email, current_user_provider)
 ```
 
-### Files That Will Be Modified
+### Files Modified (Actual)
 
 | File | Change |
 |------|--------|
-| `mcp_server/policy.py` | Add `CedarPolicyEvaluator` class |
-| `mcp_server/server.py` | Add `delete_s3_object` tool, update auth to use Cedar |
-| `a2a_server/server.py` | Consume Cedar PDP instead of duplicated logic |
-| `permissions.toml` / `permissions.example.toml` | Add user attributes section |
-| NEW: `cedar/` | Policy files, schema, entities |
-| NEW: `mcp_server/cedar_evaluator.py` | Cedar integration module (if too large for policy.py) |
-| `tests/test_access_control.py` | ABAC test scenarios |
+| `mcp_server/policy.py` | Added `CedarPolicyEvaluator` class + `AccessRequest.context` field |
+| `mcp_server/server.py` | Replaced `require_role()` with `require_cedar()`, added `delete_s3_object` tool, added `cedar_check_with_context()` |
+| `a2a_server/server.py` | Removed duplicated `GROUP_TO_ROLE`/`TOOL_ROLES`/`ROLE_PRIORITY`, uses shared `CedarPolicyEvaluator` |
+| `dev_config.py` | Added shared `detect_provider()` function |
+| `permissions.example.toml` | Added ABAC attribute source documentation |
+| `requirements.txt` | Added `cedarpy>=4.0.0` |
+| NEW: `cedar/schema.cedarschema` | Entity types: User, Role, Tool, S3Folder + actions |
+| NEW: `cedar/entities.json` | Static entities: 3 roles + 12 tools |
+| NEW: `cedar/policies/rbac.cedar` | RBAC permit policies for all tools |
+| NEW: `cedar/policies/abac.cedar` | ABAC policy: archiver + archive/ path |
+| NEW: `cedar/policies/guardrails.cedar` | Forbid: no delete in protected/ |
+| NEW: `tests/test_cedar_smoke.py` | 28 Cedar tests (RBAC, ABAC, evaluator integration) |
+| NEW: `scratchpad/cedar-abac/` | 4 documentation files (prerequisites, requirements, design, plan) |
 
 ---
 

@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Add project root and mcp_server/ to path for shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider
 from policy import AccessRequest, TomlPolicyEvaluator, CedarPolicyEvaluator
 
 # Context variables for passing auth data to agent executor
@@ -390,7 +390,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
             if user_id in user_sessions:
                 return user_sessions[user_id]
 
-            provider = _detect_provider(user_claims)
+            provider = detect_provider(user_claims)
             email, name, groups = _extract_user_info(user_claims, provider)
 
             async with httpx.AsyncClient() as client:
@@ -502,6 +502,13 @@ agent_card = AgentCard(
             description="Get metadata about a specific S3 object (all authenticated users)",
             tags=["s3", "aws", "storage", "metadata"],
             examples=["Get info about file.txt in my-bucket"],
+        ),
+        AgentSkill(
+            id="s3_delete",
+            name="S3 Object Delete",
+            description="Delete an S3 object (admin, or developer with archiver attribute for archive/ prefix only)",
+            tags=["s3", "aws", "storage", "abac", "delete"],
+            examples=["Delete old-report.csv from archive bucket", "Remove file from S3"],
         ),
     ],
 )
@@ -621,7 +628,7 @@ async def auth_middleware(request: Request, call_next):
                                "Your account has been blocked", "blocked_user")
 
         # Check group membership (provider-aware)
-        provider = _detect_provider(claims)
+        provider = detect_provider(claims)
         if provider == "cognito":
             user_groups = claims.get("cognito:groups", [])
             allowed = COGNITO_ALLOWED_GROUPS
@@ -698,14 +705,7 @@ TOOL_SCOPES = {
 ALL_TOOLS = list(TOOL_SCOPES.keys())
 
 
-def _detect_provider(claims: dict) -> str:
-    """Detect IdP from token issuer claim."""
-    iss = claims.get("iss", "")
-    if "login.microsoftonline.com" in iss or "sts.windows.net" in iss:
-        return "entra"
-    if "cognito-idp" in iss:
-        return "cognito"
-    return "unknown"
+# _detect_provider removed — using shared detect_provider() from dev_config
 
 
 def _extract_user_info(claims: dict, provider: str) -> tuple[str, str, list]:
@@ -747,7 +747,7 @@ async def get_me(request: Request):
             media_type="application/json",
         )
 
-    provider = _detect_provider(claims)
+    provider = detect_provider(claims)
     user_email, user_name, user_groups = _extract_user_info(claims, provider)
 
     # Role resolution via Cedar evaluator (delegates to TomlPolicyEvaluator)

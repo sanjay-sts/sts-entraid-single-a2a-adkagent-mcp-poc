@@ -54,3 +54,18 @@ def is_auth_disabled(section: str) -> bool:
 def get_section(section: str) -> dict[str, Any]:
     """Get the full config section for a server."""
     return _load_config().get(section, {})
+
+
+def detect_provider(claims: dict) -> str:
+    """Detect IdP from token issuer claim.
+
+    Shared across A2A and MCP servers to avoid duplication.
+    """
+    iss = claims.get("iss", "")
+    if "login.microsoftonline.com" in iss or "sts.windows.net" in iss:
+        return "entra"
+    if "cognito-idp" in iss:
+        return "cognito"
+    if "auth0.com" in iss:
+        return "auth0"
+    return "unknown"

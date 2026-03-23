@@ -28,7 +28,7 @@ from fastmcp.exceptions import ToolError
 # Add project root and mcp_server/ to path for sibling module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider
 from policy import AccessRequest, AccessDecision, TomlPolicyEvaluator, CedarPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
 
@@ -74,16 +74,7 @@ EMAIL_CLAIMS = {
 }
 
 
-def _detect_provider(claims: dict) -> str:
-    """Detect IdP from token issuer claim."""
-    iss = claims.get("iss", "")
-    if "login.microsoftonline.com" in iss or "sts.windows.net" in iss:
-        return "entra"
-    if "cognito-idp" in iss:
-        return "cognito"
-    if "auth0.com" in iss:
-        return "auth0"
-    return "default"
+# _detect_provider removed — using shared detect_provider() from dev_config
 
 
 def _extract_email(claims: dict, provider: str) -> str:
@@ -243,7 +234,7 @@ class UserContextMiddleware(Middleware):
                 raise ToolError("No valid authentication token available")
             return  # ContextVars stay at defaults → tools hidden during listing
 
-        provider = _detect_provider(token.claims)
+        provider = detect_provider(token.claims)
 
         # Cognito access tokens use client_id instead of aud — validate manually
         if provider == "cognito" and COGNITO_CLIENT_ID:

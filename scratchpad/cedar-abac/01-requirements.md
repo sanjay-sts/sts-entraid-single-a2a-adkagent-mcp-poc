@@ -43,9 +43,10 @@ This requires:
 
 ### R4: Single PDP for A2A + MCP
 
-- A2A server agent-level checks (group membership, blocked users) → Cedar
-- MCP server tool-level checks (role-to-tool mapping) → Cedar
-- Eliminates duplicated `GROUP_TO_ROLE`, `TOOL_ROLES`, `ROLE_PRIORITY` between servers
+- MCP server tool-level checks (role-to-tool mapping) → Cedar (**DONE**)
+- A2A server role resolution + `/me` permissions matrix → Cedar (**DONE**)
+- Eliminated duplicated `GROUP_TO_ROLE`, `TOOL_ROLES`, `ROLE_PRIORITY` between servers (**DONE**)
+- A2A server agent-level group membership check → **stays in Python** (coarse entry filter — "can this user access the agent at all?" is a different question from "can this user call this tool?"). Moving to Cedar requires a new `access_agent` action in the schema — deferred to future iteration.
 
 ### R5: Custom JWT Claims as Attribute Source
 

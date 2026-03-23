@@ -26,3 +26,10 @@
 [defaults]
 # Role for authenticated users not matched by group rules or user overrides
 unknown_users = "none"
+
+# NOTE: ABAC attributes (archiver, department, etc.) come from JWT custom claims,
+# not from this file. Configure in:
+#   - Entra ID: App Registration > Token Configuration > Optional Claims
+#   - Cognito: User Pool > Triggers > Pre Token Generation Lambda
+# The CedarPolicyEvaluator extracts these claims and sets them on the Cedar User entity.
+# See cedar/schema.cedarschema for the attribute definitions.

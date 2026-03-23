@@ -150,7 +150,7 @@ Role selection: Users set `X-Assume-Role` header. `UserContextMiddleware` valida
 Frontend (Bearer token + X-Assume-Role header)
   → A2A Server (ContextVars: current_user_claims, current_access_token, current_assumed_role)
     → ADK Agent (session state: user:access_token, user:role, user:email, user:groups)
-      → MCP Server (ContextVars: current_user_token, current_user_role, current_user_email, current_user_provider)
+      → MCP Server (ContextVars: current_user_token, current_user_role, current_user_email, current_user_provider, current_user_groups, current_user_claims)
 ```
 
 Each tier uses `ContextVar` for async-safe auth propagation. The MCP server runs in stateless HTTP mode (`stateless_http=True`), so `ContextVar`s are used instead of `ctx.get_state()`.
@@ -347,19 +347,19 @@ uv run pytest tests/test_access_control.py -v
 | `[ROLE_SELECTION] Role selection required...` | Tool call without `X-Assume-Role` |
 | `[TOOL_DENIAL] Cannot assume role '...'` | Role not available to user |
 | `[TOOL_DENIAL] No roles available...` | No group/user mappings |
-| `[TOOL_DENIAL] Access denied: Role '...' cannot use this tool` | Role not in `auth=require_role(...)` |
+| `[TOOL_DENIAL] Access denied: Cedar denied: ...` | Cedar policy denied access for this role/tool |
 
 ## Conventions
 
 1. **Token propagation**: Always via `Authorization: Bearer` headers, never in JSON payloads
 2. **State prefix**: `user:` prefix for ADK session state persistence
-3. **Context variables**: `ContextVar` for async-safe auth data (A2A: 3 vars, MCP: 4 vars)
+3. **Context variables**: `ContextVar` for async-safe auth data (A2A: 3 vars, MCP: 6 vars)
 4. **Stateless MCP**: `stateless_http=True` — no server-side session, ContextVars only
 5. **Port range**: 10000+ to avoid conflicts
 6. **Permission store**: `permissions.toml` is gitignored; group-to-role mappings are per-provider
 7. **Multi-IdP**: Provider detected from `iss` claim; group mappings under `[group_rules.<provider>]`
 8. **Graph API constants**: `GRAPH_API_BASE` in `mcp_server/server.py`
-9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` (MCP)
+9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `require_cedar()` / `cedar_check_with_context()` (MCP), `detect_provider()` (shared in `dev_config.py`)
 10. **Frontend shared utilities**: `a2aClient.js` centralizes API calls + `buildAuditEntry()`; `constants.js` holds `A2A_SERVER_URL` and `PROVIDER_LABELS`
 11. **Lazy logger formatting**: Use `logger.info("msg: %s", val)` not f-strings in hot paths
 
