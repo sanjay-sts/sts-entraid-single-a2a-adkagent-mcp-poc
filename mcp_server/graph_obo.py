@@ -34,7 +34,7 @@ class GraphOBOExchanger:
 
     def _get_credential(self, user_assertion: str) -> OnBehalfOfCredential:
         """Get or create a cached credential for this user assertion."""
-        cache_key = hashlib.sha256(user_assertion.encode()).hexdigest()[:16]
+        cache_key = hashlib.sha256(user_assertion.encode()).hexdigest()
 
         if cache_key not in self._credentials:
             # Evict oldest if at capacity

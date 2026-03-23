@@ -155,7 +155,7 @@ model=LiteLlm(model="bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0")
 
 - `RunConfig(max_llm_calls=4)` prevents infinite loops
 - Rate limit retry: 3 attempts with 30s/60s/90s backoff
-- API key: `CLAUDE_API_KEY` auto-mapped to `ANTHROPIC_API_KEY` for LiteLLM
+- API key: `AWS_BEARER_TOKEN_BEDROCK` (12-hour token, refresh before expiry)
 
 ### MCP Header Provider
 
@@ -258,9 +258,6 @@ A2A_SERVER_PORT=10000
 ADK_SERVER_PORT=10001
 MCP_SERVER_PORT=10002
 FRONTEND_PORT=10003
-
-# LLM API Key
-CLAUDE_API_KEY=<anthropic-api-key>
 
 # AWS (for S3 tools and Bedrock LLM)
 AWS_REGION=us-east-1

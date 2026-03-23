@@ -166,6 +166,7 @@ def _build_auth():
         verifiers.append(JWTVerifier(
             jwks_uri=f"{cognito_iss}/.well-known/jwks.json",
             issuer=cognito_iss,
+            required_scopes=["ai-agent-api/access_as_user"],
         ))
 
     if not verifiers:

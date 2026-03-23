@@ -175,11 +175,6 @@ class TokenValidator:
         for config in IDP_CONFIGS:
             if token_iss in config.valid_issuers:
                 return config
-        # Fallback: try substring matching for partial issuer matches
-        for config in IDP_CONFIGS:
-            for valid_iss in config.valid_issuers:
-                if valid_iss in token_iss or token_iss in valid_iss:
-                    return config
         return None
 
     async def _get_keys_for_idp(self, kid: str, idp: IdPConfig):
@@ -432,7 +427,7 @@ agent_card = AgentCard(
         "bearer": SecurityScheme(root=HTTPAuthSecurityScheme(
             scheme="bearer",
             bearer_format="JWT",
-            description="Entra ID JWT token authentication",
+            description="Multi-IdP JWT token authentication (Entra ID, Cognito)",
         ))
     },
     skills=[
@@ -606,9 +601,7 @@ async def auth_middleware(request: Request, call_next):
     try:
         claims = await token_validator.validate(token)
         user_id = claims.get("sub", "")
-        user_groups = claims.get("groups", [])
         logger.info("Token validated for user: %s", claims.get('preferred_username', user_id))
-        logger.debug("User groups: %s", user_groups)
 
         # Check if user is blocked
         if user_id in BLOCKED_USERS:
@@ -626,7 +619,9 @@ async def auth_middleware(request: Request, call_next):
             user_groups = claims.get("cognito:groups", [])
             allowed = COGNITO_ALLOWED_GROUPS
         else:
+            user_groups = claims.get("groups", [])
             allowed = ALLOWED_GROUPS
+        logger.debug("User groups (%s): %s", provider, user_groups)
 
         if allowed and not any(g in allowed for g in user_groups):
             logger.warning("User %s not in allowed groups. Has: %s, Allowed: %s", user_id, user_groups, allowed)

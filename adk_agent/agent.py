@@ -108,7 +108,7 @@ class IdentityAwareAgent:
         )
 
         # Create the agent with both local tools and MCP toolset
-        # Using LlmAgent (recommended for LiteLLM) with Claude Sonnet 4
+        # Using LlmAgent (recommended for LiteLLM) with Claude Haiku 4.5 on Bedrock
         self.agent = LlmAgent(
             model=LiteLlm(model="bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"),
             name="identity_aware_agent",
