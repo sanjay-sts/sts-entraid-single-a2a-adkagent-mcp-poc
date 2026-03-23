@@ -2,6 +2,7 @@
 
 Reads dev_config.toml (gitignored) to control auth bypass per server.
 If the file doesn't exist, all auth is enforced (production behavior).
+Config is cached at first load — restart servers after changes.
 """
 import logging
 import tomllib

@@ -499,7 +499,7 @@ async def send_email(
 
 @mcp.tool(auth=require_role("admin"))
 async def delete_resource(resource_id: str) -> dict:
-    """Delete a resource (admin only with full write scope)."""
+    """Delete a resource (admin only, simulated)."""
     user_role = current_user_role.get()
     logger.info("Delete requested by %s for resource %s", user_role, resource_id)
 

@@ -619,7 +619,11 @@ async def auth_middleware(request: Request, call_next):
             allowed = ALLOWED_GROUPS
         logger.debug("User groups (%s): %s", provider, user_groups)
 
-        if allowed and not any(g in allowed for g in user_groups):
+        if not allowed:
+            logger.warning("No allowed groups configured for provider %s — denying access", provider)
+            return _auth_error(request, 403, "access_denied",
+                               "Agent access control not configured", "no_group_configuration")
+        if not any(g in allowed for g in user_groups):
             logger.warning("User %s not in allowed groups. Has: %s, Allowed: %s", user_id, user_groups, allowed)
             return _auth_error(request, 403, "access_denied",
                                "Not a member of any authorized group", "no_group_membership")
@@ -664,7 +668,7 @@ a2a_app = A2AStarletteApplication(
 a2a_app.add_routes_to_app(app)
 
 
-# Group-to-role mapping (same as mcp_server and adk_agent)
+# Group-to-role mapping for agent-level access control
 GROUP_TO_ROLE = {
     os.getenv("ADMIN_GROUP_ID"): "admin",
     os.getenv("DEVELOPER_GROUP_ID"): "developer",

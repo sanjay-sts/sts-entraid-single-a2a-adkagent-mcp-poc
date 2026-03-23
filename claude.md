@@ -349,7 +349,7 @@ uv run pytest tests/test_access_control.py -v
 5. **Port range**: 10000+ to avoid conflicts
 6. **Permission store**: `permissions.toml` is gitignored; group-to-role mappings are per-provider
 7. **Multi-IdP**: Provider detected from `iss` claim; group mappings under `[group_rules.<provider>]`
-8. **Graph API constants**: `GRAPH_API_BASE` and `GRAPH_SCOPE_PREFIX` in `mcp_server/server.py`
+8. **Graph API constants**: `GRAPH_API_BASE` in `mcp_server/server.py`
 9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` (MCP)
 10. **Frontend shared utilities**: `a2aClient.js` centralizes API calls + `buildAuditEntry()`; `constants.js` holds `A2A_SERVER_URL` and `PROVIDER_LABELS`
 11. **Lazy logger formatting**: Use `logger.info("msg: %s", val)` not f-strings in hot paths

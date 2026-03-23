@@ -340,6 +340,26 @@ def _extract_bearer_token(request: Request, endpoint: str) -> str:
     raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
 
+def _validate_user_id(access_token: str, user_id: str) -> None:
+    """Verify user_id matches the token's sub claim to prevent impersonation.
+
+    Skips validation in dev bypass mode. Raises HTTPException(403) on mismatch.
+    """
+    if access_token == DEV_BYPASS_TOKEN:
+        return
+    try:
+        import jwt
+        claims = jwt.decode(access_token, options={"verify_signature": False})
+        token_sub = claims.get("sub")
+        if token_sub and token_sub != user_id:
+            logger.warning("user_id mismatch: body=%s, token sub=%s", user_id, token_sub)
+            raise HTTPException(status_code=403, detail="user_id does not match authenticated token")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Token decode failed — A2A gateway already validated
+
+
 @app.post("/session")
 async def create_session(request: Request):
     """Create a new session for a user."""
@@ -352,6 +372,7 @@ async def create_session(request: Request):
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
 
+    _validate_user_id(access_token, user_id)
     session_id = await agent.create_session(user_id, access_token, user_info)
     logger.info("Session created: %s for user: %s", session_id, user_id)
     return {"session_id": session_id}
@@ -371,6 +392,7 @@ async def _parse_chat_request(request: Request, endpoint: str) -> tuple[str, str
     role = body.get("role", "")
     if not all([message, user_id, session_id]):
         raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
+    _validate_user_id(access_token, user_id)
     return access_token, message, user_id, session_id, role
 
 
