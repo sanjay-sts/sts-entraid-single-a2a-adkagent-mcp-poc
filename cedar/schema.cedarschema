@@ -1,0 +1,46 @@
+namespace AgentAuth {
+
+  // ── Principal Types ──────────────────────────────────────────────
+
+  // Role entity — User membership via "in [Role]" hierarchy
+  entity Role;
+
+  // User — human authenticated via Entra ID or AWS Cognito
+  entity User in [Role] {
+    provider: String,        // "entra", "cognito"
+    email: String,
+    groups: Set<String>,     // IdP group IDs/names from token claims
+    department?: String,     // custom JWT claim (Entra optional claims / Cognito Lambda)
+    archiver?: Bool,         // custom JWT claim — ABAC attribute for S3 archive access
+  };
+
+  // ── Resource Types ───────────────────────────────────────────────
+
+  // MCP Tool — the primary resource being authorized
+  entity Tool {
+    sensitivity?: String,        // "public", "internal", "confidential"
+    requires_provider?: String,  // "entra" for Graph API tools, "" for any provider
+  };
+
+  // S3 folder — sub-resource for path-based ABAC (future use)
+  entity S3Folder;
+
+  // ── Action Types ─────────────────────────────────────────────────
+
+  // Invoke an MCP tool
+  action call_tool appliesTo {
+    principal: [User],
+    resource: [Tool],
+    context: {
+      resource_path?: String,    // S3 key prefix, OneDrive folder path, etc.
+      environment?: String,      // "dev", "staging", "prod"
+    },
+  };
+
+  // Discover available MCP tools
+  action list_tools appliesTo {
+    principal: [User],
+    resource: [Tool],
+  };
+
+}

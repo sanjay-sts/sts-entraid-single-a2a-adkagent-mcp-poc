@@ -1,0 +1,73 @@
+[
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Role", "id": "admin" } },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Role", "id": "developer" } },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Role", "id": "viewer" } },
+    "attrs": {},
+    "parents": []
+  },
+
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_user_profile" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "entra" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "list_files" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "entra" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "send_email" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "entra" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "delete_resource" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "list_s3_buckets" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "list_s3_objects" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_s3_object_info" } },
+    "attrs": { "sensitivity": "public", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "delete_s3_object" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_current_time" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "convert_timezone" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_time_difference" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  }
+]
