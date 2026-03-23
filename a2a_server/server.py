@@ -20,8 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 # Add project root and mcp_server/ to path for shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider
-from policy import AccessRequest, TomlPolicyEvaluator, CedarPolicyEvaluator
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, PERMISSIONS_PATH, CEDAR_DIR
+from policy import TomlPolicyEvaluator, CedarPolicyEvaluator
 
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
@@ -94,13 +94,8 @@ COGNITO_ALLOWED_GROUPS = [
 COGNITO_ALLOWED_GROUPS = [g for g in COGNITO_ALLOWED_GROUPS if g]
 
 # --- Cedar policy evaluator (shared with MCP server) ---
-_toml_evaluator = TomlPolicyEvaluator(
-    Path(__file__).parent.parent / "permissions.toml"
-)
-cedar_evaluator = CedarPolicyEvaluator(
-    Path(__file__).parent.parent / "cedar",
-    _toml_evaluator,
-)
+_toml_evaluator = TomlPolicyEvaluator(PERMISSIONS_PATH)
+cedar_evaluator = CedarPolicyEvaluator(CEDAR_DIR, _toml_evaluator)
 
 
 @dataclass
@@ -705,9 +700,6 @@ TOOL_SCOPES = {
 ALL_TOOLS = list(TOOL_SCOPES.keys())
 
 
-# _detect_provider removed — using shared detect_provider() from dev_config
-
-
 def _extract_user_info(claims: dict, provider: str) -> tuple[str, str, list]:
     """Extract (email, name, groups) from claims based on provider.
 
@@ -773,22 +765,21 @@ async def get_me(request: Request):
         active_role = "none"
 
     # Build group-to-role mapping from evaluator
-    group_roles = {}
+    group_names = {}
     for gid in user_groups:
         roles_for_group = cedar_evaluator.get_available_roles(user_email, provider, [gid])
         if roles_for_group:
-            group_roles[gid] = roles_for_group[0]
-    group_names = group_roles
+            group_names[gid] = roles_for_group[0]
 
-    # Build permissions matrix by evaluating Cedar for each tool
-    permissions = {}
-    for tool in ALL_TOOLS:
-        req = AccessRequest(
-            email=user_email, provider=provider, groups=user_groups,
-            tool_name=tool, claims=claims, assumed_role=active_role,
-        )
-        decision = cedar_evaluator.check_access(req, [])
-        permissions[tool] = decision.allowed
+    # Build permissions matrix via batch Cedar evaluation (single call)
+    permissions = cedar_evaluator.check_access_batch(
+        email=user_email,
+        provider=provider,
+        groups=user_groups,
+        tool_names=ALL_TOOLS,
+        claims=claims,
+        assumed_role=active_role,
+    )
 
     return {
         "user": {

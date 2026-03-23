@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cedarpy import is_authorized
+from cedarpy import is_authorized, is_authorized_batch
 
 logger = logging.getLogger("mcp_server.policy")
 
@@ -55,9 +55,14 @@ class PolicyEvaluator(ABC):
 
     @abstractmethod
     def check_access(
-        self, request: AccessRequest, allowed_roles: list[str]
+        self, request: AccessRequest, allowed_roles: list[str] | None = None
     ) -> AccessDecision:
-        """Check if the user can access a tool. Full ABAC entry point."""
+        """Check if the user can access a tool.
+
+        Args:
+            request: The access request with user/tool context.
+            allowed_roles: For RBAC evaluators (TomlPolicyEvaluator). Ignored by Cedar.
+        """
         ...
 
 
@@ -122,11 +127,11 @@ class TomlPolicyEvaluator(PolicyEvaluator):
         return [r for r in self.ROLE_PRIORITY if r in roles]
 
     def check_access(
-        self, request: AccessRequest, allowed_roles: list[str]
+        self, request: AccessRequest, allowed_roles: list[str] | None = None
     ) -> AccessDecision:
         """RBAC check: verify assumed role is allowed for this tool."""
         role = request.assumed_role or "none"
-        allowed = role in allowed_roles
+        allowed = role in (allowed_roles or [])
         reason = (
             ""
             if allowed
@@ -255,13 +260,12 @@ class CedarPolicyEvaluator(PolicyEvaluator):
         return self._toml.get_available_roles(email, provider, groups)
 
     def check_access(
-        self, request: AccessRequest, allowed_roles: list[str]
+        self, request: AccessRequest, allowed_roles: list[str] | None = None
     ) -> AccessDecision:
         """Evaluate Cedar policies for access decision.
 
-        The `allowed_roles` parameter is ignored — Cedar policies define
-        which roles can access which tools. Kept for interface compatibility
-        with TomlPolicyEvaluator.
+        Cedar policies define which roles can access which tools, so
+        `allowed_roles` is not used.
         """
         self._load()  # Hot-reload if changed
 
@@ -298,7 +302,7 @@ class CedarPolicyEvaluator(PolicyEvaluator):
 
         role = request.assumed_role or (roles[0] if roles else "none")
         if result.allowed:
-            logger.info(
+            logger.debug(
                 "Cedar ALLOW: %s as %s → %s",
                 request.email, role, request.tool_name,
             )
@@ -310,3 +314,49 @@ class CedarPolicyEvaluator(PolicyEvaluator):
             )
             logger.info("Cedar DENY: %s", reason)
             return AccessDecision(allowed=False, role=role, reason=reason)
+
+    def check_access_batch(
+        self,
+        email: str,
+        provider: str,
+        groups: list[str],
+        tool_names: list[str],
+        claims: dict,
+        assumed_role: str = "",
+    ) -> dict[str, bool]:
+        """Evaluate Cedar policies for multiple tools in one batch call.
+
+        Resolves roles once, builds user entity once, calls is_authorized_batch()
+        once. Returns {tool_name: allowed} dict.
+        """
+        self._load()
+        roles = self.get_available_roles(email, provider, groups)
+        user_entity = self._build_user_entity(email, provider, groups, roles, claims)
+        entities = self._entities + [user_entity]
+        role = assumed_role or (roles[0] if roles else "none")
+
+        requests = [
+            {
+                "principal": f'AgentAuth::User::"{email}"',
+                "action": 'AgentAuth::Action::"call_tool"',
+                "resource": f'AgentAuth::Tool::"{tool}"',
+                "context": {},
+            }
+            for tool in tool_names
+        ]
+
+        results = is_authorized_batch(
+            requests=requests,
+            policies=self._policies,
+            entities=entities,
+        )
+
+        permissions = {}
+        for tool, result in zip(tool_names, results):
+            permissions[tool] = result.allowed
+            if result.allowed:
+                logger.debug("Cedar batch ALLOW: %s as %s → %s", email, role, tool)
+            else:
+                logger.debug("Cedar batch DENY: %s as %s → %s", email, role, tool)
+
+        return permissions

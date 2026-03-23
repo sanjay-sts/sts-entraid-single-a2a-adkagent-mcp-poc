@@ -155,13 +155,13 @@ The `parents` array connects the user to their roles. `roles` comes from `TomlPo
 # mcp_server/policy.py (existing interface)
 class PolicyEvaluator(ABC):
     def get_available_roles(self, email, provider, groups) -> list[str]: ...
-    def check_access(self, request: AccessRequest, allowed_roles: list[str]) -> AccessDecision: ...
+    def check_access(self, request: AccessRequest, allowed_roles: list[str] | None = None) -> AccessDecision: ...
 ```
 
 `CedarPolicyEvaluator` (implemented in `mcp_server/policy.py`):
 - **Composes** `TomlPolicyEvaluator` for `get_available_roles()` — role resolution stays TOML-based
 - **Replaces** `check_access()` with Cedar `is_authorized()` call
-- `allowed_roles` parameter is **ignored** — Cedar policies define tool-to-role mapping
+- `allowed_roles` parameter is optional (`None` default) — Cedar ignores it, TOML uses it
 - `AccessRequest` extended with `context: dict` field for Cedar context (resource_path, environment)
 - ABAC attributes extracted from JWT claims via `ABAC_CLAIM_KEYS` mapping
 - Hot-reloads `.cedar` files and `entities.json` on file change (mtime-based)
@@ -197,7 +197,7 @@ Token Validation (protocol auth — unchanged)
   │
   ▼
 Principal Normalization (new)
-  ├── _detect_provider() → provider
+  ├── detect_provider() → provider
   ├── _extract_email() → email
   ├── _extract_groups() → groups
   ├── get_available_roles() → roles (TOML)
@@ -240,7 +240,7 @@ Phase 1 (auth callable — require_cedar):
   │ Cedar check WITHOUT context                             │
   │ Question: "Can this role call this tool?"               │
   │ Data: email, provider, groups, role, tool_name          │
-  │ Runs for: ALL 12 tools                                  │
+  │ Runs for: ALL 11 tools                                  │
   └─────────────────────────────────────────────────────────┘
 
 Phase 2 (inside tool — cedar_check_with_context):
@@ -260,9 +260,31 @@ For RBAC-only tools, Phase 1 is sufficient. For `delete_s3_object`, both phases 
 ### ContextVars Added for Cedar
 
 ```python
-current_user_groups: ContextVar[list]   # IdP groups from token
+current_user_groups: ContextVar[list[str]]  # IdP groups from token
 current_user_claims: ContextVar[dict]   # Full JWT claims (for ABAC attributes)
 ```
 
-These are set in `UserContextMiddleware._resolve_context()` alongside existing ContextVars,
-so `require_cedar()` and `cedar_check_with_context()` can build Cedar `AccessRequest`s.
+These are set in `UserContextMiddleware._resolve_context()` alongside existing ContextVars.
+`_build_access_request()` helper reads all ContextVars to construct an `AccessRequest`,
+used by both `require_cedar()` and `cedar_check_with_context()`.
+
+### Shared Configuration (dev_config.py)
+
+Path constants and `detect_provider()` are shared across A2A and MCP servers:
+
+```python
+# dev_config.py
+PROJECT_ROOT = Path(__file__).parent
+PERMISSIONS_PATH = PROJECT_ROOT / "permissions.toml"
+CEDAR_DIR = PROJECT_ROOT / "cedar"
+
+def detect_provider(claims: dict) -> str:
+    """Detect IdP from token issuer claim."""
+```
+
+### Batch Evaluation
+
+`CedarPolicyEvaluator.check_access_batch()` uses `cedarpy.is_authorized_batch()` for
+evaluating multiple tools in one call. Used by the A2A `/me` endpoint to build the
+permissions matrix — resolves roles once, builds user entity once, evaluates all 11 tools
+in a single batch call instead of 11 individual calls.

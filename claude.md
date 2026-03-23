@@ -43,12 +43,12 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ├── adk_agent/
 │   └── agent.py               # Google ADK agent — session mgmt, streaming, retry
 ├── mcp_server/
-│   ├── server.py              # FastMCP tools — Cedar ABAC auth, UserContextMiddleware, 12 tools
+│   ├── server.py              # FastMCP tools — Cedar ABAC auth, UserContextMiddleware, 11 tools
 │   ├── graph_obo.py           # OBO token exchange for Graph API — GraphOBOExchanger singleton
 │   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator + CedarPolicyEvaluator
 ├── cedar/
 │   ├── schema.cedarschema     # Cedar entity types: User, Role, Tool, S3Folder + actions
-│   ├── entities.json          # Static entities: 3 roles + 12 tools
+│   ├── entities.json          # Static entities: 3 roles + 11 tools
 │   └── policies/
 │       ├── rbac.cedar         # RBAC permit policies (admin/developer/viewer → tools)
 │       ├── abac.cedar         # ABAC policy (developer + archiver → delete in archive/)
@@ -81,8 +81,9 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ├── tests/
 │   ├── conftest.py            # Pytest fixtures (mock tokens, Cognito helpers)
 │   ├── test_access_control.py # Access control tests
+│   ├── test_cedar_smoke.py    # Cedar RBAC/ABAC policy + CedarPolicyEvaluator tests (28 tests)
 │   └── test_security_dashboard.py # Dashboard tests
-├── dev_config.py              # Shared TOML config loader for auth bypass
+├── dev_config.py              # Shared config: auth bypass, detect_provider(), path constants
 ├── dev_config.example.toml    # Template for dev_config.toml (committed, defaults false)
 ├── permissions.example.toml   # Template for permissions.toml (group-to-role mapping)
 ├── pyproject.toml             # Python project config (uv)
@@ -97,13 +98,13 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 | Level | Location | Mechanism | Denies When |
 |-------|----------|-----------|-------------|
 | **Agent** | A2A Server | Multi-IdP JWT validation, group membership, blocklist | User blocked, not in allowed group, or invalid token |
-| **Tool** | MCP Server | FastMCP built-in auth + `auth=` callables + `UserContextMiddleware` | Token invalid, role not assumed, or role lacks tool permission |
+| **Tool** | MCP Server | Cedar policies via `require_cedar()` + `UserContextMiddleware` | Token invalid, role not assumed, or Cedar policy denies access |
 | **Resource** | Graph API / S3 | OAuth scopes (Graph), IAM policies (S3) | Token missing required scope or AWS access denied |
 
 ### Role Hierarchy & Tool Permissions
 
 ```
-admin      → All 12 tools (delete_s3_object blocked in protected/ by forbid guardrail)
+admin      → All 11 tools (delete_s3_object blocked in protected/ by forbid guardrail)
 developer  → get_user_profile, list_files, list_s3_buckets, list_s3_objects, get_s3_object_info
              + delete_s3_object (only with archiver=true attribute, only in archive/ path)
 viewer     → get_user_profile, get_s3_object_info
@@ -186,6 +187,23 @@ When `ENTRA_CLIENT_SECRET` is set, Graph tools exchange the user's custom-audien
 Helper functions in `mcp_server/server.py`:
 - `_require_entra_provider()` — returns error dict for non-Entra users
 - `_get_effective_graph_token(scope)` — returns `(token, obo_used)` tuple
+
+### Cedar Authorization (ABAC)
+
+Authorization is handled by Cedar policies evaluated in-process via `cedarpy`. The `CedarPolicyEvaluator` in `mcp_server/policy.py` composes `TomlPolicyEvaluator` (for group-to-role resolution) with Cedar (for policy decisions).
+
+**Two-phase authorization pattern:**
+- **Phase 1** (`require_cedar("tool_name")` auth callable): RBAC check without context — "can this role call this tool?"
+- **Phase 2** (`cedar_check_with_context()` inside tool): ABAC check with runtime context — "can this user do this specific operation?" Only used for ABAC tools like `delete_s3_object`.
+
+**Policy files** in `cedar/policies/`:
+- `rbac.cedar` — Role-based permits (admin→all, developer→5 tools, viewer→2 tools)
+- `abac.cedar` — Attribute-based: developer + `archiver=true` → delete in `archive/` only
+- `guardrails.cedar` — Forbid: no delete in `protected/` (overrides all permits)
+
+**Batch evaluation**: `/me` endpoint uses `check_access_batch()` which calls `is_authorized_batch()` once for all 11 tools, instead of 11 individual calls.
+
+**Hot-reload**: Cedar policies and entities are reloaded on file change (mtime-based).
 
 ### S3 Tools
 
@@ -311,6 +329,10 @@ Copy `dev_config.example.toml` to `dev_config.toml` and set `disable_auth = true
 ### Running Tests
 
 ```bash
+# Cedar ABAC policy + evaluator tests (28 tests)
+uv run pytest tests/test_cedar_smoke.py -v
+
+# Access control integration tests
 uv run pytest tests/test_access_control.py -v
 ```
 
@@ -359,7 +381,7 @@ uv run pytest tests/test_access_control.py -v
 6. **Permission store**: `permissions.toml` is gitignored; group-to-role mappings are per-provider
 7. **Multi-IdP**: Provider detected from `iss` claim; group mappings under `[group_rules.<provider>]`
 8. **Graph API constants**: `GRAPH_API_BASE` in `mcp_server/server.py`
-9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `require_cedar()` / `cedar_check_with_context()` (MCP), `detect_provider()` (shared in `dev_config.py`)
+9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `_build_access_request()` / `require_cedar()` / `cedar_check_with_context()` (MCP), `detect_provider()` / `PERMISSIONS_PATH` / `CEDAR_DIR` (shared in `dev_config.py`), `check_access_batch()` (CedarPolicyEvaluator)
 10. **Frontend shared utilities**: `a2aClient.js` centralizes API calls + `buildAuditEntry()`; `constants.js` holds `A2A_SERVER_URL` and `PROVIDER_LABELS`
 11. **Lazy logger formatting**: Use `logger.info("msg: %s", val)` not f-strings in hot paths
 

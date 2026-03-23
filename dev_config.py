@@ -11,7 +11,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path(__file__).parent / "dev_config.toml"
+PROJECT_ROOT = Path(__file__).parent
+PERMISSIONS_PATH = PROJECT_ROOT / "permissions.toml"
+CEDAR_DIR = PROJECT_ROOT / "cedar"
+
+_CONFIG_PATH = PROJECT_ROOT / "dev_config.toml"
 _config: dict[str, Any] | None = None
 _logged_sections: set[str] = set()
 

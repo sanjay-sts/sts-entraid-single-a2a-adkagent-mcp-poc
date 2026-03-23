@@ -28,8 +28,8 @@ from fastmcp.exceptions import ToolError
 # Add project root and mcp_server/ to path for sibling module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider
-from policy import AccessRequest, AccessDecision, TomlPolicyEvaluator, CedarPolicyEvaluator
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, PERMISSIONS_PATH, CEDAR_DIR
+from policy import AccessRequest, AccessDecision, PolicyEvaluator, TomlPolicyEvaluator, CedarPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
@@ -37,7 +37,7 @@ current_user_token: ContextVar[str] = ContextVar("current_user_token", default="
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
 current_user_provider: ContextVar[str] = ContextVar("current_user_provider", default="")
-current_user_groups: ContextVar[list] = ContextVar("current_user_groups", default=[])
+current_user_groups: ContextVar[list[str]] = ContextVar("current_user_groups", default=[])
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
 
 # Load environment variables
@@ -73,8 +73,6 @@ EMAIL_CLAIMS = {
     "default": ["email", "preferred_username", "sub"],
 }
 
-
-# _detect_provider removed — using shared detect_provider() from dev_config
 
 
 def _extract_email(claims: dict, provider: str) -> str:
@@ -174,13 +172,8 @@ def _build_auth():
 
 # --- Policy evaluator ---
 
-_toml_evaluator = TomlPolicyEvaluator(
-    Path(__file__).parent.parent / "permissions.toml"
-)
-policy_evaluator = CedarPolicyEvaluator(
-    Path(__file__).parent.parent / "cedar",
-    _toml_evaluator,
-)
+_toml_evaluator = TomlPolicyEvaluator(PERMISSIONS_PATH)
+policy_evaluator = CedarPolicyEvaluator(CEDAR_DIR, _toml_evaluator)
 
 
 # --- Middleware: role resolution + ContextVar setup ---
@@ -199,7 +192,7 @@ class UserContextMiddleware(Middleware):
       - Sets ContextVars for auth= callables and tool functions
     """
 
-    def __init__(self, evaluator):  # PolicyEvaluator (TomlPolicyEvaluator or CedarPolicyEvaluator)
+    def __init__(self, evaluator: PolicyEvaluator):
         self.policy_evaluator = evaluator
 
     def _set_bypass_context(self) -> None:
@@ -309,6 +302,19 @@ class UserContextMiddleware(Middleware):
 
 # --- Cedar auth callables for per-tool authorization ---
 
+def _build_access_request(tool_name: str, context: dict | None = None) -> AccessRequest:
+    """Build an AccessRequest from current ContextVars."""
+    return AccessRequest(
+        email=current_user_email.get(),
+        provider=current_user_provider.get(),
+        groups=current_user_groups.get(),
+        tool_name=tool_name,
+        claims=current_user_claims.get(),
+        assumed_role=current_user_role.get(),
+        context=context or {},
+    )
+
+
 def require_cedar(tool_name: str):
     """Cedar-based auth callable for @mcp.tool() decorators.
 
@@ -317,15 +323,7 @@ def require_cedar(tool_name: str):
     happens inside the tool function via cedar_check_with_context().
     """
     def check(ctx: AuthContext) -> bool:
-        request = AccessRequest(
-            email=current_user_email.get(),
-            provider=current_user_provider.get(),
-            groups=current_user_groups.get(),
-            tool_name=tool_name,
-            claims=current_user_claims.get(),
-            assumed_role=current_user_role.get(),
-        )
-        decision = policy_evaluator.check_access(request, [])
+        decision = policy_evaluator.check_access(_build_access_request(tool_name))
         if not decision.allowed:
             raise ToolError(
                 f"[TOOL_DENIAL] Access denied: {decision.reason}"
@@ -340,16 +338,7 @@ def cedar_check_with_context(tool_name: str, context: dict) -> AccessDecision:
     Call inside tool functions that need path-based or attribute-based checks
     beyond simple RBAC. Returns AccessDecision; caller handles denial.
     """
-    request = AccessRequest(
-        email=current_user_email.get(),
-        provider=current_user_provider.get(),
-        groups=current_user_groups.get(),
-        tool_name=tool_name,
-        claims=current_user_claims.get(),
-        assumed_role=current_user_role.get(),
-        context=context,
-    )
-    return policy_evaluator.check_access(request, [])
+    return policy_evaluator.check_access(_build_access_request(tool_name, context))
 
 
 async def _get_graph_token(scopes: list[str] | None = None) -> str | None:

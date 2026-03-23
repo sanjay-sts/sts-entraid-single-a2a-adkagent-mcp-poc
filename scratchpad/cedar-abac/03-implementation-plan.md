@@ -59,7 +59,7 @@
 ## Item 5: MCP Server Migration --- DONE
 
 **Deliverables:**
-- All 12 tools use `auth=require_cedar("tool_name")` (replaced `require_role()`)
+- All 11 tools use `auth=require_cedar("tool_name")` (replaced `require_role()`)
 - `require_role()` function removed entirely
 - `CedarPolicyEvaluator` is the active policy evaluator (composes `TomlPolicyEvaluator`)
 - Added `current_user_groups` and `current_user_claims` ContextVars
@@ -105,10 +105,23 @@ Item 1 (Schema + Entities)
             └── Item 5 (MCP Migration)
 ```
 
-## Dependencies to Install
+## Dependencies
 
 ```
-cedarpy  — Cedar policy evaluation engine
+cedarpy>=4.0.0  — Cedar policy evaluation engine (added to requirements.txt)
 ```
 
-Add to `requirements.txt`. Install via `uv pip install cedarpy`.
+## Post-Implementation Simplification
+
+Code review identified and fixed 9 issues:
+
+1. **`allowed_roles` made optional** (`None` default) — no more `[]` dummy values at call sites
+2. **Extracted `_build_access_request()` helper** — eliminated duplicated ContextVar reads
+3. **Added `check_access_batch()`** using `is_authorized_batch()` — `/me` reduced from 11 individual evals to 1 batch
+4. **ALLOW log level → DEBUG** — only DENY logged at INFO
+5. **`PolicyEvaluator` type annotation** on middleware `__init__`
+6. **`ContextVar[list[str]]`** — proper generic type
+7. **Removed dead tombstone comments** (`# _detect_provider removed`)
+8. **Removed `group_names = group_roles` alias**
+9. **Path constants** (`PERMISSIONS_PATH`, `CEDAR_DIR`) moved to shared `dev_config.py`
+10. **Tool count corrected** — 11 tools, not 12 (was miscounted in all docs)

@@ -6,7 +6,7 @@ Cedar as the single runtime PDP (Policy Decision Point) for the entire agent sys
 
 ## Functional Requirements
 
-### R1: Authorize All 12 MCP Tools
+### R1: Authorize All 11 MCP Tools
 
 Cedar policies must cover all tools currently using `require_role()` plus the new `delete_s3_object`:
 
@@ -23,7 +23,6 @@ Cedar policies must cover all tools currently using `require_role()` plus the ne
 | convert_timezone | `require_role("admin")` | Cedar permit policy |
 | get_time_difference | `require_role("admin")` | Cedar permit policy |
 | **delete_s3_object** (NEW) | N/A | Cedar ABAC policy (archiver demo) |
-| delete_resource (existing) | `require_role("admin")` | Cedar permit policy |
 
 ### R2: Support Both IdPs
 

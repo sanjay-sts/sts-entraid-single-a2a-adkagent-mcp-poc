@@ -6,16 +6,16 @@ This is not an app — it's an AI agent system with headless agents, MCP servers
 
 ### The Problem Today
 
-Authorization logic is **duplicated and scattered** across the A2A and MCP layers:
+Authorization logic **was** duplicated and scattered across the A2A and MCP layers. **All resolved by Cedar implementation:**
 
-| Logic | A2A Server (`a2a_server/server.py`) | MCP Server (`mcp_server/server.py` + `policy.py`) |
-|-------|-------------------------------------|-----------------------------------------------------|
-| Group-to-role mapping | `GROUP_TO_ROLE` dict (line 672) | `permissions.toml` via `TomlPolicyEvaluator` |
-| Tool-role permissions | `TOOL_ROLES` dict (line 683) | `auth=require_role(...)` on each `@mcp.tool()` |
-| Role priority | `ROLE_PRIORITY` (line 741) | `ROLE_PRIORITY` in `policy.py:63` |
-| Provider detection | `_detect_provider()` (line 710) | `_detect_provider()` (line 75) |
+| Was Duplicated | Resolution |
+|----------------|-----------|
+| `GROUP_TO_ROLE` dict (A2A) vs `permissions.toml` (MCP) | Both use `CedarPolicyEvaluator` → `TomlPolicyEvaluator` |
+| `TOOL_ROLES` dict (A2A) vs `require_role()` (MCP) | Both use Cedar policies in `cedar/policies/` |
+| `ROLE_PRIORITY` in both servers | Lives only in `TomlPolicyEvaluator` now |
+| `_detect_provider()` in both servers | Shared `detect_provider()` in `dev_config.py` |
 
-There is **no single policy decision point** — A2A makes one access decision (group membership), MCP makes another (role-to-tool), and they could disagree.
+Cedar is now the **single policy decision point** for both A2A and MCP servers.
 
 ### What Cedar Fixes
 
@@ -194,7 +194,7 @@ Frontend (Bearer token + X-Assume-Role header)
 | `permissions.example.toml` | Added ABAC attribute source documentation |
 | `requirements.txt` | Added `cedarpy>=4.0.0` |
 | NEW: `cedar/schema.cedarschema` | Entity types: User, Role, Tool, S3Folder + actions |
-| NEW: `cedar/entities.json` | Static entities: 3 roles + 12 tools |
+| NEW: `cedar/entities.json` | Static entities: 3 roles + 11 tools |
 | NEW: `cedar/policies/rbac.cedar` | RBAC permit policies for all tools |
 | NEW: `cedar/policies/abac.cedar` | ABAC policy: archiver + archive/ path |
 | NEW: `cedar/policies/guardrails.cedar` | Forbid: no delete in protected/ |

@@ -16,40 +16,40 @@
 - [x] Fix case-insensitive email lookup in policy.py
 - [x] Fix dev_config.py per-server logging
 
-## Current: Frontend Role Switching (This Iteration)
+## Completed: Frontend Role Switching (Previous Iteration)
 
 See `08-role-switching-plan.md` for full details.
 
-- [ ] A2A server: Add `current_assumed_role` ContextVar, extract X-Assume-Role from headers
-- [ ] A2A server: Forward role to ADK in /chat and /session request bodies
-- [ ] A2A server: Enhance GET /me to return `available_roles`
-- [ ] ADK agent: Update `mcp_header_provider` to include X-Assume-Role
-- [ ] ADK agent: Accept role in /session and /chat endpoints, update session state
-- [ ] Frontend: Add role dropdown in SecurityContextPanel (from available_roles)
-- [ ] Frontend: Send X-Assume-Role header on all A2A requests
-- [ ] Frontend: Update RBACTestMatrix to use selected role
-- [ ] Frontend: Update ChatInterface to pass X-Assume-Role
-- [ ] Frontend: Update testScenarios.js denial expectations
-- [ ] End-to-end testing through UI
+- [x] A2A server: Add `current_assumed_role` ContextVar, extract X-Assume-Role from headers
+- [x] A2A server: Forward role to ADK in /chat and /session request bodies
+- [x] A2A server: Enhance GET /me to return `available_roles`
+- [x] ADK agent: Update `mcp_header_provider` to include X-Assume-Role
+- [x] ADK agent: Accept role in /session and /chat endpoints, update session state
+- [x] Frontend: Add role dropdown in SecurityContextPanel (from available_roles)
+- [x] Frontend: Send X-Assume-Role header on all A2A requests
+- [x] Frontend: Update RBACTestMatrix to use selected role
+- [x] Frontend: Update ChatInterface to pass X-Assume-Role
+- [x] Frontend: Update testScenarios.js denial expectations
+- [x] End-to-end testing through UI
 
 ## Near-Term (Next Iteration)
 
-### Add Second IdP Provider
-- [ ] Add `JWTVerifier` for Cognito or Auth0 to `_build_auth()`
-- [ ] Add `[group_rules.cognito]` or `[group_rules.auth0]` to permissions.toml
-- [ ] Test with real tokens from second IdP
-- [ ] Verify same permission model works across IdPs
+### Add Second IdP Provider — DONE (Cognito)
+- [x] Add `JWTVerifier` for Cognito to `_build_auth()`
+- [x] Add `[group_rules.cognito]` to permissions.toml
+- [x] Test with real tokens from Cognito
+- [x] Verify same permission model works across IdPs
 
 ### Group Overage Resolution (Entra ID)
 - [ ] Implement Graph API `/me/memberOf` call for group overage
 - [ ] Cache group memberships (per-user, TTL-based)
 - [ ] This requires OBO or app-level Graph permissions
 
-### A2A Server Multi-IdP
-- [ ] Generalize `auth_middleware` in `a2a_server/server.py`
-- [ ] Replace hardcoded `JWKS_URIS`, `VALID_ISSUERS`, `ALLOWED_GROUPS`
-- [ ] Use same `permissions.toml` or shared permission store
-- [ ] A2A doesn't have FastMCP built-in auth — needs custom OIDC validator
+### A2A Server Multi-IdP — DONE
+- [x] Generalized `auth_middleware` with `TokenValidator` + `IdPConfig` dataclass
+- [x] Replaced hardcoded values with env-var-driven `IDP_CONFIGS`
+- [x] Uses shared `CedarPolicyEvaluator` (via `permissions.toml` + Cedar policies)
+- [x] Custom OIDC validation via `TokenValidator` class
 
 ### ADK Agent Cleanup
 - [ ] Remove `_determine_role()` from `adk_agent/agent.py`
@@ -64,18 +64,22 @@ See `08-role-switching-plan.md` for full details.
 
 ## Medium-Term
 
-### ABAC Policies (Tier 2)
-- [ ] Add `[policies]` section to `permissions.toml` for per-tool attribute checks
-- [ ] Example: `[policies.delete_resource] business_hours_only = true`
-- [ ] Extend `check_access()` to evaluate policies
-- [ ] Still file-based, but more expressive than bare RBAC
+### ABAC Policies (Tier 2) — DONE (via Cedar, not TOML)
+- [x] Implemented Cedar-based ABAC instead of TOML `[policies]` section
+- [x] `CedarPolicyEvaluator` in `mcp_server/policy.py` replaces `require_role()`
+- [x] Cedar policies in `cedar/policies/` (rbac.cedar, abac.cedar, guardrails.cedar)
+- [x] Demo: developer + archiver attribute → delete S3 objects in `archive/` only
+- [x] Forbid guardrail: no delete in `protected/` (overrides even admin)
+- [x] A2A server uses shared `CedarPolicyEvaluator` — eliminated `GROUP_TO_ROLE`, `TOOL_ROLES`, `ROLE_PRIORITY` duplication
+- [x] Batch evaluation via `check_access_batch()` + `is_authorized_batch()`
+- [x] 28 Cedar tests passing
+- See `scratchpad/cedar-abac/` for full design and implementation docs
 
-### OBO (On-Behalf-Of) for Entra ID
-- [ ] Implement token exchange in MCP server for Graph API tools
-- [ ] Only activates when provider = Entra AND client secret configured
-- [ ] Tools that need Graph: `get_user_profile`, `list_files`, `send_email`
-- [ ] Other providers' tools fall back to token claims
-- [ ] Requires: client secret in Azure Portal + ~50 lines of token exchange code
+### OBO (On-Behalf-Of) for Entra ID — DONE (previous iteration)
+- [x] Implemented in `mcp_server/graph_obo.py` (GraphOBOExchanger)
+- [x] Only activates when provider = Entra AND client secret configured
+- [x] Tools that need Graph: `get_user_profile`, `list_files`, `send_email`
+- [x] Other providers' tools fall back to token claims
 
 ### Permission Management API
 - [ ] `GET /admin/permissions` — list all user/group mappings
@@ -86,16 +90,14 @@ See `08-role-switching-plan.md` for full details.
 
 ## Long-Term
 
-### Policy Engine Integration (Tier 3)
-- [ ] **OPA (Open Policy Agent)**: Deploy as sidecar, write Rego policies
-  - Ideal for: Kubernetes deployments, cloud-native
-  - Implement `OpaPolicyEvaluator`
-  - Example Rego policy for tool access
-- [ ] **AWS Cedar**: Embed via `cedar-py`, write Cedar policies
-  - Ideal for: AWS-native, formal verification needs
-  - Implement `CedarPolicyEvaluator`
-  - Entity-based policies with type-safe schemas
-- [ ] Policy testing framework — test policies independently from code
+### Policy Engine Integration (Tier 3) — PARTIALLY DONE
+- [ ] **OPA (Open Policy Agent)**: Deferred — recommended for platform guardrails (K8s, mesh, CI/CD), not day-to-day tool auth
+- [x] **AWS Cedar**: Implemented via `cedarpy` (embedded, in-process)
+  - `CedarPolicyEvaluator` in `mcp_server/policy.py`
+  - Cedar schema in `cedar/schema.cedarschema` (AgentAuth namespace)
+  - Entity-based policies with User, Role, Tool entities
+  - Both A2A and MCP servers use Cedar as single PDP
+- [x] Policy testing framework — 28 tests in `tests/test_cedar_smoke.py`
 
 ### Database-Backed Permission Store
 - [ ] Migrate from TOML to database (PostgreSQL/SQLite)
@@ -151,7 +153,7 @@ See `08-role-switching-plan.md` for full details.
 |----------|--------|-----------|
 | Group-to-role vs user-to-role | Groups PRIMARY | Scales better, aligns with enterprise IAM |
 | Role selection | User selects explicitly | Least-privilege principle, like AWS AssumeRole |
-| Policy engine | Interface now, OPA/Cedar later | No external deps now, clean swap point |
+| Policy engine | Cedar implemented, OPA deferred | Cedar for runtime ABAC, OPA for platform guardrails later |
 | IdP scope checks | Removed | IdP scopes ≠ agent permissions; agent owns its own |
 | MCP-only scope | Yes | Isolate risk, test with MCP Inspector, adapt layers later |
 | Group overage | Detect + warn | Graph API call deferred to OBO iteration |
