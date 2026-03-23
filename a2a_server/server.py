@@ -17,9 +17,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-# Add project root to path for shared dev_config module
+# Add project root and mcp_server/ to path for shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
+from policy import AccessRequest, TomlPolicyEvaluator, CedarPolicyEvaluator
 
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
@@ -90,6 +92,15 @@ COGNITO_ALLOWED_GROUPS = [
     os.getenv("COGNITO_VIEWER_GROUP", "platform-viewers"),
 ]
 COGNITO_ALLOWED_GROUPS = [g for g in COGNITO_ALLOWED_GROUPS if g]
+
+# --- Cedar policy evaluator (shared with MCP server) ---
+_toml_evaluator = TomlPolicyEvaluator(
+    Path(__file__).parent.parent / "permissions.toml"
+)
+cedar_evaluator = CedarPolicyEvaluator(
+    Path(__file__).parent.parent / "cedar",
+    _toml_evaluator,
+)
 
 
 @dataclass
@@ -668,36 +679,13 @@ a2a_app = A2AStarletteApplication(
 a2a_app.add_routes_to_app(app)
 
 
-# Group-to-role mapping for agent-level access control
-GROUP_TO_ROLE = {
-    os.getenv("ADMIN_GROUP_ID"): "admin",
-    os.getenv("DEVELOPER_GROUP_ID"): "developer",
-    os.getenv("VIEWER_GROUP_ID"): "viewer",
-    # Cognito group names
-    os.getenv("COGNITO_ADMIN_GROUP", "platform-admins"): "admin",
-    os.getenv("COGNITO_DEVELOPER_GROUP", "platform-developers"): "developer",
-    os.getenv("COGNITO_VIEWER_GROUP", "platform-viewers"): "viewer",
-}
-
-# Tool permission matrix (matches auth= decorators on MCP tools)
-TOOL_ROLES = {
-    "get_user_profile": ["admin", "developer", "viewer"],
-    "list_files": ["admin", "developer"],
-    "send_email": ["admin"],
-    "delete_resource": ["admin"],
-    "get_current_time": ["admin"],
-    "convert_timezone": ["admin"],
-    "get_time_difference": ["admin"],
-    "list_s3_buckets": ["admin", "developer"],
-    "list_s3_objects": ["admin", "developer"],
-    "get_s3_object_info": ["admin", "developer", "viewer"],
-}
-
+# Tool scope requirements (informational for frontend — not authorization logic)
 TOOL_SCOPES = {
     "get_user_profile": ["User.Read"],
     "list_files": ["Files.Read"],
     "send_email": ["Mail.Send"],
     "delete_resource": ["Files.ReadWrite.All"],
+    "delete_s3_object": [],
     "get_current_time": [],
     "convert_timezone": [],
     "get_time_difference": [],
@@ -705,6 +693,9 @@ TOOL_SCOPES = {
     "list_s3_objects": [],
     "get_s3_object_info": [],
 }
+
+# All tools known to Cedar (used by /me endpoint to build permissions matrix)
+ALL_TOOLS = list(TOOL_SCOPES.keys())
 
 
 def _detect_provider(claims: dict) -> str:
@@ -738,21 +729,6 @@ def _extract_user_info(claims: dict, provider: str) -> tuple[str, str, list]:
     return email, name, groups
 
 
-ROLE_PRIORITY = ["admin", "developer", "viewer"]
-
-
-def _get_available_roles(groups: list) -> list:
-    """Return all roles the user qualifies for, ordered by priority."""
-    user_roles = {GROUP_TO_ROLE[g] for g in groups if g in GROUP_TO_ROLE}
-    return [r for r in ROLE_PRIORITY if r in user_roles]
-
-
-def _determine_role(groups: list) -> str:
-    """Map user groups to highest privilege role."""
-    available = _get_available_roles(groups)
-    return available[0] if available else "none"
-
-
 # Health check endpoint
 @app.get("/health")
 async def health():
@@ -774,7 +750,10 @@ async def get_me(request: Request):
     provider = _detect_provider(claims)
     user_email, user_name, user_groups = _extract_user_info(claims, provider)
 
-    available_roles = _get_available_roles(user_groups)
+    # Role resolution via Cedar evaluator (delegates to TomlPolicyEvaluator)
+    available_roles = cedar_evaluator.get_available_roles(
+        user_email, provider, user_groups
+    )
 
     # Extract scopes from the token -- Entra uses "scp", Cognito/Auth0 use "scope"
     raw_scopes = claims.get("scp", "") or claims.get("scope", "")
@@ -791,10 +770,25 @@ async def get_me(request: Request):
     elif available_roles:
         active_role = available_roles[0]
     else:
-        active_role = _determine_role(user_groups)
+        active_role = "none"
 
-    group_names = {gid: GROUP_TO_ROLE[gid] for gid in user_groups if gid in GROUP_TO_ROLE}
-    permissions = {tool: active_role in roles for tool, roles in TOOL_ROLES.items()}
+    # Build group-to-role mapping from evaluator
+    group_roles = {}
+    for gid in user_groups:
+        roles_for_group = cedar_evaluator.get_available_roles(user_email, provider, [gid])
+        if roles_for_group:
+            group_roles[gid] = roles_for_group[0]
+    group_names = group_roles
+
+    # Build permissions matrix by evaluating Cedar for each tool
+    permissions = {}
+    for tool in ALL_TOOLS:
+        req = AccessRequest(
+            email=user_email, provider=provider, groups=user_groups,
+            tool_name=tool, claims=claims, assumed_role=active_role,
+        )
+        decision = cedar_evaluator.check_access(req, [])
+        permissions[tool] = decision.allowed
 
     return {
         "user": {

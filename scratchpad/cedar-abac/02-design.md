@@ -229,3 +229,40 @@ cedar/
 ```
 
 All `.cedar` files in `policies/` are concatenated and passed to `is_authorized()`. Cedar evaluates all policies together — if any `forbid` matches, access is denied regardless of `permit` policies.
+
+## Two-Phase Authorization Pattern
+
+Cedar policies need different data for RBAC vs ABAC:
+
+```
+Phase 1 (auth callable — require_cedar):
+  ┌─────────────────────────────────────────────────────────┐
+  │ Cedar check WITHOUT context                             │
+  │ Question: "Can this role call this tool?"               │
+  │ Data: email, provider, groups, role, tool_name          │
+  │ Runs for: ALL 12 tools                                  │
+  └─────────────────────────────────────────────────────────┘
+
+Phase 2 (inside tool — cedar_check_with_context):
+  ┌─────────────────────────────────────────────────────────┐
+  │ Cedar check WITH context (resource_path, environment)   │
+  │ Question: "Can this user do this specific operation?"   │
+  │ Data: everything from Phase 1 + context dict            │
+  │ Runs for: ABAC tools only (delete_s3_object)            │
+  └─────────────────────────────────────────────────────────┘
+```
+
+For RBAC-only tools, Phase 1 is sufficient. For `delete_s3_object`, both phases run:
+- Phase 1: Admin passes (blanket permit). Developer without archiver is denied.
+- Phase 2: Developer with archiver passes only if `resource_path` starts with `archive/`.
+  Admin passes unless path starts with `protected/` (forbid guardrail).
+
+### ContextVars Added for Cedar
+
+```python
+current_user_groups: ContextVar[list]   # IdP groups from token
+current_user_claims: ContextVar[dict]   # Full JWT claims (for ABAC attributes)
+```
+
+These are set in `UserContextMiddleware._resolve_context()` alongside existing ContextVars,
+so `require_cedar()` and `cedar_check_with_context()` can build Cedar `AccessRequest`s.

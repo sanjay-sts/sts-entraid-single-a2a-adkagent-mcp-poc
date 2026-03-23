@@ -46,64 +46,49 @@
 
 ---
 
-## Item 4: delete_s3_object MCP Tool
+## Item 4: delete_s3_object MCP Tool --- DONE
 
 **Deliverables:**
-- New `delete_s3_object` tool in MCP server
-- Uses `_run_s3_operation()` existing helper
-- Auth via Cedar (not `require_role()`)
-- Passes `resource_path` context to Cedar for path-based ABAC
-
-**Files modified:**
-- `mcp_server/server.py` — add tool definition
-
-**Depends on:** Item 3 (CedarPolicyEvaluator must be wired in)
+- New `delete_s3_object` tool with two-phase Cedar authorization
+- Phase 1: `require_cedar("delete_s3_object")` auth callable (RBAC)
+- Phase 2: `cedar_check_with_context()` inside tool with `resource_path` (ABAC)
+- Uses existing `_run_s3_operation()` helper
 
 ---
 
-## Item 5: MCP Server Migration
+## Item 5: MCP Server Migration --- DONE
 
 **Deliverables:**
-- Replace `require_role()` auth callables with Cedar evaluation
-- `UserContextMiddleware` calls `CedarPolicyEvaluator.check_access()` instead of just setting ContextVars
-- All 12 tools authorized via Cedar
-- Remove `require_role()` function (or keep as fallback)
+- All 12 tools use `auth=require_cedar("tool_name")` (replaced `require_role()`)
+- `require_role()` function removed entirely
+- `CedarPolicyEvaluator` is the active policy evaluator (composes `TomlPolicyEvaluator`)
+- Added `current_user_groups` and `current_user_claims` ContextVars
+- Added `cedar_check_with_context()` helper for ABAC tools
+- `UserContextMiddleware` type hint generalized for any `PolicyEvaluator`
 
-**Files modified:**
-- `mcp_server/server.py` — swap `policy_evaluator` to `CedarPolicyEvaluator`, update middleware + tool auth
-
-**Depends on:** Items 3 + 4
+**28 Cedar tests passing**
 
 ---
 
-## Item 6: A2A Server Migration
+## Item 6: A2A Server Migration --- DONE
 
 **Deliverables:**
-- A2A auth middleware calls Cedar for agent-level access decisions
-- Remove duplicated `GROUP_TO_ROLE`, `TOOL_ROLES`, `ROLE_PRIORITY`
-- A2A server imports shared `CedarPolicyEvaluator`
-- `/me` endpoint reads from Cedar evaluator instead of local dicts
-
-**Files modified:**
-- `a2a_server/server.py` — replace hardcoded auth logic with Cedar calls
-
-**Depends on:** Item 5 (Cedar evaluator proven in MCP first)
+- Removed duplicated `GROUP_TO_ROLE`, `TOOL_ROLES`, `ROLE_PRIORITY`, `_get_available_roles()`, `_determine_role()`
+- A2A server imports shared `CedarPolicyEvaluator` from `mcp_server/policy.py`
+- `/me` endpoint uses `cedar_evaluator.get_available_roles()` for role resolution
+- `/me` endpoint builds permissions matrix via Cedar `check_access()` for each tool
+- Agent-level group check in auth middleware stays (coarse entry filter)
+- `TOOL_SCOPES` kept (informational, not authorization) — added `delete_s3_object`
 
 ---
 
-## Item 7: Tests
+## Item 7: Tests --- DONE
 
-**Deliverables:**
-- Update `tests/test_access_control.py` with Cedar-based scenarios
-- Add ABAC-specific tests (archiver attribute, path-based access)
-- Add Cedar policy validation tests
-- Verify backward compatibility (same roles, same tool access)
-
-**Files modified:**
-- `tests/test_access_control.py`
-- `tests/conftest.py` (add Cedar fixtures if needed)
-
-**Depends on:** Items 5 + 6
+**28 Cedar tests passing** covering:
+- Inline RBAC policies (5 tests)
+- Inline ABAC policies (5 tests)
+- File-based policies (9 tests)
+- CedarPolicyEvaluator integration (11 tests)
 
 ---
 

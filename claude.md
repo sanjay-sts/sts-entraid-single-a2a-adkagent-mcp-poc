@@ -30,6 +30,7 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 | Gateway | A2A Protocol (FastAPI + a2a-sdk) | 10000 |
 | Agent | Google ADK + LiteLLM + Claude Haiku 4.5 (Bedrock) | 10001 |
 | Tools | FastMCP (stateless HTTP) | 10002 |
+| Authorization | Cedar (cedarpy) — RBAC + ABAC policy engine | - |
 | Identity | Entra ID + AWS Cognito | - |
 | Resources | Microsoft Graph API, AWS S3 | - |
 
@@ -38,13 +39,20 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ```
 /
 ├── a2a_server/
-│   └── server.py              # A2A gateway — auth middleware, task executor, /me endpoint
+│   └── server.py              # A2A gateway — auth middleware, task executor, /me endpoint (Cedar PDP)
 ├── adk_agent/
 │   └── agent.py               # Google ADK agent — session mgmt, streaming, retry
 ├── mcp_server/
-│   ├── server.py              # FastMCP tools — built-in auth, UserContextMiddleware, 10 tools
+│   ├── server.py              # FastMCP tools — Cedar ABAC auth, UserContextMiddleware, 12 tools
 │   ├── graph_obo.py           # OBO token exchange for Graph API — GraphOBOExchanger singleton
-│   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator
+│   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator + CedarPolicyEvaluator
+├── cedar/
+│   ├── schema.cedarschema     # Cedar entity types: User, Role, Tool, S3Folder + actions
+│   ├── entities.json          # Static entities: 3 roles + 12 tools
+│   └── policies/
+│       ├── rbac.cedar         # RBAC permit policies (admin/developer/viewer → tools)
+│       ├── abac.cedar         # ABAC policy (developer + archiver → delete in archive/)
+│       └── guardrails.cedar   # Forbid policies (no delete in protected/)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.js             # Dashboard layout shell — sidebar + main area
@@ -95,12 +103,13 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ### Role Hierarchy & Tool Permissions
 
 ```
-admin      → All 10 tools
+admin      → All 12 tools (delete_s3_object blocked in protected/ by forbid guardrail)
 developer  → get_user_profile, list_files, list_s3_buckets, list_s3_objects, get_s3_object_info
+             + delete_s3_object (only with archiver=true attribute, only in archive/ path)
 viewer     → get_user_profile, get_s3_object_info
 ```
 
-Tool permissions are declared via `auth=require_role(...)` on each `@mcp.tool()` decorator in `mcp_server/server.py`.
+Tool permissions are declared as Cedar policies in `cedar/policies/` and enforced via `auth=require_cedar("tool_name")` on each `@mcp.tool()` decorator in `mcp_server/server.py`. ABAC tools (e.g., `delete_s3_object`) additionally call `cedar_check_with_context()` inside the tool function for path-based access control.
 
 ### Role Assignment
 

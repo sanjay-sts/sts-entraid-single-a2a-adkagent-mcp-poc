@@ -1,8 +1,9 @@
-"""FastMCP server with built-in auth providers and policy-based access control.
+"""FastMCP server with Cedar ABAC policy evaluation.
 
 Uses FastMCP's AzureJWTVerifier / JWTVerifier for trusted provider verification
-(JWKS, issuer, audience) and a lightweight UserContextMiddleware for role resolution
-via the agent-owned permissions.toml policy store.
+(JWKS, issuer, audience) and a lightweight UserContextMiddleware for role resolution.
+Tool authorization is handled by Cedar policies via CedarPolicyEvaluator — replacing
+the previous require_role() auth callables with Cedar's permit/forbid policies.
 """
 
 import asyncio
@@ -28,15 +29,16 @@ from fastmcp.exceptions import ToolError
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
-from policy import TomlPolicyEvaluator
+from policy import AccessRequest, AccessDecision, TomlPolicyEvaluator, CedarPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
-# Removed current_user_scopes — IdP scopes are no longer checked at tool level.
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
 current_user_provider: ContextVar[str] = ContextVar("current_user_provider", default="")
+current_user_groups: ContextVar[list] = ContextVar("current_user_groups", default=[])
+current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
 
 # Load environment variables
 load_dotenv()
@@ -181,8 +183,12 @@ def _build_auth():
 
 # --- Policy evaluator ---
 
-policy_evaluator = TomlPolicyEvaluator(
+_toml_evaluator = TomlPolicyEvaluator(
     Path(__file__).parent.parent / "permissions.toml"
+)
+policy_evaluator = CedarPolicyEvaluator(
+    Path(__file__).parent.parent / "cedar",
+    _toml_evaluator,
 )
 
 
@@ -202,7 +208,7 @@ class UserContextMiddleware(Middleware):
       - Sets ContextVars for auth= callables and tool functions
     """
 
-    def __init__(self, evaluator: TomlPolicyEvaluator):
+    def __init__(self, evaluator):  # PolicyEvaluator (TomlPolicyEvaluator or CedarPolicyEvaluator)
         self.policy_evaluator = evaluator
 
     def _set_bypass_context(self) -> None:
@@ -285,6 +291,8 @@ class UserContextMiddleware(Middleware):
         current_user_email.set(email)
         current_user_role.set(assumed_role)
         current_user_provider.set(provider)
+        current_user_groups.set(groups)
+        current_user_claims.set(token.claims)
 
         logger.info(
             "User %s assumed role '%s' (available: %s)",
@@ -308,24 +316,49 @@ class UserContextMiddleware(Middleware):
         return await call_next(context)
 
 
-# --- Auth callables for per-tool authorization ---
+# --- Cedar auth callables for per-tool authorization ---
 
-def require_role(*allowed_roles: str):
-    """Require user to have one of the specified roles.
+def require_cedar(tool_name: str):
+    """Cedar-based auth callable for @mcp.tool() decorators.
 
-    Reads from current_user_role ContextVar set by UserContextMiddleware.
-    Used as auth= callable on @mcp.tool() decorators to control tool visibility
-    and access.
+    Phase 1 RBAC check — evaluates Cedar policies without context.
+    For ABAC tools (e.g., delete_s3_object), a Phase 2 check with context
+    happens inside the tool function via cedar_check_with_context().
     """
     def check(ctx: AuthContext) -> bool:
-        user_role = current_user_role.get()
-        if user_role not in allowed_roles:
+        request = AccessRequest(
+            email=current_user_email.get(),
+            provider=current_user_provider.get(),
+            groups=current_user_groups.get(),
+            tool_name=tool_name,
+            claims=current_user_claims.get(),
+            assumed_role=current_user_role.get(),
+        )
+        decision = policy_evaluator.check_access(request, [])
+        if not decision.allowed:
             raise ToolError(
-                f"[TOOL_DENIAL] Access denied: Role '{user_role}' cannot use this tool. "
-                f"Required roles: {list(allowed_roles)}"
+                f"[TOOL_DENIAL] Access denied: {decision.reason}"
             )
         return True
     return check
+
+
+def cedar_check_with_context(tool_name: str, context: dict) -> AccessDecision:
+    """Phase 2 ABAC check — evaluates Cedar policies with runtime context.
+
+    Call inside tool functions that need path-based or attribute-based checks
+    beyond simple RBAC. Returns AccessDecision; caller handles denial.
+    """
+    request = AccessRequest(
+        email=current_user_email.get(),
+        provider=current_user_provider.get(),
+        groups=current_user_groups.get(),
+        tool_name=tool_name,
+        claims=current_user_claims.get(),
+        assumed_role=current_user_role.get(),
+        context=context,
+    )
+    return policy_evaluator.check_access(request, [])
 
 
 async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
@@ -389,7 +422,7 @@ init_obo_exchanger()
 # TOOLS
 # ============================================================================
 
-@mcp.tool(auth=require_role("admin", "developer", "viewer"))
+@mcp.tool(auth=require_cedar("get_user_profile"))
 async def get_user_profile() -> dict:
     """Fetch the current user's Microsoft Graph profile."""
     logger.info("Executing tool: get_user_profile")
@@ -424,7 +457,7 @@ async def get_user_profile() -> dict:
         }
 
 
-@mcp.tool(auth=require_role("admin", "developer"))
+@mcp.tool(auth=require_cedar("list_files"))
 async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
     provider_error = _require_entra_provider()
@@ -461,7 +494,7 @@ async def list_files(folder_path: str = "/") -> dict:
         }
 
 
-@mcp.tool(auth=require_role("admin"))
+@mcp.tool(auth=require_cedar("send_email"))
 async def send_email(
     to: str,
     subject: str,
@@ -497,7 +530,7 @@ async def send_email(
         return {"status": "sent", "from": current_user_email.get(), "to": to, "_obo_used": obo_used}
 
 
-@mcp.tool(auth=require_role("admin"))
+@mcp.tool(auth=require_cedar("delete_resource"))
 async def delete_resource(resource_id: str) -> dict:
     """Delete a resource (admin only, simulated)."""
     user_role = current_user_role.get()
@@ -542,7 +575,7 @@ async def _run_s3_operation(operation, error_map: dict | None = None) -> dict:
         return {"error": "s3_access_denied", "code": error_code, "message": str(e)}
 
 
-@mcp.tool(auth=require_role("admin", "developer"))
+@mcp.tool(auth=require_cedar("list_s3_buckets"))
 async def list_s3_buckets() -> dict:
     """List all S3 buckets accessible with server-side AWS credentials (admin/developer only)."""
     logger.info("Executing tool: list_s3_buckets")
@@ -563,7 +596,7 @@ async def list_s3_buckets() -> dict:
     return await _run_s3_operation(_operation)
 
 
-@mcp.tool(auth=require_role("admin", "developer"))
+@mcp.tool(auth=require_cedar("list_s3_objects"))
 async def list_s3_objects(bucket: str, prefix: str = "", max_keys: int = 20) -> dict:
     """List objects in an S3 bucket (admin/developer only).
 
@@ -609,7 +642,7 @@ async def list_s3_objects(bucket: str, prefix: str = "", max_keys: int = 20) -> 
     )
 
 
-@mcp.tool(auth=require_role("admin", "developer", "viewer"))
+@mcp.tool(auth=require_cedar("get_s3_object_info"))
 async def get_s3_object_info(bucket: str, key: str) -> dict:
     """Get metadata about a specific S3 object (all roles).
 
@@ -642,6 +675,59 @@ async def get_s3_object_info(bucket: str, key: str) -> dict:
     return await _run_s3_operation(
         _operation,
         error_map={"404": not_found_error, "NoSuchKey": not_found_error},
+    )
+
+
+@mcp.tool(auth=require_cedar("delete_s3_object"))
+async def delete_s3_object(bucket: str, key: str) -> dict:
+    """Delete an S3 object. Requires admin role, or developer role with archiver
+    attribute and object must be under archive/ prefix.
+
+    This tool demonstrates ABAC (Attribute-Based Access Control) via Cedar policies:
+    - Phase 1 (auth callable): Cedar RBAC check — can this role call this tool?
+    - Phase 2 (below): Cedar ABAC check — can this user delete at this path?
+
+    Args:
+        bucket: S3 bucket name
+        key: Object key (full path in the bucket)
+    """
+    logger.info("Executing tool: delete_s3_object (bucket=%s, key=%s)", bucket, key)
+
+    # Phase 2: ABAC check with resource path context
+    decision = cedar_check_with_context(
+        "delete_s3_object", {"resource_path": key}
+    )
+    if not decision.allowed:
+        logger.warning(
+            "ABAC denied delete_s3_object: %s key=%s reason=%s",
+            current_user_email.get(), key, decision.reason,
+        )
+        return {
+            "error": "abac_denied",
+            "message": f"[TOOL_DENIAL] {decision.reason}",
+            "bucket": bucket,
+            "key": key,
+        }
+
+    def _operation(s3):
+        s3.delete_object(Bucket=bucket, Key=key)
+        return {
+            "status": "deleted",
+            "bucket": bucket,
+            "key": key,
+            "deleted_by": current_user_email.get(),
+            "role": current_user_role.get(),
+        }
+
+    return await _run_s3_operation(
+        _operation,
+        error_map={
+            "NoSuchBucket": {
+                "error": "bucket_not_found",
+                "bucket": bucket,
+                "message": f"Bucket '{bucket}' does not exist",
+            },
+        },
     )
 
 
@@ -682,7 +768,7 @@ def resolve_timezone(tz_input: str) -> ZoneInfo:
         raise ValueError(f"Unknown timezone: {tz_input}. Use IANA names (e.g., 'America/New_York') or common aliases (e.g., 'EST', 'PST', 'UTC').")
 
 
-@mcp.tool(auth=require_role("admin"))
+@mcp.tool(auth=require_cedar("get_current_time"))
 async def get_current_time(timezone: str = "UTC") -> dict:
     """Get the current time in a specified timezone (admin only).
 
@@ -733,7 +819,7 @@ def _parse_time_string(time_str: str) -> datetime | None:
     return None
 
 
-@mcp.tool(auth=require_role("admin"))
+@mcp.tool(auth=require_cedar("convert_timezone"))
 async def convert_timezone(
     time_str: str,
     from_timezone: str,
@@ -783,7 +869,7 @@ async def convert_timezone(
         return {"error": str(e)}
 
 
-@mcp.tool(auth=require_role("admin"))
+@mcp.tool(auth=require_cedar("get_time_difference"))
 async def get_time_difference(
     timezone1: str,
     timezone2: str
