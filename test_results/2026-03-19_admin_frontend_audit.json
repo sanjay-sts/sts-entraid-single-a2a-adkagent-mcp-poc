@@ -1,0 +1,156 @@
+[
+  {
+    "timestamp": "2026-03-18T21:11:46.922Z",
+    "prompt": "[TEST: profile_basic] Show my Microsoft profile",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 15856,
+    "result": "PASS",
+    "agentResponse": "Name: Adele Vance, Email: AdeleV@2tdgcb.onmicrosoft.com, Job Title: Retail Manager, Office: 18/2111"
+  },
+  {
+    "timestamp": "2026-03-18T21:12:03.721Z",
+    "prompt": "[TEST: files_basic] List my OneDrive files",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 14787,
+    "result": "PASS",
+    "agentResponse": "OneDrive is currently empty"
+  },
+  {
+    "timestamp": "2026-03-18T21:12:20.478Z",
+    "prompt": "[TEST: files_correct] List my OneDrive files",
+    "scopeKey": "files",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 14742,
+    "result": "PASS",
+    "agentResponse": "OneDrive is currently empty"
+  },
+  {
+    "timestamp": "2026-03-18T21:12:36.542Z",
+    "prompt": "[TEST: email_basic] Send an email to test@example.com with subject \"Test\" and body \"Hello\"",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 14063,
+    "result": "PASS",
+    "agentResponse": "Email sent successfully. From: AdeleV@2tdgcb.onmicrosoft.com, To: test@example.com"
+  },
+  {
+    "timestamp": "2026-03-18T21:12:54.118Z",
+    "prompt": "[TEST: email_correct] Send an email to test@example.com with subject \"Test\" and body \"Hello\"",
+    "scopeKey": "email",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 15568,
+    "result": "PASS",
+    "agentResponse": "Email sent successfully. From: AdeleV@2tdgcb.onmicrosoft.com, To: test@example.com"
+  },
+  {
+    "timestamp": "2026-03-18T21:13:19.010Z",
+    "prompt": "[TEST: delete_basic] Delete resource with ID test-resource-123",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 22881,
+    "result": "PASS",
+    "agentResponse": "Resource deleted successfully. Resource ID: test-resource-123"
+  },
+  {
+    "timestamp": "2026-03-18T21:13:33.614Z",
+    "prompt": "[TEST: delete_destructive] Delete resource with ID test-resource-123",
+    "scopeKey": "destructive",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 12592,
+    "result": "PASS",
+    "agentResponse": "Resource deleted successfully. Resource ID: test-resource-123"
+  },
+  {
+    "timestamp": "2026-03-18T21:14:02.900Z",
+    "prompt": "[TEST: time_current] What time is it in Tokyo?",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 12024,
+    "result": "PASS",
+    "agentResponse": "06:13:43 JST, Thursday March 19 2026"
+  },
+  {
+    "timestamp": "2026-03-18T21:14:02.900Z",
+    "prompt": "[TEST: time_convert] Convert 3pm EST to PST",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 13250,
+    "result": "PASS",
+    "agentResponse": "3pm EST = 12pm (noon) PST"
+  },
+  {
+    "timestamp": "2026-03-18T21:14:18.449Z",
+    "prompt": "[TEST: time_diff] What is the time difference between New York and London?",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 13545,
+    "result": "PASS",
+    "agentResponse": "London is 4 hours ahead of New York"
+  },
+  {
+    "timestamp": "2026-03-18T21:14:36.765Z",
+    "prompt": "[TEST: viewer_files] List my OneDrive files",
+    "scopeKey": "files",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 16314,
+    "result": "PASS",
+    "agentResponse": "OneDrive is currently empty"
+  },
+  {
+    "timestamp": "2026-03-18T21:14:53.328Z",
+    "prompt": "[TEST: viewer_email] Send an email to test@example.com with subject \"Test\" and body \"Hello\"",
+    "scopeKey": "email",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 14548,
+    "result": "PASS",
+    "agentResponse": "Email sent successfully. From: AdeleV@2tdgcb.onmicrosoft.com, To: test@example.com"
+  },
+  {
+    "timestamp": "2026-03-18T21:15:09.443Z",
+    "prompt": "[TEST: dev_email] Send an email to test@example.com with subject \"Test\" and body \"Hello\"",
+    "scopeKey": "email",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 14101,
+    "result": "PASS",
+    "agentResponse": "Email sent successfully. From: AdeleV@2tdgcb.onmicrosoft.com, To: test@example.com"
+  },
+  {
+    "timestamp": "2026-03-18T21:15:24.394Z",
+    "prompt": "[TEST: dev_time] What time is it in Tokyo?",
+    "scopeKey": "basic",
+    "role": "admin",
+    "httpStatus": 200,
+    "denial": null,
+    "latency": 12949,
+    "result": "PASS",
+    "agentResponse": "06:15:18 JST, Thursday March 19 2026"
+  }
+]

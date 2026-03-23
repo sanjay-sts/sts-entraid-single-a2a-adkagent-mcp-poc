@@ -1,0 +1,27 @@
+# =============================================================
+# Development Auth Bypass Configuration
+# =============================================================
+# WARNING: This file disables authentication for local testing.
+# NEVER deploy with these settings enabled.
+#
+# Usage:
+#   1. Copy this file to dev_config.toml
+#   2. Set disable_auth = true for servers you want to bypass
+#   3. Restart the affected servers
+#
+# The actual dev_config.toml is gitignored.
+# =============================================================
+
+[a2a]
+disable_auth = false
+
+[adk]
+disable_auth = false
+
+[mcp]
+disable_auth = false
+# Mock identity when auth is disabled (controls which tools are accessible)
+default_role = "admin"                  # admin | developer | viewer
+default_email = "dev@localhost"
+default_provider = "entra"              # entra | cognito | auth0
+default_scopes = ["User.Read", "Files.Read", "Mail.Send", "Files.ReadWrite.All"]

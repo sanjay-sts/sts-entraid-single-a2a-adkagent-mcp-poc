@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+uv.lock
+
+# Environment files
+.env
+.env.local
+
+# Dev auth bypass config (user-created from dev_config.example.toml)
+dev_config.toml
+
+# Permission store (user-created from permissions.example.toml)
+permissions.toml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+.pytest_cache/
+
+# Test reports
+reports/
+
+# Manual test results
+test_results/
