@@ -274,12 +274,19 @@ class CedarPolicyEvaluator(PolicyEvaluator):
             request.email, request.provider, request.groups
         )
 
+        # Enforce assumed role: only grant the explicitly selected role in Cedar,
+        # so a multi-role user operates at their chosen privilege level.
+        if request.assumed_role and request.assumed_role in roles:
+            effective_roles = [request.assumed_role]
+        else:
+            effective_roles = roles
+
         # Build dynamic user entity with role parents + ABAC attributes
         user_entity = self._build_user_entity(
             request.email,
             request.provider,
             request.groups,
-            roles,
+            effective_roles,
             request.claims,
         )
 
@@ -331,7 +338,14 @@ class CedarPolicyEvaluator(PolicyEvaluator):
         """
         self._load()
         roles = self.get_available_roles(email, provider, groups)
-        user_entity = self._build_user_entity(email, provider, groups, roles, claims)
+
+        # Enforce assumed role: only grant the explicitly selected role in Cedar
+        if assumed_role and assumed_role in roles:
+            effective_roles = [assumed_role]
+        else:
+            effective_roles = roles
+
+        user_entity = self._build_user_entity(email, provider, groups, effective_roles, claims)
         entities = self._entities + [user_entity]
         role = assumed_role or (roles[0] if roles else "none")
 

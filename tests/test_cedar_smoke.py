@@ -584,3 +584,45 @@ unknown_users = "none"
         )
         decision = evaluator.check_access(request, [])
         assert decision.allowed
+
+    def test_assumed_role_enforced_check_access(self, evaluator):
+        """Multi-role user assuming viewer should be denied admin-only tools."""
+        request = AccessRequest(
+            email="multi@company.com",
+            provider="entra",
+            groups=["admin-group", "viewer-group"],
+            tool_name="send_email",
+            claims={},
+            assumed_role="viewer",  # Explicitly downgrading
+        )
+        decision = evaluator.check_access(request, [])
+        assert not decision.allowed, (
+            "User with admin+viewer groups assuming viewer should be denied send_email"
+        )
+
+    def test_assumed_role_enforced_batch(self, evaluator):
+        """Multi-role user assuming viewer: batch permissions should reflect viewer, not admin."""
+        permissions = evaluator.check_access_batch(
+            email="multi@company.com",
+            provider="entra",
+            groups=["admin-group", "viewer-group"],
+            tool_names=["send_email", "get_user_profile", "delete_resource"],
+            claims={},
+            assumed_role="viewer",
+        )
+        assert permissions["get_user_profile"] is True, "Viewer can access get_user_profile"
+        assert permissions["send_email"] is False, "Viewer cannot access send_email"
+        assert permissions["delete_resource"] is False, "Viewer cannot access delete_resource"
+
+    def test_assumed_admin_still_works(self, evaluator):
+        """Multi-role user assuming admin should retain admin access."""
+        request = AccessRequest(
+            email="multi@company.com",
+            provider="entra",
+            groups=["admin-group", "viewer-group"],
+            tool_name="send_email",
+            claims={},
+            assumed_role="admin",
+        )
+        decision = evaluator.check_access(request, [])
+        assert decision.allowed, "User assuming admin should be allowed send_email"
