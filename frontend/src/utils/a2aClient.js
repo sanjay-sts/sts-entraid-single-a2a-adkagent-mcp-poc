@@ -30,8 +30,13 @@ function extractResponseText(data) {
  * Send a message to the A2A server via JSON-RPC.
  * Returns { httpStatus, body, responseText, latency, isAuthError, denial }.
  */
-export async function sendA2AMessage({ accessToken, message, selectedRole }) {
+export async function sendA2AMessage({ accessToken, message, selectedRole, abacAttrs }) {
   const startTime = performance.now();
+
+  // Build X-Abac-Attrs JSON header if any ABAC attributes are active
+  const abacHeader = abacAttrs && Object.keys(abacAttrs).length > 0
+    ? { 'X-Abac-Attrs': JSON.stringify(abacAttrs) }
+    : {};
 
   const response = await fetch(A2A_SERVER_URL, {
     method: 'POST',
@@ -39,6 +44,7 @@ export async function sendA2AMessage({ accessToken, message, selectedRole }) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${accessToken}`,
       ...(selectedRole && { 'X-Assume-Role': selectedRole }),
+      ...abacHeader,
     },
     body: JSON.stringify({
       jsonrpc: '2.0',

@@ -64,7 +64,7 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 │   │   ├── components/
 │   │   │   ├── AuthStatus.js        # Multi-account switcher dropdown
 │   │   │   ├── LoginPrompt.js       # Sign-in prompt with provider selection
-│   │   │   ├── SecurityContextPanel.js  # Role selector, groups, scopes, expiry countdown
+│   │   │   ├── SecurityContextPanel.js  # Role selector, ABAC archiver toggle, groups, scopes, expiry
 │   │   │   ├── TokenInspector.js    # JWT header/payload decoder (display only)
 │   │   │   ├── ConversationTabs.js  # Multi-tab chat with per-tab scope (max 4)
 │   │   │   ├── ChatInterface.js     # Chat with denial tagging + latency tracking
@@ -81,7 +81,7 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ├── tests/
 │   ├── conftest.py            # Pytest fixtures (mock tokens, Cognito helpers)
 │   ├── test_access_control.py # Access control tests
-│   ├── test_cedar_smoke.py    # Cedar RBAC/ABAC policy + CedarPolicyEvaluator tests (28 tests)
+│   ├── test_cedar_smoke.py    # Cedar RBAC/ABAC policy + CedarPolicyEvaluator tests (31 tests)
 │   └── test_security_dashboard.py # Dashboard tests
 ├── dev_config.py              # Shared config: auth bypass, detect_provider(), path constants
 ├── dev_config.example.toml    # Template for dev_config.toml (committed, defaults false)
@@ -148,9 +148,9 @@ Role selection: Users set `X-Assume-Role` header. `UserContextMiddleware` valida
 ### Auth Data Propagation
 
 ```
-Frontend (Bearer token + X-Assume-Role header)
-  → A2A Server (ContextVars: current_user_claims, current_access_token, current_assumed_role)
-    → ADK Agent (session state: user:access_token, user:role, user:email, user:groups)
+Frontend (Bearer token + X-Assume-Role + X-Abac-Attrs headers)
+  → A2A Server (ContextVars: current_user_claims, current_access_token, current_assumed_role, current_abac_attrs)
+    → ADK Agent (session state: user:access_token, user:role, user:email, user:groups, user:abac_attrs)
       → MCP Server (ContextVars: current_user_token, current_user_role, current_user_email, current_user_provider, current_user_groups, current_user_claims)
 ```
 
@@ -170,12 +170,12 @@ model=LiteLlm(model="bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0")
 ### MCP Header Provider
 
 ```python
-# adk_agent/agent.py:54-70
+# adk_agent/agent.py:99-116
 def mcp_header_provider(readonly_context: ReadonlyContext) -> Dict[str, str]:
-    # Injects Authorization + X-Assume-Role from ADK session state
+    # Injects Authorization + X-Assume-Role + X-Abac-Attrs from ADK session state
 ```
 
-Sync function called by `McpToolset` on every MCP request.
+Sync function called by `McpToolset` on every MCP request. `X-Abac-Attrs` carries JSON-encoded ABAC attributes (e.g., `{"archiver": true}`).
 
 ### OBO Token Exchange
 
@@ -193,7 +193,7 @@ Helper functions in `mcp_server/server.py`:
 Authorization is handled by Cedar policies evaluated in-process via `cedarpy`. The `CedarPolicyEvaluator` in `mcp_server/policy.py` composes `TomlPolicyEvaluator` (for group-to-role resolution) with Cedar (for policy decisions).
 
 **Two-phase authorization pattern:**
-- **Phase 1** (`require_cedar("tool_name")` auth callable): RBAC check without context — "can this role call this tool?"
+- **Phase 1** (`require_cedar("tool_name")` auth callable): RBAC check without context — "can this role call this tool?" For ABAC tools, roles in `_ABAC_PHASE1_PASSTHROUGH` (e.g., developer for `delete_s3_object`) pass through to Phase 2 even when RBAC denies, because the ABAC policy needs runtime context.
 - **Phase 2** (`cedar_check_with_context()` inside tool): ABAC check with runtime context — "can this user do this specific operation?" Only used for ABAC tools like `delete_s3_object`.
 
 **Policy files** in `cedar/policies/`:
@@ -329,7 +329,7 @@ Copy `dev_config.example.toml` to `dev_config.toml` and set `disable_auth = true
 ### Running Tests
 
 ```bash
-# Cedar ABAC policy + evaluator tests (28 tests)
+# Cedar ABAC policy + evaluator tests (31 tests)
 uv run pytest tests/test_cedar_smoke.py -v
 
 # Access control integration tests
@@ -375,13 +375,13 @@ uv run pytest tests/test_access_control.py -v
 
 1. **Token propagation**: Always via `Authorization: Bearer` headers, never in JSON payloads
 2. **State prefix**: `user:` prefix for ADK session state persistence
-3. **Context variables**: `ContextVar` for async-safe auth data (A2A: 3 vars, MCP: 6 vars)
+3. **Context variables**: `ContextVar` for async-safe auth data (A2A: 4 vars, MCP: 6 vars)
 4. **Stateless MCP**: `stateless_http=True` — no server-side session, ContextVars only
 5. **Port range**: 10000+ to avoid conflicts
 6. **Permission store**: `permissions.toml` is gitignored; group-to-role mappings are per-provider
 7. **Multi-IdP**: Provider detected from `iss` claim; group mappings under `[group_rules.<provider>]`
 8. **Graph API constants**: `GRAPH_API_BASE` in `mcp_server/server.py`
-9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `_build_access_request()` / `require_cedar()` / `cedar_check_with_context()` (MCP), `detect_provider()` / `PERMISSIONS_PATH` / `CEDAR_DIR` (shared in `dev_config.py`), `check_access_batch()` (CedarPolicyEvaluator)
+9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` / `_parse_abac_attrs_header()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `_build_access_request()` / `require_cedar()` / `cedar_check_with_context()` / `_parse_abac_attrs_header()` (MCP), `detect_provider()` / `PERMISSIONS_PATH` / `CEDAR_DIR` (shared in `dev_config.py`), `check_access_batch()` (CedarPolicyEvaluator)
 10. **Frontend shared utilities**: `a2aClient.js` centralizes API calls + `buildAuditEntry()`; `constants.js` holds `A2A_SERVER_URL` and `PROVIDER_LABELS`
 11. **Lazy logger formatting**: Use `logger.info("msg: %s", val)` not f-strings in hot paths
 

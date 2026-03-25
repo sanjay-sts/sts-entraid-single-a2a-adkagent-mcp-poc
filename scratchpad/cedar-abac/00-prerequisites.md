@@ -190,7 +190,7 @@ Frontend (Bearer token + X-Assume-Role header)
 | `mcp_server/policy.py` | Added `CedarPolicyEvaluator` class + `AccessRequest.context` field |
 | `mcp_server/server.py` | Replaced `require_role()` with `require_cedar()`, added `delete_s3_object` tool, added `cedar_check_with_context()` |
 | `a2a_server/server.py` | Removed duplicated `GROUP_TO_ROLE`/`TOOL_ROLES`/`ROLE_PRIORITY`, uses shared `CedarPolicyEvaluator` |
-| `dev_config.py` | Added shared `detect_provider()` function |
+| `dev_config.py` | Added shared `detect_provider()` and `parse_abac_attrs()` functions |
 | `permissions.example.toml` | Added ABAC attribute source documentation |
 | `requirements.txt` | Added `cedarpy>=4.0.0` |
 | NEW: `cedar/schema.cedarschema` | Entity types: User, Role, Tool, S3Folder + actions |
@@ -198,8 +198,16 @@ Frontend (Bearer token + X-Assume-Role header)
 | NEW: `cedar/policies/rbac.cedar` | RBAC permit policies for all tools |
 | NEW: `cedar/policies/abac.cedar` | ABAC policy: archiver + archive/ path |
 | NEW: `cedar/policies/guardrails.cedar` | Forbid: no delete in protected/ |
-| NEW: `tests/test_cedar_smoke.py` | 28 Cedar tests (RBAC, ABAC, evaluator integration) |
-| NEW: `scratchpad/cedar-abac/` | 4 documentation files (prerequisites, requirements, design, plan) |
+| NEW: `tests/test_cedar_smoke.py` | 31 Cedar tests (RBAC, ABAC, evaluator integration) |
+| NEW: `scratchpad/cedar-abac/` | 6 documentation files (prerequisites, requirements, design, plan, testing strategy, test results) |
+| `adk_agent/agent.py` | Added `delete_s3_object` to tool_filter, `user:abac_attrs` session state, `X-Abac-Attrs` in `mcp_header_provider` |
+| `dev_config.example.toml` | Added ABAC attribute defaults (default_archiver, default_department) |
+| `frontend/src/utils/testScenarios.js` | 8 ABAC `delete_s3_object` scenarios, ABAC-aware `getScenariosForRole()` |
+| `frontend/src/utils/a2aClient.js` | `X-Abac-Attrs` JSON header in `sendA2AMessage()` |
+| `frontend/src/components/SecurityContextPanel.js` | Archiver checkbox toggle |
+| `frontend/src/components/RBACTestMatrix.js` | ABAC-aware test matrix with archiver badge |
+| `frontend/src/App.js` | `archiverEnabled` state threaded to all components |
+| `frontend/src/App.css` | `.abac-toggle` and `.abac-badge` styles |
 
 ---
 

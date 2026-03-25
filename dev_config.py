@@ -4,6 +4,7 @@ Reads dev_config.toml (gitignored) to control auth bypass per server.
 If the file doesn't exist, all auth is enforced (production behavior).
 Config is cached at first load — restart servers after changes.
 """
+import json
 import logging
 import tomllib
 from pathlib import Path
@@ -58,6 +59,24 @@ def is_auth_disabled(section: str) -> bool:
 def get_section(section: str) -> dict[str, Any]:
     """Get the full config section for a server."""
     return _load_config().get(section, {})
+
+
+def parse_abac_attrs(raw: str) -> dict:
+    """Parse a JSON string of ABAC attributes into a dict.
+
+    Used by A2A and MCP servers to decode the X-Abac-Attrs header.
+    Returns empty dict on missing/invalid input. Unknown keys are
+    harmlessly ignored — only keys in ABAC_CLAIM_KEYS are extracted
+    during Cedar entity building.
+    """
+    if not raw:
+        return {}
+    try:
+        attrs = json.loads(raw)
+        return attrs if isinstance(attrs, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Invalid ABAC attrs JSON: %.100s", raw)
+        return {}
 
 
 def detect_provider(claims: dict) -> str:

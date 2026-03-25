@@ -34,12 +34,11 @@ export const useAuth = () => useContext(AuthContext);
 // MSAL singleton — created once, reused
 // ---------------------------------------------------------------------------
 let msalInstance = null;
+let msalInitPromise = null;
+
 function getMsalInstance() {
   if (!msalInstance && process.env.REACT_APP_ENTRA_CLIENT_ID) {
     msalInstance = new PublicClientApplication(msalConfig);
-    if (!msalInstance.getActiveAccount() && msalInstance.getAllAccounts().length > 0) {
-      msalInstance.setActiveAccount(msalInstance.getAllAccounts()[0]);
-    }
     msalInstance.addEventCallback((event) => {
       if (event.eventType === EventType.LOGIN_SUCCESS && event.payload?.account) {
         msalInstance.setActiveAccount(event.payload.account);
@@ -47,6 +46,21 @@ function getMsalInstance() {
     });
   }
   return msalInstance;
+}
+
+// MSAL Browser v3 requires initialize() before any API call
+async function ensureMsalReady() {
+  const inst = getMsalInstance();
+  if (!inst) return null;
+  if (!msalInitPromise) {
+    msalInitPromise = inst.initialize().then(() => {
+      if (!inst.getActiveAccount() && inst.getAllAccounts().length > 0) {
+        inst.setActiveAccount(inst.getAllAccounts()[0]);
+      }
+    });
+  }
+  await msalInitPromise;
+  return inst;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +161,7 @@ export default function AuthProvider({ children }) {
   // --- Login ---
   const login = useCallback(async (targetProvider) => {
     if (targetProvider === 'entra') {
-      const inst = getMsalInstance();
+      const inst = await ensureMsalReady();
       if (inst) {
         await inst.loginPopup(loginRequest);
       }
@@ -164,7 +178,7 @@ export default function AuthProvider({ children }) {
   // --- Logout ---
   const logout = useCallback(async () => {
     if (provider === 'entra') {
-      const inst = getMsalInstance();
+      const inst = await ensureMsalReady();
       if (inst) {
         await inst.logoutPopup({ postLogoutRedirectUri: '/' });
       }
@@ -179,7 +193,7 @@ export default function AuthProvider({ children }) {
   // --- Get access token ---
   const getAccessToken = useCallback(async (scopeKey = 'basic') => {
     if (provider === 'entra') {
-      const inst = getMsalInstance();
+      const inst = await ensureMsalReady();
       const acct = inst?.getActiveAccount();
       if (!inst || !acct) return '';
       const scopes = graphScopes[scopeKey] || graphScopes.basic;

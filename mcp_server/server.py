@@ -28,7 +28,7 @@ from fastmcp.exceptions import ToolError
 # Add project root and mcp_server/ to path for sibling module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, PERMISSIONS_PATH, CEDAR_DIR
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, parse_abac_attrs, PERMISSIONS_PATH, CEDAR_DIR
 from policy import AccessRequest, AccessDecision, PolicyEvaluator, TomlPolicyEvaluator, CedarPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
 
@@ -198,21 +198,45 @@ class UserContextMiddleware(Middleware):
     def _set_bypass_context(self) -> None:
         """Dev bypass — sets mock auth context from dev_config.toml.
 
-        Respects X-Assume-Role header if present, otherwise uses default_role.
+        Respects X-Assume-Role and X-Abac-Attrs headers if present.
+        Builds mock claims dict with ABAC attributes for Cedar evaluation.
         """
         dev_cfg = get_section("mcp")
+        email = dev_cfg.get("default_email", "dev@localhost")
+        provider = dev_cfg.get("default_provider", "entra")
+
         current_user_token.set(DEV_BYPASS_TOKEN)
-        current_user_email.set(dev_cfg.get("default_email", "dev@localhost"))
-        current_user_provider.set(dev_cfg.get("default_provider", "entra"))
-        # Respect X-Assume-Role header from upstream (ADK agent)
+        current_user_email.set(email)
+        current_user_provider.set(provider)
+
+        # Read headers for per-request overrides
         try:
             headers = get_http_headers()
             assumed_role = headers.get("x-assume-role", "")
         except Exception:
+            headers = {}
             assumed_role = ""
+
         role = assumed_role or dev_cfg.get("default_role", "admin")
         current_user_role.set(role)
-        logger.warning("AUTH BYPASSED - role: %s", role)
+        current_user_groups.set([])
+
+        # Build mock claims with ABAC attributes for Cedar evaluation
+        mock_claims = {
+            "preferred_username": email,
+            "sub": "dev-bypass-user",
+        }
+        # Config-based ABAC defaults
+        if dev_cfg.get("default_archiver") is not None:
+            mock_claims["archiver"] = bool(dev_cfg["default_archiver"])
+        if dev_cfg.get("default_department"):
+            mock_claims["department"] = dev_cfg["default_department"]
+        # Per-request X-Abac-Attrs header override (takes precedence)
+        abac_attrs = parse_abac_attrs(headers.get("x-abac-attrs", ""))
+        mock_claims.update(abac_attrs)
+
+        current_user_claims.set(mock_claims)
+        logger.warning("AUTH BYPASSED - role: %s, abac_attrs: %s", role, abac_attrs or "config")
 
     def _resolve_context(self, raise_on_error: bool = True) -> None:
         """Extract claims from validated token and resolve role.
@@ -276,11 +300,18 @@ class UserContextMiddleware(Middleware):
         current_user_role.set(assumed_role)
         current_user_provider.set(provider)
         current_user_groups.set(groups)
-        current_user_claims.set(token.claims)
+
+        # Merge X-Abac-Attrs header into claims for Cedar ABAC evaluation.
+        # This allows the frontend toggle to override or supplement token claims.
+        claims = dict(token.claims)
+        abac_attrs = parse_abac_attrs(headers.get("x-abac-attrs", ""))
+        claims.update(abac_attrs)
+        current_user_claims.set(claims)
 
         logger.info(
-            "User %s assumed role '%s' (available: %s)",
+            "User %s assumed role '%s' (available: %s, abac_attrs: %s)",
             email, assumed_role, available_roles,
+            abac_attrs or "token-only",
         )
 
     async def on_list_tools(self, context, call_next):
@@ -315,16 +346,29 @@ def _build_access_request(tool_name: str, context: dict | None = None) -> Access
     )
 
 
+# ABAC-only tools — no RBAC role grants access, only attributes do.
+# Phase 1 (no context) always passes through; Phase 2 (inside tool) enforces.
+# Without this, Cedar denies at Phase 1 because ABAC conditions need context.
+_ABAC_ONLY_TOOLS: set[str] = {"delete_s3_object"}
+
+
 def require_cedar(tool_name: str):
     """Cedar-based auth callable for @mcp.tool() decorators.
 
     Phase 1 RBAC check — evaluates Cedar policies without context.
-    For ABAC tools (e.g., delete_s3_object), a Phase 2 check with context
-    happens inside the tool function via cedar_check_with_context().
+    For ABAC-only tools (listed in _ABAC_ONLY_TOOLS), Phase 1 always
+    passes through to Phase 2 because no RBAC role grants access and
+    the ABAC policy requires runtime context (e.g., resource_path).
     """
     def check(ctx: AuthContext) -> bool:
         decision = policy_evaluator.check_access(_build_access_request(tool_name))
         if not decision.allowed:
+            if tool_name in _ABAC_ONLY_TOOLS:
+                logger.info(
+                    "Phase 1 passthrough for ABAC-only tool %s — Phase 2 will decide",
+                    tool_name,
+                )
+                return True
             raise ToolError(
                 f"[TOOL_DENIAL] Access denied: {decision.reason}"
             )

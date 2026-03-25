@@ -2,7 +2,7 @@
 
 ## Overview
 
-7 items in dependency order. Each item is planned, implemented, and verified before moving to the next.
+8 items in dependency order. Each item is planned, implemented, and verified before moving to the next.
 
 ## Item 1: Cedar Schema + Entity Model --- DONE
 
@@ -66,7 +66,7 @@
 - Added `cedar_check_with_context()` helper for ABAC tools
 - `UserContextMiddleware` type hint generalized for any `PolicyEvaluator`
 
-**28 Cedar tests passing**
+**31 Cedar tests passing**
 
 ---
 
@@ -84,11 +84,51 @@
 
 ## Item 7: Tests --- DONE
 
-**28 Cedar tests passing** covering:
+**31 Cedar tests passing** covering:
 - Inline RBAC policies (5 tests)
 - Inline ABAC policies (5 tests)
 - File-based policies (9 tests)
 - CedarPolicyEvaluator integration (11 tests)
+
+---
+
+## Item 8: ABAC Frontend Testing Integration --- DONE
+
+**Deliverables:**
+- `delete_s3_object` added to ADK `tool_filter` and agent instruction
+- MCP auth bypass injects ABAC claims from `dev_config.toml` + `X-Abac-Attrs` header
+- `X-Abac-Attrs` generic JSON header propagated through full chain (A2A → ADK → MCP)
+- Phase 1 passthrough (`_ABAC_PHASE1_PASSTHROUGH`) lets developer reach Phase 2 for ABAC tools
+- Cognito string-to-bool coercion in `_build_user_entity()`
+- `parse_abac_attrs()` shared helper in `dev_config.py` (DRY)
+- Frontend archiver checkbox in `SecurityContextPanel`
+- 8 new `delete_s3_object` test scenarios in `testScenarios.js`
+- ABAC-aware `getScenariosForRole(role, activeAbacAttrs)` with `forceExpectDeny` for guardrails
+- `RBACTestMatrix` renamed to "Access Control Test Matrix", resets on archiver toggle
+- `ChatInterface` sends `abacAttrs` via `sendA2AMessage()`
+- MANUAL_TESTING.md Section 6b with full ABAC test matrix
+
+**Files modified (17):**
+
+| File | Change |
+|------|--------|
+| `cedar/policies/rbac.cedar` | Phase 1 passthrough comment |
+| `mcp_server/server.py` | `_ABAC_PHASE1_PASSTHROUGH`, bypass claims, `X-Abac-Attrs` merge |
+| `mcp_server/policy.py` | String-to-bool coercion |
+| `a2a_server/server.py` | `current_abac_attrs` ContextVar, propagates `abac_attrs` to ADK |
+| `adk_agent/agent.py` | tool_filter, `user:abac_attrs`, `X-Abac-Attrs` header |
+| `dev_config.py` | `parse_abac_attrs()` shared helper |
+| `dev_config.example.toml` | ABAC attribute defaults |
+| `frontend/src/utils/testScenarios.js` | 8 ABAC scenarios |
+| `frontend/src/utils/a2aClient.js` | `X-Abac-Attrs` header |
+| `frontend/src/components/SecurityContextPanel.js` | Archiver checkbox |
+| `frontend/src/components/RBACTestMatrix.js` | ABAC-aware matrix |
+| `frontend/src/components/ChatInterface.js` | `abacAttrs` param |
+| `frontend/src/components/ConversationTabs.js` | `archiverEnabled` forwarding |
+| `frontend/src/App.js` | `archiverEnabled` state |
+| `frontend/src/App.css` | ABAC styles |
+| `MANUAL_TESTING.md` | Section 6b ABAC test matrix |
+| `CLAUDE.md` | Updated propagation diagram, test counts, helpers |
 
 ---
 
@@ -102,6 +142,7 @@ Item 1 (Schema + Entities)
             │    └── Item 5 (MCP Migration)
             │         └── Item 6 (A2A Migration)
             │              └── Item 7 (Tests)
+            │                   └── Item 8 (ABAC Frontend Testing)
             └── Item 5 (MCP Migration)
 ```
 

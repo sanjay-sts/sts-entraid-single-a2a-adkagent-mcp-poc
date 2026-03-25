@@ -106,10 +106,13 @@ def mcp_header_provider(readonly_context: ReadonlyContext) -> dict[str, str]:
     if readonly_context and readonly_context.state:
         access_token = readonly_context.state.get("user:access_token", "")
         role = readonly_context.state.get("user:role", "")
+        abac_attrs = readonly_context.state.get("user:abac_attrs", "")
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
         if role:
             headers["X-Assume-Role"] = role
+        if abac_attrs:
+            headers["X-Abac-Attrs"] = abac_attrs
     if not headers:
         logger.warning("MCP header_provider: No access token found in session state")
     return headers
@@ -147,6 +150,7 @@ class IdentityAwareAgent:
                 "list_s3_buckets",
                 "list_s3_objects",
                 "get_s3_object_info",
+                "delete_s3_object",
             ],
             # Dynamic header provider for per-request auth
             header_provider=mcp_header_provider,
@@ -176,6 +180,7 @@ Available tools:
 - list_s3_buckets: List all S3 buckets (admin/developer only)
 - list_s3_objects: List objects in an S3 bucket (admin/developer only)
 - get_s3_object_info: Get metadata about a specific S3 object (all roles)
+- delete_s3_object: Delete an S3 object (admin any path except protected/; developer with archiver attribute in archive/ only)
 
 For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "Asia/Tokyo", "America/New_York".""",
             tools=[
@@ -205,12 +210,16 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
 
         # Pass initial state at creation time - this ensures it's stored properly
         # Using user: prefix for persistence across sessions
+        # Serialize ABAC attrs as JSON string for session state storage
+        abac_attrs = user_info.get("abac_attrs", {})
+
         initial_state = {
             "user:access_token": access_token,
             "user:email": user_info.get("email", user_info.get("preferred_username", "")),
             "user:name": user_info.get("name", user_info.get("displayName", "")),
             "user:groups": user_info.get("groups", []),
             "user:role": role,
+            "user:abac_attrs": json.dumps(abac_attrs) if abac_attrs else "",
         }
 
         session = await self.session_service.create_session(
@@ -275,8 +284,8 @@ For timezone queries, use IANA timezone names like "UTC", "Europe/Belgrade", "As
             yield {"error": "Session not found. Create session first."}
             return
 
-        # Update access token in storage -- header_provider reads this during MCP calls
-        self.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})["access_token"] = access_token
+        # Update access token in storage — user: prefix must match mcp_header_provider keys
+        self.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})["user:access_token"] = access_token
 
         max_retries = 3
         base_delay = 30  # seconds -- rate limits reset per minute
@@ -378,10 +387,10 @@ async def create_session(request: Request):
     return {"session_id": session_id}
 
 
-async def _parse_chat_request(request: Request, endpoint: str) -> tuple[str, str, str, str, str]:
+async def _parse_chat_request(request: Request, endpoint: str) -> tuple[str, str, str, str, str, dict]:
     """Parse and validate a chat request body.
 
-    Returns (access_token, message, user_id, session_id, role).
+    Returns (access_token, message, user_id, session_id, role, abac_attrs).
     Raises HTTPException(400) if required fields are missing.
     """
     access_token = _extract_bearer_token(request, endpoint)
@@ -390,21 +399,26 @@ async def _parse_chat_request(request: Request, endpoint: str) -> tuple[str, str
     user_id = body.get("user_id")
     session_id = body.get("session_id")
     role = body.get("role", "")
+    abac_attrs = body.get("abac_attrs", {})
     if not all([message, user_id, session_id]):
         raise HTTPException(status_code=400, detail="message, user_id, and session_id are required")
     _validate_user_id(access_token, user_id)
-    return access_token, message, user_id, session_id, role
+    return access_token, message, user_id, session_id, role, abac_attrs
 
 
 @app.post("/chat")
 async def chat(request: Request):
     """Process a chat message."""
-    access_token, message, user_id, session_id, role = await _parse_chat_request(request, "POST /chat")
+    access_token, message, user_id, session_id, role, abac_attrs = await _parse_chat_request(request, "POST /chat")
     logger.info("Chat request - user: %s, session: %s, role: %s", user_id, session_id, role)
 
-    # Update role in session state if provided (same pattern as token refresh)
+    # Update role and ABAC attrs in session state — must use user: prefix to match
+    # mcp_header_provider which reads user:role, user:abac_attrs, user:access_token
+    user_state = agent.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})
     if role:
-        agent.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})["role"] = role
+        user_state["user:role"] = role
+    if abac_attrs:
+        user_state["user:abac_attrs"] = json.dumps(abac_attrs)
 
     # Collect events and extract the final text response (last text after tool calls)
     response_text = "No response generated"
@@ -428,7 +442,14 @@ async def chat(request: Request):
 @app.post("/chat/stream")
 async def chat_stream(request: Request):
     """Process a chat message with streaming response."""
-    access_token, message, user_id, session_id, _ = await _parse_chat_request(request, "POST /chat/stream")
+    access_token, message, user_id, session_id, role, abac_attrs = await _parse_chat_request(request, "POST /chat/stream")
+
+    # Update role and ABAC attrs in session state (same as /chat)
+    user_state = agent.session_service.user_state.setdefault("identity-agent", {}).setdefault(user_id, {})
+    if role:
+        user_state["user:role"] = role
+    if abac_attrs:
+        user_state["user:abac_attrs"] = json.dumps(abac_attrs)
 
     async def generate():
         async for event in agent.chat(session_id, user_id, message, access_token):

@@ -6,7 +6,7 @@ import ChatInterface from './ChatInterface';
 const MAX_TABS = 4;
 const SCOPE_OPTIONS = Object.keys(graphScopes);
 
-export default function ConversationTabs({ onAuditEntry, selectedRole }) {
+export default function ConversationTabs({ onAuditEntry, selectedRole, archiverEnabled }) {
   const { provider } = useAuth();
   const [tabs, setTabs] = useState([
     { id: 1, scopeKey: 'basic', label: 'basic' },
@@ -95,6 +95,7 @@ export default function ConversationTabs({ onAuditEntry, selectedRole }) {
             scopeKey={currentTab.scopeKey}
             onAuditEntry={onAuditEntry}
             selectedRole={selectedRole}
+            archiverEnabled={archiverEnabled}
           />
         )}
       </div>

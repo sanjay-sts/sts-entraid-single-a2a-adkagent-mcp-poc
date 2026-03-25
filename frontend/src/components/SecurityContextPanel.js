@@ -11,7 +11,7 @@ function getExpiryClass(countdown, tokenExpiry) {
   return 'expiry-ok';
 }
 
-export default function SecurityContextPanel({ scopeKey, onSecurityContext, selectedRole, onRoleChange }) {
+export default function SecurityContextPanel({ scopeKey, onSecurityContext, selectedRole, onRoleChange, archiverEnabled, onArchiverChange }) {
   const { isAuthenticated, getAccessToken, provider } = useAuth();
   const [securityCtx, setSecurityCtx] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -141,6 +141,18 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
             {security.role.toUpperCase()}
           </span>
         )}
+      </div>
+
+      <div className="panel-section">
+        <label>ABAC Attributes</label>
+        <label className="abac-toggle">
+          <input
+            type="checkbox"
+            checked={archiverEnabled || false}
+            onChange={(e) => onArchiverChange(e.target.checked)}
+          />
+          archiver <span className="panel-muted">(archive/ delete)</span>
+        </label>
       </div>
 
       <div className="panel-section">

@@ -25,3 +25,6 @@ default_role = "admin"                  # admin | developer | viewer
 default_email = "dev@localhost"
 default_provider = "entra"              # entra | cognito | auth0
 default_scopes = ["User.Read", "Files.Read", "Mail.Send", "Files.ReadWrite.All"]
+# ABAC attributes for Cedar policy testing (optional, also overridable via X-Abac-Attrs JSON header)
+# default_archiver = true       # Set true to enable delete_s3_object for developer role
+# default_department = "engineering"

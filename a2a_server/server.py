@@ -20,13 +20,14 @@ from fastapi.middleware.cors import CORSMiddleware
 # Add project root and mcp_server/ to path for shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, PERMISSIONS_PATH, CEDAR_DIR
+from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, parse_abac_attrs, PERMISSIONS_PATH, CEDAR_DIR
 from policy import TomlPolicyEvaluator, CedarPolicyEvaluator
 
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
 current_access_token: ContextVar[str] = ContextVar("current_access_token", default="")
 current_assumed_role: ContextVar[str] = ContextVar("current_assumed_role", default="")
+current_abac_attrs: ContextVar[dict] = ContextVar("current_abac_attrs", default={})
 
 # Configure logging
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -344,6 +345,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                         "user_id": user_id,
                         "session_id": session_id,
                         "role": current_assumed_role.get(),
+                        "abac_attrs": current_abac_attrs.get(),
                     },
                     headers={"Authorization": f"Bearer {access_token}"},
                     timeout=60.0,
@@ -398,6 +400,7 @@ class IdentityAwareAgentExecutor(AgentExecutor):
                             "name": name,
                             "groups": groups,
                             "assumed_role": current_assumed_role.get(),
+                            "abac_attrs": current_abac_attrs.get(),
                         },
                     },
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -590,6 +593,7 @@ async def auth_middleware(request: Request, call_next):
         current_user_claims.set(mock_claims)
         current_access_token.set(DEV_BYPASS_TOKEN)
         current_assumed_role.set(request.headers.get("X-Assume-Role", "") or get_section("a2a").get("default_role", "admin"))
+        current_abac_attrs.set(parse_abac_attrs(request.headers.get("X-Abac-Attrs", "")))
         request.state.user_claims = mock_claims
         request.state.access_token = DEV_BYPASS_TOKEN
         logger.warning("AUTH BYPASSED: %s %s", request.method, request.url.path)
@@ -650,6 +654,7 @@ async def auth_middleware(request: Request, call_next):
         current_user_claims.set(claims)
         current_access_token.set(token)
         current_assumed_role.set(request.headers.get("X-Assume-Role", ""))
+        current_abac_attrs.set(parse_abac_attrs(request.headers.get("X-Abac-Attrs", "")))
 
     except jwt.ExpiredSignatureError:
         logger.warning("Token has expired")

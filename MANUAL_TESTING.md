@@ -56,7 +56,7 @@ Test for **each role** (admin, developer, viewer):
 ### Admin (sign in as AdeleV@)
 
 - [ ] Role badge shows **ADMIN** in green
-- [ ] **Permissions** section shows all 10 tools checked:
+- [ ] **Permissions** section shows all 11 tools checked:
   - [x] get_user_profile
   - [x] list_files
   - [x] send_email
@@ -67,6 +67,7 @@ Test for **each role** (admin, developer, viewer):
   - [x] list_s3_buckets
   - [x] list_s3_objects
   - [x] get_s3_object_info
+  - [x] delete_s3_object
 - [ ] **Groups** section shows group IDs with role name mappings
 - [ ] **Token Scopes** lists scopes matching the selected scope preset
 - [ ] **Token Expiry** countdown is running (green = > 5 min)
@@ -82,6 +83,10 @@ Test for **each role** (admin, developer, viewer):
   - [ ] get_current_time (unchecked)
   - [ ] convert_timezone (unchecked)
   - [ ] get_time_difference (unchecked)
+  - [x] list_s3_buckets
+  - [x] list_s3_objects
+  - [x] get_s3_object_info
+  - [ ] delete_s3_object (unchecked — requires archiver attribute + archive/ path)
 - [ ] Groups show developer group ID with "developer" mapping
 
 ### Viewer (sign in as JohannaL@)
@@ -95,6 +100,10 @@ Test for **each role** (admin, developer, viewer):
   - [ ] get_current_time (unchecked)
   - [ ] convert_timezone (unchecked)
   - [ ] get_time_difference (unchecked)
+  - [ ] list_s3_buckets (unchecked)
+  - [ ] list_s3_objects (unchecked)
+  - [x] get_s3_object_info
+  - [ ] delete_s3_object (unchecked)
 - [ ] Groups show viewer group ID with "viewer" mapping
 
 ### Token Expiry States
@@ -230,6 +239,74 @@ Test for **each role** (admin, developer, viewer):
 | 12 | files_email | list_files | email | DENY | TOOL |
 | 13 | email_files | send_email | files | DENY | TOOL |
 | 14 | profile_destructive | get_user_profile | destructive | ALLOW | - |
+
+---
+
+## 6b. Cedar ABAC Test Matrix — `delete_s3_object`
+
+### Cognito Test User Accounts
+
+| Role | User | Email | Group | archiver | Purpose |
+|------|------|-------|-------|----------|---------|
+| Developer+Archiver | archiver | archiver@test.com | platform-developers | `custom:archiver=true` | ABAC delete in archive/ |
+| Developer (no archiver) | (existing dev) | - | platform-developers | (none) | Verify ABAC denies without attr |
+
+### Cognito IdP Prerequisites
+
+User Pool uses **"Basic features + access token customization"** tier.
+
+1. `custom:archiver` attribute on User Pool
+2. **Access token customization**: Cognito console > User Pool > Token Configuration > map `custom:archiver` → `archiver` claim in access token
+3. User `archiver@test.com` in `platform-developers` group with `custom:archiver=true`
+4. S3 bucket IAM role policy allows `s3:DeleteObject` on target bucket
+
+### ABAC Test Scenarios
+
+Enable the **archiver** checkbox in the Security Context Panel, then run these scenarios.
+
+#### Admin User
+
+| # | Scenario | S3 Path | archiver | Expected | Denial | Cedar Policy |
+|---|----------|---------|----------|----------|--------|--------------|
+| 1 | Admin delete in archive/ | `archive/old.csv` | n/a | ALLOW | - | rbac.cedar (blanket admin) |
+| 2 | Admin delete in protected/ | `protected/critical.csv` | n/a | **DENY** | TOOL | guardrails.cedar (forbid) |
+| 3 | Admin delete in data/ | `data/file.csv` | n/a | ALLOW | - | rbac.cedar (blanket admin) |
+
+#### Developer User (with archiver toggle ON)
+
+| # | Scenario | S3 Path | archiver | Expected | Denial | Cedar Policy |
+|---|----------|---------|----------|----------|--------|--------------|
+| 4 | Dev+archiver in archive/ | `archive/old.csv` | true | ALLOW | - | abac.cedar |
+| 5 | Dev+archiver in protected/ | `protected/critical.csv` | true | **DENY** | TOOL | guardrails.cedar (forbid) |
+| 6 | Dev+archiver in data/ | `data/file.csv` | true | **DENY** | TOOL | abac.cedar (wrong path) |
+
+#### Developer User (archiver toggle OFF)
+
+| # | Scenario | S3 Path | archiver | Expected | Denial | Cedar Policy |
+|---|----------|---------|----------|----------|--------|--------------|
+| 7 | Dev no archiver in archive/ | `archive/old.csv` | false | **DENY** | TOOL | abac.cedar (missing attr) |
+
+#### Viewer User
+
+| # | Scenario | S3 Path | archiver | Expected | Denial | Cedar Policy |
+|---|----------|---------|----------|----------|--------|--------------|
+| 8 | Viewer delete | `archive/old.csv` | n/a | **DENY** | TOOL | rbac.cedar (no permit) |
+
+### Two-Phase Authorization
+
+- **Phase 1** (`require_cedar`): RBAC check without context — "can this role call this tool?" Developer gets a passthrough to Phase 2 for ABAC tools.
+- **Phase 2** (`cedar_check_with_context` inside tool): ABAC check with `resource_path` — "can this user delete at this path with these attributes?"
+- **Guardrail**: `protected/*` forbidden for all principals (overrides all permits).
+
+### ABAC Attribute Propagation
+
+The archiver attribute flows via `X-Abac-Attrs` JSON header:
+```
+Frontend (checkbox) → X-Abac-Attrs: {"archiver": true}
+  → A2A Server → abac_attrs in JSON body
+    → ADK Agent → user:abac_attrs in session state → X-Abac-Attrs header
+      → MCP Server → merged into claims → Cedar evaluates
+```
 
 ---
 

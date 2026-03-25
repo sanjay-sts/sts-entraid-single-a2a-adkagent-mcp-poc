@@ -16,6 +16,7 @@ function App() {
   const [securityCtx, setSecurityCtx] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedRole, setSelectedRole] = useState(null);
+  const [archiverEnabled, setArchiverEnabled] = useState(false);
 
   const handleAuditEntry = useCallback((entry) => {
     setAuditEntries(prev => [...prev, entry]);
@@ -59,6 +60,8 @@ function App() {
                   onSecurityContext={setSecurityCtx}
                   selectedRole={selectedRole}
                   onRoleChange={setSelectedRole}
+                  archiverEnabled={archiverEnabled}
+                  onArchiverChange={setArchiverEnabled}
                 />
 
                 <TokenInspector scopeKey={DEFAULT_SCOPE_KEY} />
@@ -67,6 +70,7 @@ function App() {
                   role={identityRole}
                   selectedRole={selectedRole}
                   onAuditEntry={handleAuditEntry}
+                  archiverEnabled={archiverEnabled}
                 />
               </>
             )}
@@ -74,7 +78,7 @@ function App() {
 
           {/* Main Content */}
           <main className="main-content">
-            <ConversationTabs onAuditEntry={handleAuditEntry} selectedRole={selectedRole} />
+            <ConversationTabs onAuditEntry={handleAuditEntry} selectedRole={selectedRole} archiverEnabled={archiverEnabled} />
 
             <div className="audit-section">
               <AuditLog entries={auditEntries} />

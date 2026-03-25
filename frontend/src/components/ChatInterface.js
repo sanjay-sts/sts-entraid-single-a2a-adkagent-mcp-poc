@@ -5,7 +5,7 @@ import DenialIndicator from './DenialIndicator';
 
 const ROLE_LABELS = { user: 'You', agent: 'Agent', system: 'System' };
 
-export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) {
+export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole, archiverEnabled }) {
   const { getAccessToken } = useAuth();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -31,7 +31,8 @@ export default function ChatInterface({ scopeKey, onAuditEntry, selectedRole }) 
 
     try {
       const accessToken = await getAccessToken(scopeKey);
-      const result = await sendA2AMessage({ accessToken, message: userMessage, selectedRole });
+      const abacAttrs = archiverEnabled ? { archiver: true } : {};
+      const result = await sendA2AMessage({ accessToken, message: userMessage, selectedRole, abacAttrs });
 
       setMessages(prev => [...prev, {
         role: result.isAuthError ? 'system' : 'agent',

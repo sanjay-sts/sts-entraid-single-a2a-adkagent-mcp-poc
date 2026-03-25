@@ -241,6 +241,9 @@ class CedarPolicyEvaluator(PolicyEvaluator):
         for claim_key, expected_type in self.ABAC_CLAIM_KEYS.items():
             if claim_key in claims:
                 value = claims[claim_key]
+                # Cognito access token customization sends booleans as strings
+                if expected_type is bool and isinstance(value, str):
+                    value = value.lower() == "true"
                 if isinstance(value, expected_type):
                     attrs[claim_key] = value
 

@@ -252,10 +252,36 @@ Phase 2 (inside tool — cedar_check_with_context):
   └─────────────────────────────────────────────────────────┘
 ```
 
-For RBAC-only tools, Phase 1 is sufficient. For `delete_s3_object`, both phases run:
-- Phase 1: Admin passes (blanket permit). Developer without archiver is denied.
-- Phase 2: Developer with archiver passes only if `resource_path` starts with `archive/`.
-  Admin passes unless path starts with `protected/` (forbid guardrail).
+For RBAC-only tools, Phase 1 is sufficient. For `delete_s3_object`, the two-phase pattern works as follows:
+- Phase 1: Admin passes (blanket RBAC permit). Developer is denied by RBAC (no permit for `delete_s3_object` in `rbac.cedar`), BUT the `_ABAC_PHASE1_PASSTHROUGH` mechanism lets developer through to Phase 2.
+- Phase 2: Developer with archiver passes only if `resource_path` starts with `archive/`. Developer without archiver is denied. Admin passes unless path starts with `protected/` (forbid guardrail).
+
+### Phase 1 Passthrough for ABAC Tools
+
+The ABAC policy for `delete_s3_object` requires `context.resource_path`, which isn't available at Phase 1 (no context). Without intervention, Cedar always denies developers at Phase 1 because the ABAC policy conditions can't match. The passthrough in `require_cedar()` solves this:
+
+```python
+# mcp_server/server.py
+_ABAC_PHASE1_PASSTHROUGH: dict[str, set[str]] = {
+    "delete_s3_object": {"developer"},
+}
+
+def require_cedar(tool_name: str):
+    def check(ctx: AuthContext) -> bool:
+        decision = policy_evaluator.check_access(_build_access_request(tool_name))
+        if not decision.allowed:
+            role = current_user_role.get()
+            if role in _ABAC_PHASE1_PASSTHROUGH.get(tool_name, set()):
+                return True  # Let Phase 2 decide
+            raise ToolError(f"[TOOL_DENIAL] Access denied: {decision.reason}")
+        return True
+    return check
+```
+
+This is safe because:
+- Only explicit role+tool combinations get the passthrough (not blanket)
+- Viewer is still denied at Phase 1 (no entry in passthrough dict)
+- Phase 2 inside the tool function is the authoritative decision
 
 ### ContextVars Added for Cedar
 
@@ -288,3 +314,45 @@ def detect_provider(claims: dict) -> str:
 evaluating multiple tools in one call. Used by the A2A `/me` endpoint to build the
 permissions matrix — resolves roles once, builds user entity once, evaluates all 11 tools
 in a single batch call instead of 11 individual calls.
+
+## ABAC Attribute Propagation via `X-Abac-Attrs`
+
+ABAC attributes (e.g., `archiver`) can come from two sources:
+1. **JWT token claims** — Cognito access token customization adds `archiver` claim
+2. **Frontend header override** — `X-Abac-Attrs: {"archiver": true}` for testing
+
+The header uses generic JSON (not per-attribute headers) so adding future attributes requires zero chain changes:
+
+```
+Frontend (archiver checkbox → X-Abac-Attrs: {"archiver": true})
+  → A2A Server (parse_abac_attrs() → current_abac_attrs ContextVar → "abac_attrs" in JSON body)
+    → ADK Agent (user:abac_attrs in session state → X-Abac-Attrs header via mcp_header_provider)
+      → MCP Server (parse_abac_attrs() → merged into current_user_claims → Cedar evaluates)
+```
+
+`parse_abac_attrs(raw: str) -> dict` is shared via `dev_config.py` — both A2A and MCP import it.
+
+### Cognito Access Token Customization
+
+The `archiver` attribute comes from Cognito (S3 delete is an AWS use case). Cognito User Pool uses **"Basic features + access token customization"** tier — custom claims are added directly via console, no Lambda needed.
+
+**Setup:** Cognito console > User Pool > Token Configuration > Access token customization > map `custom:archiver` user attribute → `archiver` claim.
+
+**Coercion:** Cognito sends booleans as strings (`"true"` not `true`). The `_build_user_entity()` method in `CedarPolicyEvaluator` handles this:
+
+```python
+# mcp_server/policy.py
+for claim_key, expected_type in self.ABAC_CLAIM_KEYS.items():
+    if claim_key in claims:
+        value = claims[claim_key]
+        if expected_type is bool and isinstance(value, str):
+            value = value.lower() == "true"
+        if isinstance(value, expected_type):
+            attrs[claim_key] = value
+```
+
+### Auth Bypass ABAC Support
+
+When `disable_auth = true` in `dev_config.toml`, the MCP server's `_set_bypass_context()` builds mock claims with ABAC attributes from:
+1. **Config defaults:** `default_archiver = true` in `[mcp]` section
+2. **Header override:** `X-Abac-Attrs` header takes precedence (no server restart needed)

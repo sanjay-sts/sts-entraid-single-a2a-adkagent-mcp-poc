@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useAuth } from '../AuthProvider';
 import { sendA2AMessage, buildAuditEntry } from '../utils/a2aClient';
 import { getScenariosForRole } from '../utils/testScenarios';
@@ -25,18 +25,23 @@ function ResultCell({ scenarioId, running, result }) {
   );
 }
 
-export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
+export default function RBACTestMatrix({ role, selectedRole, onAuditEntry, archiverEnabled }) {
   const { getAccessToken } = useAuth();
   const [results, setResults] = useState({});
   const [running, setRunning] = useState(null);
   const [runningAll, setRunningAll] = useState(false);
 
   const effectiveRole = selectedRole || role;
-  const scenarios = getScenariosForRole(effectiveRole);
+  const activeAbacAttrs = useMemo(
+    () => (archiverEnabled ? { archiver: true } : {}),
+    [archiverEnabled]
+  );
+  const scenarios = getScenariosForRole(effectiveRole, activeAbacAttrs);
 
+  // Reset results when role or archiver toggle changes
   useEffect(() => {
     setResults({});
-  }, [selectedRole]);
+  }, [selectedRole, archiverEnabled]);
 
   const runScenario = useCallback(async (scenario) => {
     setRunning(scenario.id);
@@ -47,6 +52,7 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
         accessToken,
         message: scenario.prompt,
         selectedRole,
+        abacAttrs: activeAbacAttrs,
       });
 
       const succeeded = !result.denial;
@@ -76,7 +82,7 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
     } finally {
       setRunning(null);
     }
-  }, [getAccessToken, selectedRole, onAuditEntry]);
+  }, [getAccessToken, selectedRole, activeAbacAttrs, onAuditEntry]);
 
   const runAll = async () => {
     setRunningAll(true);
@@ -91,9 +97,10 @@ export default function RBACTestMatrix({ role, selectedRole, onAuditEntry }) {
 
   return (
     <div className="rbac-matrix">
-      <h3 className="panel-title">RBAC Test Matrix</h3>
+      <h3 className="panel-title">Access Control Test Matrix</h3>
       <div className="matrix-role-info">
         Testing as: <span className={`role-badge role-${effectiveRole}`}>{effectiveRole.toUpperCase()}</span>
+        {archiverEnabled && <span className="abac-badge">+archiver</span>}
         {role !== effectiveRole && <span className="role-switch-note">(switched from {role})</span>}
       </div>
 
