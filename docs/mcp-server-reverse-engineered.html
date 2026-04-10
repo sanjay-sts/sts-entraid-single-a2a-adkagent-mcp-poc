@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Server — Reverse Engineering Guide</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d2a8ff;
+    --accent4: #f78166;
+    --red: #f85149;
+    --yellow: #e3b341;
+    --code-bg: #0d1117;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
+  }
+
+  h1 + p { color: var(--text-muted); margin-bottom: 2rem; font-size: 0.95rem; }
+
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 2.5rem 0 1rem;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.5rem;
+  }
+
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 1.5rem 0 0.5rem;
+    color: var(--accent);
+  }
+
+  h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 1.25rem 0 0.5rem;
+    color: var(--accent3);
+  }
+
+  p { margin: 0.5rem 0; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.85em;
+    background: var(--surface2);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    color: var(--accent3);
+  }
+
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    margin: 0.75rem 0 1rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  pre code {
+    background: none;
+    padding: 0;
+    color: var(--text);
+    font-size: inherit;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0 1rem;
+    font-size: 0.9rem;
+  }
+
+  th {
+    background: var(--surface2);
+    color: var(--accent);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  tr:nth-child(even) { background: var(--surface); }
+
+  .section-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+  }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--surface);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.9rem;
+  }
+
+  .callout.warn {
+    border-left-color: var(--yellow);
+  }
+
+  .callout.danger {
+    border-left-color: var(--red);
+  }
+
+  .callout.success {
+    border-left-color: var(--accent2);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 0.15em 0.5em;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    vertical-align: middle;
+  }
+
+  .badge-permit { background: #1a3a2a; color: var(--accent2); }
+  .badge-forbid { background: #3a1a1a; color: var(--red); }
+  .badge-abac { background: #2a1a3a; color: var(--accent3); }
+  .badge-rbac { background: #1a2a3a; color: var(--accent); }
+
+  .flow-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 1rem 0;
+    color: var(--text-muted);
+  }
+
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+
+  .toc h3 { margin-top: 0; color: var(--text); }
+
+  .toc ol {
+    padding-left: 1.25rem;
+    margin: 0.5rem 0;
+  }
+
+  .toc li {
+    margin: 0.35rem 0;
+    color: var(--text-muted);
+  }
+
+  .toc a { color: var(--accent); }
+
+  .role-matrix td:nth-child(n+2) { text-align: center; }
+  .check { color: var(--accent2); font-weight: bold; }
+  .cross { color: var(--text-muted); }
+
+  .keyword { color: var(--accent); }
+  .string { color: var(--accent2); }
+  .comment { color: var(--text-muted); font-style: italic; }
+  .type { color: var(--accent3); }
+
+  ul { padding-left: 1.25rem; margin: 0.5rem 0; }
+  li { margin: 0.25rem 0; }
+
+  .file-ref {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-style: italic;
+  }
+
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.25rem; }
+    pre { font-size: 0.78rem; padding: 0.75rem; }
+    table { font-size: 0.8rem; }
+  }
+</style>
+</head>
+<body>
+
+<h1>MCP Server &mdash; Reverse Engineering Guide</h1>
+<p>A deep-dive into how the FastMCP server is built, how Cedar enforces RBAC and ABAC authorization, and how the supporting files fit together.</p>
+
+<nav class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#overview">MCP Server Overview</a></li>
+    <li><a href="#tools">The 11 MCP Tools</a></li>
+    <li><a href="#cedar">Cedar Authorization &mdash; How It Works</a></li>
+    <li><a href="#two-phase">Two-Phase Authorization Pattern</a></li>
+    <li><a href="#evaluator">CedarPolicyEvaluator Internals</a></li>
+    <li><a href="#permissions">Permissions File &mdash; Role Resolution</a></li>
+    <li><a href="#middleware">UserContextMiddleware Flow</a></li>
+    <li><a href="#obo">Graph OBO Token Exchange</a></li>
+    <li><a href="#e2e">End-to-End Request Trace</a></li>
+  </ol>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="overview">1. MCP Server Overview</h2>
+
+<p class="file-ref">File: <code>mcp_server/server.py</code> (956 lines)</p>
+
+<p>The MCP server is built with the <strong>FastMCP</strong> framework, running as a stateless HTTP service on port <code>10002</code>.</p>
+
+<div class="section-card">
+<h4>Server Configuration</h4>
+<pre><code><span class="comment"># server.py:948-955</span>
+mcp = FastMCP(name=<span class="string">"Identity-Aware MCP Server"</span>, auth=_build_auth())
+mcp.add_middleware(UserContextMiddleware(policy_evaluator))
+
+mcp.run(
+    transport=<span class="string">"streamable-http"</span>,
+    host=<span class="string">"0.0.0.0"</span>,
+    port=<span class="type">10002</span>,
+    path=<span class="string">"/mcp"</span>,
+    stateless_http=<span class="keyword">True</span>,
+)</code></pre>
+</div>
+
+<table>
+  <tr><th>Design Choice</th><th>Why</th></tr>
+  <tr><td><code>stateless_http=True</code></td><td>No server-side session. Every request carries its own auth context via headers. ContextVars provide per-request isolation.</td></tr>
+  <tr><td><code>streamable-http</code></td><td>Modern MCP transport over standard HTTP POST</td></tr>
+  <tr><td><code>MultiAuth</code></td><td>Accepts tokens from multiple IdPs (Entra ID + Cognito)</td></tr>
+  <tr><td><code>UserContextMiddleware</code></td><td>Resolves roles from token claims, sets 6 ContextVars for tool authorization</td></tr>
+</table>
+
+<h3>Authentication Setup</h3>
+<p class="file-ref"><code>_build_auth()</code> &mdash; server.py:117-170</p>
+
+<div class="flow-diagram">Entra ID:
+  ├── AzureJWTVerifier (v2.0 tokens) &mdash; auto-configures JWKS, issuer, audience
+  └── JWTVerifier (v1.0 fallback) &mdash; handles sts.windows.net issuer tokens
+
+Cognito:
+  └── JWTVerifier &mdash; User Pool JWT validation (audience omitted; client_id validated in middleware)
+
+Result: MultiAuth([entra_v2, entra_v1, cognito])</div>
+
+<h3>ContextVars &mdash; Per-Request Auth State</h3>
+
+<p>Six <code>ContextVar</code> declarations at <code>server.py:36-41</code>:</p>
+
+<table>
+  <tr><th>Variable</th><th>Type</th><th>Purpose</th></tr>
+  <tr><td><code>current_user_token</code></td><td>str</td><td>Raw JWT string</td></tr>
+  <tr><td><code>current_user_role</code></td><td>str</td><td>Assumed role (admin/developer/viewer)</td></tr>
+  <tr><td><code>current_user_email</code></td><td>str</td><td>Extracted email address</td></tr>
+  <tr><td><code>current_user_provider</code></td><td>str</td><td>Identity provider (entra/cognito/auth0)</td></tr>
+  <tr><td><code>current_user_groups</code></td><td>list[str]</td><td>IdP group IDs/names from token</td></tr>
+  <tr><td><code>current_user_claims</code></td><td>dict</td><td>Full JWT claims with ABAC attrs merged</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="tools">2. The 11 MCP Tools</h2>
+
+<p>Every tool uses <code>@mcp.tool(auth=require_cedar("tool_name"))</code> to wire Cedar authorization.</p>
+
+<table class="role-matrix">
+  <tr>
+    <th>#</th><th>Tool</th><th>Category</th><th>admin</th><th>developer</th><th>viewer</th><th>Notes</th>
+  </tr>
+  <tr>
+    <td>1</td><td><code>get_user_profile</code></td><td>Graph API</td>
+    <td class="check">Y</td><td class="check">Y</td><td class="check">Y</td>
+    <td>Fetch MS Graph profile. Entra-only.</td>
+  </tr>
+  <tr>
+    <td>2</td><td><code>list_files</code></td><td>Graph API</td>
+    <td class="check">Y</td><td class="check">Y</td><td class="cross">&mdash;</td>
+    <td>List OneDrive files. Entra-only.</td>
+  </tr>
+  <tr>
+    <td>3</td><td><code>send_email</code></td><td>Graph API</td>
+    <td class="check">Y</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td>
+    <td>Send email via Graph. Entra-only.</td>
+  </tr>
+  <tr>
+    <td>4</td><td><code>delete_resource</code></td><td>Admin</td>
+    <td class="check">Y</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td>
+    <td>Simulated deletion</td>
+  </tr>
+  <tr>
+    <td>5</td><td><code>list_s3_buckets</code></td><td>S3</td>
+    <td class="check">Y</td><td class="check">Y</td><td class="cross">&mdash;</td>
+    <td>Server-side AWS creds</td>
+  </tr>
+  <tr>
+    <td>6</td><td><code>list_s3_objects</code></td><td>S3</td>
+    <td class="check">Y</td><td class="check">Y</td><td class="cross">&mdash;</td>
+    <td>Server-side AWS creds</td>
+  </tr>
+  <tr>
+    <td>7</td><td><code>get_s3_object_info</code></td><td>S3</td>
+    <td class="check">Y</td><td class="check">Y</td><td class="check">Y</td>
+    <td>Object metadata. Public sensitivity.</td>
+  </tr>
+  <tr>
+    <td>8</td><td><code>delete_s3_object</code></td><td>S3 <span class="badge badge-abac">ABAC</span></td>
+    <td colspan="3" style="text-align:center; color: var(--accent3);">archiver=true + archive/* only</td>
+    <td>Two-phase auth. Guardrail blocks protected/*</td>
+  </tr>
+  <tr>
+    <td>9</td><td><code>get_current_time</code></td><td>Utility</td>
+    <td class="check">Y</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td>
+    <td>Current time in any timezone</td>
+  </tr>
+  <tr>
+    <td>10</td><td><code>convert_timezone</code></td><td>Utility</td>
+    <td class="check">Y</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td>
+    <td>Convert time between zones</td>
+  </tr>
+  <tr>
+    <td>11</td><td><code>get_time_difference</code></td><td>Utility</td>
+    <td class="check">Y</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td>
+    <td>Time diff between two zones</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>Graph API tools</strong> (1-3) require Entra ID. Non-Entra users get <code>provider_not_supported</code> error. Use OBO token exchange when <code>ENTRA_CLIENT_SECRET</code> is set.<br>
+  <strong>S3 tools</strong> (5-8) use server-side AWS credentials, not user tokens. Wrapped in <code>_run_s3_operation()</code> for async + error handling.<br>
+  <strong>delete_s3_object</strong> (8) is the only tool with two-phase authorization (ABAC).
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="cedar">3. Cedar Authorization &mdash; How It Works</h2>
+
+<p><a href="https://www.cedarpolicy.com/">Cedar</a> is an open-source policy language by AWS. Policies are evaluated in-process via <code>cedarpy</code>.</p>
+
+<div class="callout success">
+  <strong>Cedar rule:</strong> <span class="badge badge-permit">permit</span> grants access. <span class="badge badge-forbid">forbid</span> denies access and <em>always overrides permit</em>. If no permit matches, access is denied by default.
+</div>
+
+<h3>The Cedar Directory</h3>
+<pre><code>cedar/
+├── schema.cedarschema     <span class="comment"># Entity type definitions</span>
+├── entities.json          <span class="comment"># Static entity instances (3 roles + 10 tools)</span>
+└── policies/
+    ├── rbac.cedar         <span class="comment"># Role-based permits</span>
+    ├── abac.cedar         <span class="comment"># Attribute-based permits</span>
+    └── guardrails.cedar   <span class="comment"># Forbid guardrails</span></code></pre>
+
+<h3>3.1 Schema (<code>cedar/schema.cedarschema</code>)</h3>
+
+<div class="section-card">
+<pre><code><span class="keyword">namespace</span> AgentAuth {
+
+  <span class="comment">// Principals</span>
+  <span class="keyword">entity</span> <span class="type">Role</span>;
+  <span class="keyword">entity</span> <span class="type">User</span> <span class="keyword">in</span> [<span class="type">Role</span>] {
+    provider: <span class="type">String</span>,           <span class="comment">// "entra", "cognito"</span>
+    email: <span class="type">String</span>,
+    groups: <span class="type">Set&lt;String&gt;</span>,       <span class="comment">// IdP group IDs from token</span>
+    department?: <span class="type">String</span>,       <span class="comment">// Optional ABAC attribute</span>
+    archiver?: <span class="type">Bool</span>,           <span class="comment">// Optional ABAC attribute</span>
+  };
+
+  <span class="comment">// Resources</span>
+  <span class="keyword">entity</span> <span class="type">Tool</span> {
+    sensitivity?: <span class="type">String</span>,      <span class="comment">// "public", "internal", "confidential"</span>
+    requires_provider?: <span class="type">String</span>, <span class="comment">// "entra" for Graph tools, "" for any</span>
+  };
+  <span class="keyword">entity</span> <span class="type">S3Folder</span>;              <span class="comment">// Future use</span>
+
+  <span class="comment">// Actions</span>
+  <span class="keyword">action</span> call_tool <span class="keyword">appliesTo</span> {
+    principal: [<span class="type">User</span>],
+    resource: [<span class="type">Tool</span>],
+    context: { resource_path?: <span class="type">String</span>, environment?: <span class="type">String</span> },
+  };
+  <span class="keyword">action</span> list_tools <span class="keyword">appliesTo</span> { ... };
+}</code></pre>
+</div>
+
+<div class="callout">
+  <strong>Key design:</strong> <code>User in [Role]</code> enables role hierarchy. A user with <code>parents: [Role::"developer"]</code> satisfies <code>principal in AgentAuth::Role::"developer"</code> in policies.
+</div>
+
+<h3>3.2 Static Entities (<code>cedar/entities.json</code>)</h3>
+
+<p>13 entities: 3 roles + 10 tools. <strong>User entities are NOT stored here</strong> &mdash; they are built dynamically at request time.</p>
+
+<table>
+  <tr><th>Entity Type</th><th>IDs</th><th>Key Attributes</th></tr>
+  <tr><td><code>AgentAuth::Role</code></td><td>admin, developer, viewer</td><td>&mdash;</td></tr>
+  <tr><td><code>AgentAuth::Tool</code></td><td>get_user_profile, list_files, send_email, delete_resource, list_s3_buckets, list_s3_objects, get_s3_object_info, delete_s3_object, get_current_time, convert_timezone, get_time_difference</td><td>sensitivity, requires_provider</td></tr>
+</table>
+
+<h3>3.3 RBAC Policies (<code>cedar/policies/rbac.cedar</code>) <span class="badge badge-rbac">RBAC</span></h3>
+
+<div class="section-card">
+<pre><code><span class="comment">// Admin: all tools EXCEPT delete_s3_object</span>
+<span class="keyword">permit</span>(
+  principal <span class="keyword">in</span> AgentAuth::Role::<span class="string">"admin"</span>,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>,
+  resource
+) <span class="keyword">when</span> {
+  resource != AgentAuth::Tool::<span class="string">"delete_s3_object"</span>
+};
+
+<span class="comment">// Developer: 5 specific tools</span>
+<span class="keyword">permit</span>( principal <span class="keyword">in</span> AgentAuth::Role::<span class="string">"developer"</span>, ... )
+<span class="keyword">when</span> { resource == ...<span class="string">"get_user_profile"</span> || ...<span class="string">"list_files"</span> || ... };
+
+<span class="comment">// Viewer: 2 tools</span>
+<span class="keyword">permit</span>( principal <span class="keyword">in</span> AgentAuth::Role::<span class="string">"viewer"</span>, ... )
+<span class="keyword">when</span> { resource == ...<span class="string">"get_user_profile"</span> || ...<span class="string">"get_s3_object_info"</span> };
+
+<span class="comment">// All users can discover tools</span>
+<span class="keyword">permit</span>(principal, action == AgentAuth::Action::<span class="string">"list_tools"</span>, resource);</code></pre>
+</div>
+
+<div class="callout warn">
+  <strong>Note:</strong> <code>delete_s3_object</code> is deliberately excluded from ALL RBAC permits. Access is granted solely via the ABAC policy.
+</div>
+
+<h3>3.4 ABAC Policy (<code>cedar/policies/abac.cedar</code>) <span class="badge badge-abac">ABAC</span></h3>
+
+<div class="section-card">
+<pre><code><span class="keyword">permit</span>(
+  principal,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>,
+  resource == AgentAuth::Tool::<span class="string">"delete_s3_object"</span>
+) <span class="keyword">when</span> {
+  principal <span class="keyword">has</span> archiver &&
+  principal.archiver == <span class="keyword">true</span> &&
+  context <span class="keyword">has</span> resource_path &&
+  context.resource_path <span class="keyword">like</span> <span class="string">"archive/*"</span>
+};</code></pre>
+</div>
+
+<ul>
+  <li><strong>Role is irrelevant</strong> &mdash; admin, developer, viewer all need <code>archiver=true</code></li>
+  <li><strong>Path-restricted</strong> &mdash; only <code>archive/*</code> prefix allowed</li>
+  <li><strong>Attribute source</strong> &mdash; <code>archiver</code> comes from JWT custom claims or <code>X-Abac-Attrs</code> header</li>
+</ul>
+
+<h3>3.5 Guardrail Policy (<code>cedar/policies/guardrails.cedar</code>) <span class="badge badge-forbid">FORBID</span></h3>
+
+<div class="section-card">
+<pre><code><span class="keyword">forbid</span>(
+  principal,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>,
+  resource == AgentAuth::Tool::<span class="string">"delete_s3_object"</span>
+) <span class="keyword">when</span> {
+  context <span class="keyword">has</span> resource_path &&
+  context.resource_path <span class="keyword">like</span> <span class="string">"protected/*"</span>
+};</code></pre>
+</div>
+
+<div class="callout danger">
+  <strong>Forbid always wins.</strong> Even a user with <code>archiver=true</code> cannot delete in <code>protected/</code>. No exceptions. This is Cedar's enforcement guarantee.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="two-phase">4. Two-Phase Authorization Pattern</h2>
+
+<p>This is the core authorization design. Tool access is checked in two phases:</p>
+
+<h3>Phase 1: RBAC Check (Decorator Level) <span class="badge badge-rbac">RBAC</span></h3>
+<p class="file-ref"><code>require_cedar()</code> &mdash; server.py:355-376</p>
+
+<div class="section-card">
+<pre><code><span class="keyword">def</span> <span class="type">require_cedar</span>(tool_name: <span class="type">str</span>):
+    <span class="keyword">def</span> check(ctx: AuthContext) -> <span class="type">bool</span>:
+        decision = policy_evaluator.check_access(_build_access_request(tool_name))
+        <span class="keyword">if not</span> decision.allowed:
+            <span class="keyword">if</span> tool_name <span class="keyword">in</span> _ABAC_ONLY_TOOLS:   <span class="comment"># {"delete_s3_object"}</span>
+                <span class="keyword">return True</span>                       <span class="comment"># Pass through to Phase 2</span>
+            <span class="keyword">raise</span> ToolError(<span class="string">f"[TOOL_DENIAL] Access denied: {decision.reason}"</span>)
+        <span class="keyword">return True</span>
+    <span class="keyword">return</span> check</code></pre>
+</div>
+
+<h3>Phase 2: ABAC Check (Inside Tool) <span class="badge badge-abac">ABAC</span></h3>
+<p class="file-ref"><code>cedar_check_with_context()</code> &mdash; server.py:379-385</p>
+
+<div class="section-card">
+<pre><code><span class="comment"># Inside delete_s3_object (server.py:721-723):</span>
+decision = cedar_check_with_context(<span class="string">"delete_s3_object"</span>, {<span class="string">"resource_path"</span>: key})
+<span class="keyword">if not</span> decision.allowed:
+    <span class="keyword">return</span> {<span class="string">"error"</span>: <span class="string">"abac_denied"</span>, <span class="string">"message"</span>: <span class="string">f"[TOOL_DENIAL] {decision.reason}"</span>}</code></pre>
+</div>
+
+<h3>Why Two Phases?</h3>
+
+<table>
+  <tr><th>Scenario</th><th>Phase 1</th><th>Phase 2</th><th>Result</th></tr>
+  <tr>
+    <td>Developer calls <code>list_files</code></td>
+    <td class="check">RBAC permit matches</td>
+    <td class="cross">N/A</td>
+    <td><span class="badge badge-permit">ALLOWED</span></td>
+  </tr>
+  <tr>
+    <td>Viewer calls <code>send_email</code></td>
+    <td style="color:var(--red)">RBAC denies</td>
+    <td class="cross">N/A</td>
+    <td><span class="badge badge-forbid">DENIED</span></td>
+  </tr>
+  <tr>
+    <td>Developer (archiver=true) calls <code>delete_s3_object</code> key=<code>archive/old.txt</code></td>
+    <td style="color:var(--yellow)">No RBAC permit &rarr; PASSTHROUGH (ABAC-only)</td>
+    <td class="check">archiver + archive/* &rarr; permit</td>
+    <td><span class="badge badge-permit">ALLOWED</span></td>
+  </tr>
+  <tr>
+    <td>Admin (archiver=true) calls <code>delete_s3_object</code> key=<code>protected/secret.txt</code></td>
+    <td style="color:var(--yellow)">PASSTHROUGH</td>
+    <td style="color:var(--red)">Guardrail forbid: protected/*</td>
+    <td><span class="badge badge-forbid">DENIED</span></td>
+  </tr>
+</table>
+
+<h3>Authorization Flow Diagram</h3>
+
+<div class="flow-diagram">Request arrives at MCP Server
+        │
+        ▼
+┌─────────────────────────┐
+│  FastMCP MultiAuth      │  JWT signature, issuer, audience, expiry
+│  (Token Validation)     │
+└────────┬────────────────┘
+         │ token.claims
+         ▼
+┌─────────────────────────┐
+│  UserContextMiddleware  │  Provider detection, email/groups extraction,
+│  (_resolve_context)     │  role resolution, X-Assume-Role validation,
+│                         │  X-Abac-Attrs merge, set 6 ContextVars
+└────────┬────────────────┘
+         │
+         ▼
+┌─────────────────────────┐
+│  Phase 1: require_cedar │  Cedar RBAC check (no context)
+│  (auth callable)        │  Standard tools: deny or allow
+│                         │  ABAC-only tools: passthrough
+└────────┬────────────────┘
+         │ passed
+         ▼
+┌─────────────────────────┐
+│  Tool Function Executes │
+│                         │
+│  (ABAC tools only):     │
+│  Phase 2: cedar_check   │  Cedar ABAC check (with context)
+│  _with_context()        │  archiver + path + guardrails
+└────────┬────────────────┘
+         │
+         ▼
+      Response</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="evaluator">5. CedarPolicyEvaluator Internals</h2>
+
+<p class="file-ref">File: <code>mcp_server/policy.py</code> (380 lines)</p>
+
+<h3>Class Hierarchy</h3>
+<pre><code>PolicyEvaluator (ABC)
+├── TomlPolicyEvaluator    &mdash; Group-to-role mapping from permissions.toml
+└── CedarPolicyEvaluator   &mdash; Cedar policy eval (composes TomlPolicyEvaluator)</code></pre>
+
+<h3>Data Structures</h3>
+<div class="section-card">
+<pre><code><span class="keyword">@dataclass</span>
+<span class="keyword">class</span> <span class="type">AccessRequest</span>:
+    email: <span class="type">str</span>              <span class="comment"># User's email</span>
+    provider: <span class="type">str</span>           <span class="comment"># "entra", "cognito", "auth0"</span>
+    groups: <span class="type">list[str]</span>       <span class="comment"># IdP group IDs/names</span>
+    tool_name: <span class="type">str</span>          <span class="comment"># MCP tool being called</span>
+    claims: <span class="type">dict</span>            <span class="comment"># Full JWT claims (for ABAC)</span>
+    assumed_role: <span class="type">str</span> = <span class="string">""</span>  <span class="comment"># Role from X-Assume-Role header</span>
+    context: <span class="type">dict</span> = {}      <span class="comment"># Cedar context (resource_path)</span>
+
+<span class="keyword">@dataclass</span>
+<span class="keyword">class</span> <span class="type">AccessDecision</span>:
+    allowed: <span class="type">bool</span>           <span class="comment"># True = access granted</span>
+    role: <span class="type">str</span>               <span class="comment"># Resolved role</span>
+    reason: <span class="type">str</span>             <span class="comment"># Human-readable denial reason</span></code></pre>
+</div>
+
+<h3>How <code>check_access()</code> Works</h3>
+<p class="file-ref">policy.py:265-326</p>
+
+<ol>
+  <li><strong>Hot-reload</strong> &mdash; Check file mtimes, reload policies/entities if changed</li>
+  <li><strong>Resolve roles</strong> &mdash; <code>TomlPolicyEvaluator.get_available_roles()</code> maps groups &rarr; roles</li>
+  <li><strong>Enforce assumed role</strong> &mdash; If user selected a role, restrict <code>parents</code> to only that role</li>
+  <li><strong>Build dynamic User entity</strong> &mdash; Email, provider, groups, ABAC attrs, role parents</li>
+  <li><strong>Merge entities</strong> &mdash; Static (roles + tools) + dynamic (user)</li>
+  <li><strong>Build Cedar request</strong> &mdash; Principal, action, resource, context</li>
+  <li><strong>Evaluate</strong> &mdash; <code>cedarpy.is_authorized()</code> returns decision</li>
+</ol>
+
+<h3>Dynamic User Entity</h3>
+<p class="file-ref">policy.py:221-257</p>
+
+<pre><code><span class="comment"># Example entity built at request time:</span>
+{
+  <span class="string">"uid"</span>: {<span class="string">"__entity"</span>: {<span class="string">"type"</span>: <span class="string">"AgentAuth::User"</span>, <span class="string">"id"</span>: <span class="string">"user@example.com"</span>}},
+  <span class="string">"attrs"</span>: {
+    <span class="string">"provider"</span>: <span class="string">"cognito"</span>,
+    <span class="string">"email"</span>: <span class="string">"user@example.com"</span>,
+    <span class="string">"groups"</span>: [<span class="string">"platform-developers"</span>],
+    <span class="string">"archiver"</span>: <span class="keyword">true</span>
+  },
+  <span class="string">"parents"</span>: [
+    {<span class="string">"__entity"</span>: {<span class="string">"type"</span>: <span class="string">"AgentAuth::Role"</span>, <span class="string">"id"</span>: <span class="string">"developer"</span>}}
+  ]
+}</code></pre>
+
+<h4>ABAC Claim Keys</h4>
+<pre><code>ABAC_CLAIM_KEYS = {
+    <span class="string">"department"</span>: <span class="type">str</span>,     <span class="comment"># Custom JWT claim</span>
+    <span class="string">"archiver"</span>: <span class="type">bool</span>,      <span class="comment"># Controls delete_s3_object access</span>
+}</code></pre>
+<p>Cognito sends booleans as strings (<code>"true"</code>) &mdash; the evaluator handles this conversion.</p>
+
+<h3>Batch Evaluation</h3>
+<p class="file-ref">policy.py:328-379 &mdash; <code>check_access_batch()</code></p>
+<p>Used by the <code>/me</code> endpoint. Builds user entity once, calls <code>is_authorized_batch()</code> once for all 11 tools instead of 11 individual calls.</p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="permissions">6. Permissions File &mdash; Role Resolution</h2>
+
+<p class="file-ref">Template: <code>permissions.example.toml</code> &rarr; copy to <code>permissions.toml</code> (gitignored)</p>
+<p class="file-ref">Used by: <code>TomlPolicyEvaluator</code> (composed inside <code>CedarPolicyEvaluator</code>)</p>
+
+<div class="section-card">
+<pre><code><span class="comment"># PRIMARY: Group-to-role mapping (per Identity Provider)</span>
+[group_rules.entra]
+<span class="string">"72460602-..."</span> = <span class="string">"admin"</span>       <span class="comment"># Entra group GUID → role</span>
+<span class="string">"4baa4106-..."</span> = <span class="string">"developer"</span>
+
+[group_rules.cognito]
+<span class="string">"platform-admins"</span> = <span class="string">"admin"</span>    <span class="comment"># Cognito group name → role</span>
+<span class="string">"platform-developers"</span> = <span class="string">"developer"</span>
+<span class="string">"platform-viewers"</span> = <span class="string">"viewer"</span>
+
+<span class="comment"># OPTIONAL: Direct user overrides</span>
+[users]
+<span class="comment"># "sanjay@company.com" = { role = "admin" }</span>
+
+<span class="comment"># FALLBACK: Default for unmatched users</span>
+[defaults]
+unknown_users = <span class="string">"none"</span>         <span class="comment"># "none" = no access</span></code></pre>
+</div>
+
+<h3>Resolution Logic</h3>
+
+<div class="flow-diagram">1. GROUP MAPPING (primary):
+   For each group in token claims → look up in group_rules[provider] → add role
+
+2. USER OVERRIDE (secondary):
+   Look up email (case-insensitive) in [users] → add role
+
+3. DEFAULT (tertiary):
+   If no roles matched → use defaults.unknown_users
+   If "none" → return [] (no access)
+
+4. SORT by priority: admin > developer > viewer
+   Return: ["admin", "developer"] (highest first)</div>
+
+<h3>How Roles Become Cedar Entities</h3>
+
+<div class="flow-diagram">permissions.toml: "platform-admins" = "admin"
+        ↓
+TomlPolicyEvaluator: roles = ["admin"]
+        ↓
+_build_user_entity: parents = [{type: "AgentAuth::Role", id: "admin"}]
+        ↓
+Cedar: principal in AgentAuth::Role::"admin" → TRUE</div>
+
+<div class="callout">
+  <strong>ABAC attributes</strong> (archiver, department) come from <strong>JWT custom claims</strong>, not from permissions.toml. Configure in Entra ID (Optional Claims) or Cognito (Pre Token Generation Lambda).
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="middleware">7. UserContextMiddleware Flow</h2>
+
+<p class="file-ref">File: <code>mcp_server/server.py:181-331</code></p>
+
+<h3>Two Modes of Operation</h3>
+
+<table>
+  <tr><th>Hook</th><th>Mode</th><th>When Role Is Missing</th></tr>
+  <tr><td><code>on_list_tools()</code></td><td>Lenient</td><td>Auto-selects highest-priority role</td></tr>
+  <tr><td><code>on_call_tool()</code></td><td>Strict</td><td>Raises <code>ToolError</code> requiring <code>X-Assume-Role</code></td></tr>
+</table>
+
+<h3>Complete Resolution Flow</h3>
+<p class="file-ref"><code>_resolve_context()</code> &mdash; server.py:241-315</p>
+
+<div class="flow-diagram">1. GET TOKEN
+   token = get_access_token()  ← FastMCP's validated auth result
+
+2. DETECT PROVIDER
+   detect_provider(token.claims)  ← Check 'iss' claim
+   "login.microsoftonline.com" → "entra"
+   "cognito-idp" → "cognito"
+
+3. COGNITO CLIENT_ID CHECK
+   Validate token.claims.client_id == COGNITO_CLIENT_ID
+
+4. EXTRACT EMAIL
+   Entra: preferred_username → unique_name → upn → email
+   Cognito: email
+   Fallback: sub
+
+5. EXTRACT GROUPS
+   Cognito: cognito:groups
+   Entra: groups (with overage detection for >150 groups)
+
+6. RESOLVE ROLES
+   policy_evaluator.get_available_roles(email, provider, groups)
+
+7. VALIDATE X-ASSUME-ROLE
+   Present → must be in available_roles
+   Missing + strict → ToolError
+   Missing + lenient → use highest role
+
+8. SET CONTEXTVARS (6 variables)
+
+9. MERGE X-ABAC-ATTRS INTO CLAIMS
+   Header overrides → merged into current_user_claims</div>
+
+<h3>Dev Bypass Mode</h3>
+<p class="file-ref"><code>_set_bypass_context()</code> &mdash; server.py:198-239</p>
+<p>When <code>dev_config.toml</code> has <code>[mcp] disable_auth = true</code>: sets mock auth from config, respects <code>X-Assume-Role</code> and <code>X-Abac-Attrs</code> header overrides. Logs <code>"AUTH BYPASSED"</code> warning.</p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="obo">8. Graph OBO Token Exchange</h2>
+
+<p class="file-ref">File: <code>mcp_server/graph_obo.py</code> (114 lines)</p>
+
+<h3>What It Does</h3>
+<p>OBO (On-Behalf-Of) exchanges the user's custom-audience JWT (<code>api://{CLIENT_ID}</code>) for a Microsoft Graph-scoped token. This allows MCP tools to call Graph API <strong>as the user</strong>, not as the application.</p>
+
+<h3>Architecture</h3>
+
+<div class="flow-diagram">User's JWT (audience: api://CLIENT_ID)
+        │
+        ▼
+GraphOBOExchanger.get_graph_token()
+        │
+        ├── Get/create OnBehalfOfCredential (cached by assertion hash)
+        ├── credential.get_token("https://graph.microsoft.com/.default")
+        │
+        ▼
+Graph-scoped token (audience: https://graph.microsoft.com)
+        │
+        ▼
+Graph API call (GET /me, GET /me/drive, POST /me/sendMail)</div>
+
+<h3>Key Implementation Details</h3>
+
+<table>
+  <tr><th>Aspect</th><th>Detail</th></tr>
+  <tr><td>Pattern</td><td>Module-level singleton via <code>init_obo_exchanger()</code> + <code>get_obo_exchanger()</code></td></tr>
+  <tr><td>Cache</td><td>LRU dictionary of <code>OnBehalfOfCredential</code>, keyed by SHA-256 of user assertion, max 128 entries</td></tr>
+  <tr><td>Azure SDK</td><td><code>azure.identity.aio.OnBehalfOfCredential</code> (async)</td></tr>
+  <tr><td>Required Env</td><td><code>ENTRA_TENANT_ID</code>, <code>ENTRA_CLIENT_ID</code>, <code>ENTRA_CLIENT_SECRET</code></td></tr>
+  <tr><td>Scope</td><td>Entra-only &mdash; Cognito/Auth0 users cannot exchange tokens for Graph</td></tr>
+</table>
+
+<h3>Token Fallback Chain</h3>
+<p class="file-ref"><code>_get_effective_graph_token()</code> &mdash; server.py:428-435</p>
+
+<div class="section-card">
+<pre><code><span class="comment"># Priority:</span>
+1. OBO-exchanged Graph token   <span class="comment"># If ENTRA_CLIENT_SECRET set + Entra user</span>
+2. Original user token          <span class="comment"># May lack Graph scopes → API error</span>
+3. Token claims fallback        <span class="comment"># get_user_profile only: shows email/role from JWT</span></code></pre>
+</div>
+
+<table>
+  <tr><th>Scenario</th><th>Behavior</th></tr>
+  <tr><td><code>ENTRA_CLIENT_SECRET</code> not set</td><td>OBO disabled at startup, tools use original token</td></tr>
+  <tr><td>Non-Entra user</td><td><code>_require_entra_provider()</code> returns error before exchange</td></tr>
+  <tr><td>OBO exchange fails</td><td>Returns None, falls back to original token, logs warning</td></tr>
+  <tr><td>Dev bypass mode</td><td><code>DEV_BYPASS_TOKEN</code> sentinel &rarr; OBO skipped</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="e2e">9. End-to-End Request Trace</h2>
+
+<p>Complete request flow for a developer with <code>archiver=true</code> deleting <code>archive/old.txt</code>:</p>
+
+<div class="flow-diagram">USER BROWSER (React + MSAL.js)
+  │
+  │  POST http://localhost:10000/
+  │  Authorization: Bearer &lt;JWT&gt;
+  │  X-Assume-Role: developer
+  │  X-Abac-Attrs: {"archiver": true}
+  │
+  ▼
+A2A SERVER (port 10000)
+  ├── TokenValidator: JWKS validation
+  ├── auth_middleware: blocklist + group check
+  ├── Sets ContextVars
+  └── POST http://localhost:10001/session + /chat
+        │
+        ▼
+ADK AGENT (port 10001)
+  ├── Creates session: user:access_token, user:role, user:abac_attrs
+  ├── LLM decides to call MCP tool
+  └── mcp_header_provider() builds headers from session state
+        │
+        │  POST http://localhost:10002/mcp
+        │  Authorization: Bearer &lt;JWT&gt;
+        │  X-Assume-Role: developer
+        │  X-Abac-Attrs: {"archiver": true}
+        │
+        ▼
+MCP SERVER (port 10002)
+  ├── FastMCP MultiAuth: JWT validation ✓
+  ├── UserContextMiddleware:
+  │     ├── detect_provider() → "cognito"
+  │     ├── _extract_email() → "user@example.com"
+  │     ├── _extract_groups() → ["platform-developers"]
+  │     ├── get_available_roles() → ["developer"]
+  │     ├── validate X-Assume-Role → "developer" ✓
+  │     ├── parse X-Abac-Attrs → {"archiver": true}
+  │     └── Set 6 ContextVars ✓
+  │
+  ├── Phase 1: require_cedar("delete_s3_object")
+  │     ├── Cedar evaluates (no context) → DENIED (no RBAC permit)
+  │     ├── tool in _ABAC_ONLY_TOOLS → PASSTHROUGH ✓
+  │     └── return True
+  │
+  ├── Tool function: delete_s3_object(bucket, key="archive/old.txt")
+  │     ├── Phase 2: cedar_check_with_context({"resource_path": "archive/old.txt"})
+  │     ├── Cedar evaluates with context:
+  │     │     ├── ABAC policy: archiver=true + archive/* → <span style="color:#3fb950">PERMIT</span>
+  │     │     ├── Guardrail: not protected/* → no forbid
+  │     │     └── Result: <span style="color:#3fb950">ALLOWED</span>
+  │     └── s3.delete_object(Bucket=bucket, Key=key) ✓
+  │
+  └── Response: {"status": "deleted", "key": "archive/old.txt"}</div>
+
+<hr style="border-color: var(--border); margin: 3rem 0 1rem;">
+<p style="color: var(--text-muted); text-align: center; font-size: 0.85rem;">
+  Generated from source &mdash; <code>mcp_server/server.py</code>, <code>mcp_server/policy.py</code>, <code>mcp_server/graph_obo.py</code>, <code>cedar/</code>
+</p>
+
+</body>
+</html>
