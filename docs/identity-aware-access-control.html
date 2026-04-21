@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Identity-Aware Access Control — Entra ID, Cognito, Cedar, A2A/ADK/MCP</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface2: #1c2333;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent2: #3fb950;
+  --accent3: #d2a8ff;
+  --accent4: #f78166;
+  --red: #f85149;
+  --yellow: #e3b341;
+  --tier-fe: #3fb950;
+  --tier-a2a: #58a6ff;
+  --tier-adk: #d2a8ff;
+  --tier-mcp: #f78166;
+  --entra-color: #58a6ff;
+  --cognito-color: #f78166;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+h1 { font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
+h1 + p { color: var(--text-muted); margin-bottom: 2rem; font-size: 0.95rem; }
+h2 { font-size: 1.5rem; font-weight: 600; margin: 2.5rem 0 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { font-size: 1.15rem; font-weight: 600; margin: 1.5rem 0 0.5rem; color: var(--accent); }
+h4 { font-size: 1rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: var(--accent3); }
+p { margin: 0.5rem 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--surface2);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: var(--accent3);
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  margin: 0.75rem 0 1rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+pre code { background: none; padding: 0; color: var(--text); font-size: inherit; }
+table { width: 100%; border-collapse: collapse; margin: 0.75rem 0 1rem; font-size: 0.9rem; }
+th { background: var(--surface2); color: var(--accent); font-weight: 600; text-align: left; padding: 0.6rem 0.75rem; border: 1px solid var(--border); white-space: nowrap; }
+td { padding: 0.5rem 0.75rem; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: var(--surface); }
+ul, ol { padding-left: 1.25rem; margin: 0.5rem 0; }
+li { margin: 0.25rem 0; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+.toc h3 { margin-top: 0; color: var(--text); }
+.toc ol { padding-left: 1.25rem; margin: 0.5rem 0; }
+.toc li { margin: 0.35rem 0; color: var(--text-muted); }
+.callout { border-left: 4px solid var(--accent); background: var(--surface); padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0; font-size: 0.9rem; }
+.callout.warn { border-left-color: var(--yellow); }
+.callout.danger { border-left-color: var(--red); }
+.callout.success { border-left-color: var(--accent2); }
+.badge { display: inline-block; padding: 0.15em 0.5em; border-radius: 12px; font-size: 0.75rem; font-weight: 600; vertical-align: middle; }
+.badge-permit { background: #1a3a2a; color: var(--accent2); }
+.badge-forbid { background: #3a1a1a; color: var(--red); }
+.badge-abac { background: #2a1a3a; color: var(--accent3); }
+.badge-rbac { background: #1a2a3a; color: var(--accent); }
+.badge-entra { background: #1a2a3a; color: var(--entra-color); }
+.badge-cognito { background: #3a2010; color: var(--cognito-color); }
+.check { color: var(--accent2); font-weight: bold; }
+.cross { color: var(--text-muted); }
+.abac-cell { color: var(--accent3); font-size: 0.8rem; }
+.file-ref { color: var(--text-muted); font-size: 0.82rem; font-style: italic; }
+.keyword { color: var(--accent); }
+.string { color: var(--accent2); }
+.comment { color: var(--text-muted); font-style: italic; }
+.type { color: var(--accent3); }
+
+/* ── Architecture Diagram ── */
+.arch-diagram { margin: 2rem 0; }
+.arch-grid {
+  display: grid;
+  grid-template-columns: 175px 1fr 175px;
+  gap: 1rem;
+  align-items: start;
+}
+.arch-center { display: flex; flex-direction: column; gap: 0; }
+.tier-card {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+.tier-rail { width: 5px; flex-shrink: 0; }
+.tier-card.t-fe .tier-rail { background: var(--tier-fe); }
+.tier-card.t-a2a .tier-rail { background: var(--tier-a2a); }
+.tier-card.t-adk .tier-rail { background: var(--tier-adk); }
+.tier-card.t-mcp .tier-rail { background: var(--tier-mcp); }
+.tier-body { padding: 1rem 1.25rem; flex: 1; }
+.tier-name { font-weight: 700; font-size: 1rem; margin-bottom: 0.25rem; }
+.tier-card.t-fe .tier-name { color: var(--tier-fe); }
+.tier-card.t-a2a .tier-name { color: var(--tier-a2a); }
+.tier-card.t-adk .tier-name { color: var(--tier-adk); }
+.tier-card.t-mcp .tier-name { color: var(--tier-mcp); }
+.tier-tech { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+.tier-port { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8rem; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 0.1em 0.5em; display: inline-block; margin-bottom: 0.5rem; }
+.tier-acl { font-size: 0.8rem; color: var(--text-muted); }
+.tier-acl strong { color: var(--text); }
+.tier-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.4rem 0;
+  position: relative;
+}
+.tier-connector::before {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: var(--border);
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 0;
+}
+.prop-label {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 0.25em 0.75em;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  z-index: 1;
+  position: relative;
+  white-space: nowrap;
+  text-align: center;
+}
+.arch-arrow {
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  z-index: 1;
+  position: relative;
+  line-height: 1;
+  margin-top: 0.1rem;
+}
+.arch-side { display: flex; flex-direction: column; gap: 1rem; padding-top: 0.5rem; }
+.idp-node, .cedar-node {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.82rem;
+}
+.idp-node.entra { border-left: 3px solid var(--entra-color); }
+.idp-node.cognito { border-left: 3px solid var(--cognito-color); }
+.cedar-node { border-left: 3px solid var(--yellow); }
+.idp-node strong, .cedar-node strong { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+.idp-node.entra strong { color: var(--entra-color); }
+.idp-node.cognito strong { color: var(--cognito-color); }
+.cedar-node strong { color: var(--yellow); }
+.arch-resources {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+  grid-column: 1 / -1;
+}
+.resource-node {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+.resource-node strong { display: block; color: var(--text); }
+.arch-resources-wrap {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  flex-direction: column;
+  align-items: center;
+}
+.res-arrow { color: var(--text-muted); font-size: 0.85rem; text-align: center; }
+.res-row { display: flex; gap: 1rem; width: 100%; }
+
+/* ── IdP comparison grid ── */
+.idp-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.idp-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.idp-col-head {
+  padding: 0.75rem 1rem;
+  font-weight: 700;
+  font-size: 0.95rem;
+  border-bottom: 1px solid var(--border);
+}
+.idp-col.entra .idp-col-head { color: var(--entra-color); background: #0d1a2e; }
+.idp-col.cognito .idp-col-head { color: var(--cognito-color); background: #1e1108; }
+.idp-col table { margin: 0; font-size: 0.82rem; }
+.idp-col th { background: transparent; color: var(--text-muted); font-size: 0.78rem; padding: 0.5rem 0.75rem; border-color: var(--border); }
+.idp-col td { border-color: var(--border); }
+.idp-col tr:nth-child(even) { background: var(--surface2); }
+
+/* ── Sequence Diagram ── */
+.seq-diagram { margin: 2rem 0; }
+.seq-lanes {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0;
+  margin-bottom: 0;
+}
+.lane-head {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  padding: 0.6rem 0.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.lane-head.lh-fe { color: var(--tier-fe); }
+.lane-head.lh-a2a { color: var(--tier-a2a); }
+.lane-head.lh-adk { color: var(--tier-adk); }
+.lane-head.lh-mcp { color: var(--tier-mcp); }
+.lane-head.lh-cedar { color: var(--yellow); }
+.seq-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; overflow: hidden; }
+.seq-step {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--border);
+  min-height: 52px;
+  position: relative;
+}
+.seq-step:last-child { border-bottom: none; }
+.seq-step:nth-child(even) { background: rgba(255,255,255,0.02); }
+.seq-cell {
+  border-right: 1px dashed rgba(48,54,61,0.6);
+  padding: 0.4rem 0.5rem;
+  font-size: 0.78rem;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.seq-cell:last-child { border-right: none; }
+.seq-msg {
+  font-size: 0.75rem;
+  border-radius: 4px;
+  padding: 0.2em 0.5em;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.seq-msg.entra { background: #0d1e33; color: var(--entra-color); border: 1px solid rgba(88,166,255,0.3); }
+.seq-msg.cognito { background: #2a1205; color: var(--cognito-color); border: 1px solid rgba(247,129,102,0.3); }
+.seq-msg.both { background: #1a1a2a; color: var(--accent3); border: 1px solid rgba(210,168,255,0.3); }
+.seq-msg.cedar { background: #1e1a05; color: var(--yellow); border: 1px solid rgba(227,179,65,0.3); }
+.seq-cell .arrow { font-size: 1rem; position: absolute; right: -8px; z-index: 2; color: var(--entra-color); }
+.seq-cell .arrow.cognito { color: var(--cognito-color); }
+.seq-step-label {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  padding: 0 0.3rem;
+}
+.seq-both-row {
+  grid-column: 1 / -1;
+  background: var(--surface2);
+  padding: 0.3rem 1rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Decision Tree ── */
+.dtree {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin: 1.5rem 0;
+  font-size: 0.85rem;
+}
+.dt-start {
+  background: var(--surface2);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.dt-down { width: 2px; height: 1.5rem; background: var(--border); margin: 0 auto; }
+.dt-fork {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  width: 100%;
+  max-width: 700px;
+  gap: 0;
+}
+.dt-fork-left { text-align: right; padding-right: 0.5rem; }
+.dt-fork-right { text-align: left; padding-left: 0.5rem; }
+.dt-diamond {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  padding: 0.6rem 1rem;
+  text-align: center;
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  width: 160px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.dt-diamond.phase1 { border-color: var(--accent); background: #0d1a2e; }
+.dt-diamond.abac { border-color: var(--accent3); background: #1a0d2a; }
+.dt-diamond.path { border-color: var(--accent2); background: #0d1e0d; }
+.dt-diamond.guard { border-color: var(--red); background: #2a0d0d; }
+.dt-outcome {
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid;
+}
+.dt-deny { background: #2a0d0d; color: var(--red); border-color: var(--red); }
+.dt-allow { background: #0d2a0d; color: var(--accent2); border-color: var(--accent2); }
+.dt-passthrough { background: #1a1a2a; color: var(--accent3); border-color: var(--accent3); }
+.dt-label { font-size: 0.7rem; color: var(--text-muted); margin: 0 0.25rem; }
+.dt-hline {
+  height: 2px;
+  background: var(--border);
+  flex: 1;
+}
+
+/* ── Role Matrix ── */
+.role-matrix td:nth-child(n+2) { text-align: center; }
+
+@media (max-width: 768px) {
+  body { padding: 1rem; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.25rem; }
+  pre { font-size: 0.78rem; padding: 0.75rem; }
+  table { font-size: 0.8rem; }
+  .arch-grid { grid-template-columns: 1fr; }
+  .arch-side { flex-direction: row; flex-wrap: wrap; }
+  .arch-resources-wrap .res-row { flex-direction: column; }
+  .idp-compare { grid-template-columns: 1fr; }
+  .seq-diagram { overflow-x: auto; }
+  .seq-lanes, .seq-step { grid-template-columns: repeat(5, minmax(100px, 1fr)); min-width: 500px; }
+}
+</style>
+</head>
+<body>
+
+<h1>Identity-Aware Access Control</h1>
+<p>Multi-IdP RBAC &amp; ABAC across A2A&nbsp;/&nbsp;ADK&nbsp;/&nbsp;MCP tiers — Entra&nbsp;ID, AWS&nbsp;Cognito, Cedar policy engine, and three-tier defense in depth. &rarr; See also: <a href="mcp-server-reverse-engineered.html">MCP Server deep-dive</a> &middot; <a href="../EXECUTIVE_SUMMARY.md">Executive Summary</a></p>
+
+<nav class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#architecture">Architecture at a glance</a></li>
+    <li><a href="#idp">Multi-IdP identity — why two providers</a></li>
+    <li><a href="#a2a">A2A Gateway — token validation &amp; group ACL (Tier 1)</a></li>
+    <li><a href="#adk">ADK Agent — session state &amp; MCP header injection (Tier 2)</a></li>
+    <li><a href="#mcp">FastMCP Server — MultiAuth &amp; middleware (Tier 3)</a></li>
+    <li><a href="#cedar">Cedar — policy management &amp; the policy engine</a></li>
+    <li><a href="#two-phase">Tool-level RBAC and ABAC — the two-phase pattern</a></li>
+    <li><a href="#abac-prop">ABAC attribute propagation — the archiver toggle</a></li>
+    <li><a href="#skills">MCP tools as Cedar resources — what the branch name means</a></li>
+    <li><a href="#trace">End-to-end request trace — Entra vs Cognito</a></li>
+    <li><a href="#production">Production considerations</a></li>
+  </ol>
+</nav>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="architecture">1. Architecture at a glance</h2>
+<p>Identity propagates from the React frontend through three independent enforcement tiers before reaching any cloud resource. Each tier performs its own authentication and authorization — a token that passes Tier 1 still gets re-evaluated at Tiers 2 and 3.</p>
+
+<figure class="arch-diagram" aria-label="Four-tier identity-aware architecture diagram">
+<div class="arch-grid">
+
+  <!-- Left: Cognito -->
+  <div class="arch-side" style="padding-top:3.5rem">
+    <div class="idp-node cognito">
+      <strong>☁ AWS Cognito</strong>
+      <code style="font-size:0.72rem">cognito-idp.{region}.amazonaws.com<br>{pool-id}/.well-known/jwks.json</code>
+      <div style="margin-top:0.5rem;font-size:0.75rem;color:var(--text-muted)">Groups: <code>cognito:groups</code><br>Email: <code>email</code><br>Audience: <code>client_id</code></div>
+    </div>
+    <div class="idp-node" style="border-left-color:var(--accent3)">
+      <strong style="color:var(--accent3)">Pre-Token Lambda</strong>
+      <div style="font-size:0.75rem;color:var(--text-muted)">Injects <code>archiver</code> boolean into Cognito access token</div>
+    </div>
+  </div>
+
+  <!-- Center: tier stack -->
+  <div class="arch-center">
+    <div class="tier-card t-fe">
+      <div class="tier-rail"></div>
+      <div class="tier-body">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="tier-name">Frontend</div>
+          <span class="tier-port">:10003</span>
+        </div>
+        <div class="tier-tech">React 18 + MSAL.js 3.6 + AWS Amplify 6</div>
+        <div class="tier-acl">
+          <span class="badge badge-entra">Entra</span> <span class="badge badge-cognito">Cognito</span>
+          &nbsp;Unified <code>useAuth()</code> hook, provider persisted in <code>localStorage</code>
+        </div>
+      </div>
+    </div>
+
+    <div class="tier-connector">
+      <span class="arch-arrow">▼</span>
+      <span class="prop-label">Authorization: Bearer {token}&nbsp;&nbsp;X-Assume-Role: {role}&nbsp;&nbsp;X-Abac-Attrs: {json}</span>
+    </div>
+
+    <div class="tier-card t-a2a">
+      <div class="tier-rail"></div>
+      <div class="tier-body">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="tier-name">A2A Gateway</div>
+          <span class="tier-port">:10000</span>
+        </div>
+        <div class="tier-tech">FastAPI + a2a-sdk — IdP auto-detection, JWKS caching</div>
+        <div class="tier-acl"><strong>Agent-level ACL:</strong> JWT validation · blocklist · group membership</div>
+      </div>
+    </div>
+
+    <div class="tier-connector">
+      <span class="arch-arrow">▼</span>
+      <span class="prop-label">ContextVars → POST /session + /chat with Bearer</span>
+    </div>
+
+    <div class="tier-card t-adk">
+      <div class="tier-rail"></div>
+      <div class="tier-body">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="tier-name">ADK Agent</div>
+          <span class="tier-port">:10001</span>
+        </div>
+        <div class="tier-tech">Google ADK + LiteLLM + Claude Haiku 4.5 (Bedrock)</div>
+        <div class="tier-acl"><strong>Session state:</strong> <code>user:</code> prefix · <code>mcp_header_provider</code> injects headers per call</div>
+      </div>
+    </div>
+
+    <div class="tier-connector">
+      <span class="arch-arrow">▼</span>
+      <span class="prop-label">mcp_header_provider() → Authorization + X-Assume-Role + X-Abac-Attrs</span>
+    </div>
+
+    <div class="tier-card t-mcp">
+      <div class="tier-rail"></div>
+      <div class="tier-body">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="tier-name">FastMCP Server</div>
+          <span class="tier-port">:10002</span>
+        </div>
+        <div class="tier-tech">FastMCP (stateless HTTP) + cedarpy in-process</div>
+        <div class="tier-acl"><strong>Tool-level ACL:</strong> MultiAuth · Cedar RBAC Phase 1 · Cedar ABAC Phase 2</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Entra + Cedar -->
+  <div class="arch-side" style="padding-top:3.5rem">
+    <div class="idp-node entra">
+      <strong>🔷 Microsoft Entra ID</strong>
+      <code style="font-size:0.72rem">login.microsoftonline.com/{tenant}<br>/discovery/v2.0/keys</code>
+      <div style="margin-top:0.5rem;font-size:0.75rem;color:var(--text-muted)">Groups: <code>groups</code><br>Email: <code>preferred_username</code><br>Audience: <code>aud</code></div>
+    </div>
+    <div class="cedar-node">
+      <strong>🌲 Cedar Policies</strong>
+      <code style="font-size:0.72rem">cedar/policies/*.cedar</code>
+      <div style="margin-top:0.5rem;font-size:0.75rem;color:var(--text-muted)">Hot-reload · in-process eval<br>rbac.cedar · abac.cedar<br>guardrails.cedar</div>
+    </div>
+  </div>
+
+</div><!-- arch-grid -->
+
+<div class="arch-resources-wrap">
+  <div class="res-arrow">▼ Entra OBO token exchange &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼ Server-side AWS credentials</div>
+  <div class="res-row">
+    <div class="resource-node"><strong>Microsoft Graph API</strong> graph.microsoft.com/v1.0 — profile, files, email (Entra only)</div>
+    <div class="resource-node"><strong>AWS S3</strong> boto3 via server IAM — list, info, delete (any IdP)</div>
+  </div>
+</div>
+<figcaption style="text-align:center;font-size:0.78rem;color:var(--text-muted);margin-top:0.75rem">Fig 1. Four-tier identity-aware architecture with dual IdP support and resource-level access controls.</figcaption>
+</figure>
+
+<h3>Three-tier access control</h3>
+<table>
+  <thead><tr><th>Tier</th><th>Location</th><th>Mechanism</th><th>Denies when</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Agent</strong></td><td><code>a2a_server/server.py</code></td><td>Multi-IdP JWT validation, group ACL, blocklist</td><td>Invalid token, user blocked, not in allowed group</td></tr>
+    <tr><td><strong>Tool</strong></td><td><code>mcp_server/server.py</code></td><td>Cedar policies via <code>require_cedar()</code> + Phase 2 ABAC</td><td>Role not assumed, Cedar policy denies, ABAC attrs missing</td></tr>
+    <tr><td><strong>Resource</strong></td><td>Graph API / S3</td><td>OAuth scopes (Graph OBO), IAM policies (S3)</td><td>Token missing required scope, AWS access denied</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="idp">2. Multi-IdP identity — why two providers</h2>
+<p>The system treats Entra ID and AWS Cognito as first-class peers. Every tier auto-detects the IdP from the <strong><code>iss</code> (issuer) claim</strong> — no per-request configuration required.</p>
+
+<pre><code><span class="comment"># dev_config.py:82-94</span>
+<span class="keyword">def</span> <span class="type">detect_provider</span>(claims: dict) -> str:
+    iss = claims.get(<span class="string">"iss"</span>, <span class="string">""</span>)
+    <span class="keyword">if</span> <span class="string">"login.microsoftonline.com"</span> <span class="keyword">in</span> iss <span class="keyword">or</span> <span class="string">"sts.windows.net"</span> <span class="keyword">in</span> iss:
+        <span class="keyword">return</span> <span class="string">"entra"</span>
+    <span class="keyword">if</span> <span class="string">"cognito-idp"</span> <span class="keyword">in</span> iss:
+        <span class="keyword">return</span> <span class="string">"cognito"</span>
+    <span class="keyword">return</span> <span class="string">"unknown"</span></code></pre>
+
+<p>Used by: A2A server (group claim extraction), MCP middleware (Cognito client_id re-validation), ADK agent (email claim mapping).</p>
+
+<h3>Token shape comparison</h3>
+<div class="idp-compare">
+  <div class="idp-col entra">
+    <div class="idp-col-head">🔷 Microsoft Entra ID</div>
+    <table>
+      <tr><th>Claim</th><th>Value</th></tr>
+      <tr><td><code>iss</code></td><td><code>login.microsoftonline.com/{tenant}/v2.0</code></td></tr>
+      <tr><td><code>aud</code></td><td><code>api://{client-id}</code> or <code>{client-id}</code></td></tr>
+      <tr><td>Groups</td><td><code>groups: ["{guid}", ...]</code></td></tr>
+      <tr><td>Email</td><td><code>preferred_username</code></td></tr>
+      <tr><td>ABAC attr</td><td>Entra optional claims → <code>archiver</code></td></tr>
+      <tr><td>JWKS</td><td><code>/discovery/v2.0/keys</code></td></tr>
+      <tr><td>v1.0 issuer</td><td><code>sts.windows.net/{tenant}/</code></td></tr>
+      <tr><td>Graph API</td><td>OBO token exchange (requires <code>ENTRA_CLIENT_SECRET</code>)</td></tr>
+    </table>
+  </div>
+  <div class="idp-col cognito">
+    <div class="idp-col-head">☁ AWS Cognito</div>
+    <table>
+      <tr><th>Claim</th><th>Value</th></tr>
+      <tr><td><code>iss</code></td><td><code>cognito-idp.{region}.amazonaws.com/{pool-id}</code></td></tr>
+      <tr><td><code>aud</code></td><td>⚠ absent — uses <code>client_id</code> instead</td></tr>
+      <tr><td>Groups</td><td><code>cognito:groups: ["platform-admins", ...]</code></td></tr>
+      <tr><td>Email</td><td><code>email</code></td></tr>
+      <tr><td>ABAC attr</td><td>Pre-Token-Generation Lambda → <code>archiver</code></td></tr>
+      <tr><td>JWKS</td><td><code>/.well-known/jwks.json</code></td></tr>
+      <tr><td>v1.0 issuer</td><td>N/A (single issuer format)</td></tr>
+      <tr><td>Graph API</td><td>Not supported — <code>provider_not_supported</code> returned</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>Cognito audience hack:</strong> Cognito access tokens do not have an <code>aud</code> claim. Instead they carry <code>client_id</code>. All three tiers skip standard audience validation for Cognito tokens and manually compare <code>token.client_id == COGNITO_CLIENT_ID</code>.
+</div>
+
+<h3>Frontend auth unification</h3>
+<p>Both IdPs are wrapped by <code>AuthProvider.js</code> behind a single <code>useAuth()</code> hook. Provider selection is persisted in <code>localStorage</code> under the key <code>"auth_provider"</code>. The A2A client sends three headers on every request:</p>
+<pre><code><span class="comment">// frontend/src/utils/a2aClient.js:33-61</span>
+fetch(A2A_SERVER_URL, {
+  headers: {
+    <span class="string">'Authorization'</span>: <span class="string">`Bearer ${accessToken}`</span>,       <span class="comment">// IdP JWT</span>
+    <span class="string">'X-Assume-Role'</span>: selectedRole,                    <span class="comment">// admin | developer | viewer</span>
+    <span class="string">'X-Abac-Attrs'</span>: JSON.stringify(abacAttrs),         <span class="comment">// e.g. {"archiver": true}</span>
+  }
+})</code></pre>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="a2a">3. A2A Gateway — Tier 1 token validation</h2>
+<p>The A2A gateway is the first enforcement tier. It validates tokens from <em>both</em> IdPs using a single <code>TokenValidator</code> that auto-routes based on the <code>iss</code> claim.</p>
+
+<h3>IdPConfig + _build_idp_configs()</h3>
+<pre><code><span class="comment"># a2a_server/server.py:102-151</span>
+@dataclass
+<span class="keyword">class</span> <span class="type">IdPConfig</span>:
+    name: str                           <span class="comment"># "entra" | "cognito"</span>
+    jwks_uris: list[str]               <span class="comment"># tried in order; fallback on fail</span>
+    valid_issuers: list[str]           <span class="comment"># v2.0 + v1.0 for Entra</span>
+    valid_audiences: list[str]         <span class="comment"># what aud/client_id must match</span>
+    audience_claim: str = <span class="string">"aud"</span>       <span class="comment"># "client_id" for Cognito</span>
+
+<span class="comment"># Entra config</span>
+IdPConfig(
+    name=<span class="string">"entra"</span>,
+    jwks_uris=[
+        <span class="string">f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys"</span>,
+        <span class="string">f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/keys"</span>,
+        <span class="string">"https://login.microsoftonline.com/common/discovery/keys"</span>,  <span class="comment"># fallback</span>
+    ],
+    valid_issuers=[
+        <span class="string">f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0"</span>,
+        <span class="string">f"https://sts.windows.net/{ENTRA_TENANT_ID}/"</span>,               <span class="comment"># v1.0</span>
+    ],
+    valid_audiences=[ENTRA_CLIENT_ID, <span class="string">f"api://{ENTRA_CLIENT_ID}"</span>],
+)
+
+<span class="comment"># Cognito config</span>
+IdPConfig(
+    name=<span class="string">"cognito"</span>,
+    jwks_uris=[<span class="string">f"{cognito_iss}/.well-known/jwks.json"</span>],
+    valid_issuers=[cognito_iss],
+    valid_audiences=[COGNITO_CLIENT_ID],
+    audience_claim=<span class="string">"client_id"</span>,  <span class="comment"># non-standard — validated manually</span>
+)</code></pre>
+
+<h3>JWKS caching + key rotation</h3>
+<p>The <code>TokenValidator</code> caches JWKS in an in-memory dict keyed by URI. When a <code>kid</code> (key ID) is not found in the cache, the cache is cleared and JWKS are re-fetched — this handles key rotation without restarts. <span class="file-ref">a2a_server/server.py:162-174</span></p>
+
+<h3>Denial reasons</h3>
+<table>
+  <thead><tr><th>HTTP</th><th><code>denial_reason</code></th><th>Trigger</th></tr></thead>
+  <tbody>
+    <tr><td>401</td><td><code>missing_token</code></td><td>No Authorization header</td></tr>
+    <tr><td>401</td><td><code>invalid_format</code></td><td>Not <code>Bearer</code> prefix</td></tr>
+    <tr><td>401</td><td><code>token_expired</code></td><td>JWT <code>exp</code> in the past</td></tr>
+    <tr><td>401</td><td><code>validation_failed</code></td><td>Signature / issuer / audience failure</td></tr>
+    <tr><td>403</td><td><code>blocked_user</code></td><td>User ID in <code>BLOCKED_USERS</code> env var</td></tr>
+    <tr><td>403</td><td><code>no_group_membership</code></td><td>Not in any allowed group/role</td></tr>
+  </tbody>
+</table>
+
+<h3>ContextVars — async-safe auth propagation</h3>
+<pre><code><span class="comment"># a2a_server/server.py:27-30</span>
+current_user_claims:  ContextVar[dict] = ContextVar(<span class="string">"current_user_claims"</span>,  default={})
+current_access_token: ContextVar[str]  = ContextVar(<span class="string">"current_access_token"</span>, default=<span class="string">""</span>)
+current_assumed_role: ContextVar[str]  = ContextVar(<span class="string">"current_assumed_role"</span>, default=<span class="string">""</span>)
+current_abac_attrs:   ContextVar[dict] = ContextVar(<span class="string">"current_abac_attrs"</span>,   default={})</code></pre>
+
+<h3>/me endpoint — permission matrix</h3>
+<p>The <code>/me</code> endpoint calls <code>cedar_evaluator.check_access_batch()</code> with all 11 tool names in a single cedarpy call, returning a <code>{"tool_name": true/false}</code> map. The frontend uses this to render the permission matrix. <span class="file-ref">a2a_server/server.py:780-787</span></p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="adk">4. ADK Agent — Tier 2 session state &amp; header injection</h2>
+<p>The ADK agent bridges the A2A gateway to the FastMCP server. It stores user identity in session state with a <code>user:</code> prefix and re-injects auth headers into every MCP tool call.</p>
+
+<h3>Session state with user: prefix</h3>
+<pre><code><span class="comment"># adk_agent/agent.py:216-228</span>
+initial_state = {
+    <span class="string">"user:access_token"</span>: access_token,     <span class="comment"># raw JWT — re-sent to MCP</span>
+    <span class="string">"user:email"</span>:        email,
+    <span class="string">"user:name"</span>:         name,
+    <span class="string">"user:groups"</span>:       groups,
+    <span class="string">"user:role"</span>:         role,              <span class="comment"># assumed role (admin/developer/viewer)</span>
+    <span class="string">"user:abac_attrs"</span>:   json.dumps(abac_attrs),  <span class="comment"># serialised to string</span>
+}</code></pre>
+
+<h3>mcp_header_provider — per-request header injection</h3>
+<p>This sync callback is invoked by <code>McpToolset</code> before every MCP request. It reads from session state and builds the three headers the MCP server needs.</p>
+<pre><code><span class="comment"># adk_agent/agent.py:99-118</span>
+<span class="keyword">def</span> <span class="type">mcp_header_provider</span>(readonly_context: ReadonlyContext) -> dict[str, str]:
+    headers = {}
+    <span class="keyword">if</span> readonly_context <span class="keyword">and</span> readonly_context.state:
+        access_token = readonly_context.state.get(<span class="string">"user:access_token"</span>, <span class="string">""</span>)
+        role         = readonly_context.state.get(<span class="string">"user:role"</span>, <span class="string">""</span>)
+        abac_attrs   = readonly_context.state.get(<span class="string">"user:abac_attrs"</span>, <span class="string">""</span>)
+        <span class="keyword">if</span> access_token: headers[<span class="string">"Authorization"</span>]  = <span class="string">f"Bearer {access_token}"</span>
+        <span class="keyword">if</span> role:         headers[<span class="string">"X-Assume-Role"</span>]  = role
+        <span class="keyword">if</span> abac_attrs:   headers[<span class="string">"X-Abac-Attrs"</span>]   = abac_attrs
+    <span class="keyword">return</span> headers</code></pre>
+
+<h3>LLM + safety limits</h3>
+<table>
+  <thead><tr><th>Config</th><th>Value</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>Model</td><td><code>bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Claude Haiku 4.5 via LiteLLM Bedrock</td></tr>
+    <tr><td><code>max_llm_calls=4</code></td><td>line 195</td><td>Prevents infinite reasoning loops</td></tr>
+    <tr><td>Rate limit retries</td><td>3 × backoff (30s / 60s / 90s)</td><td>Bedrock throughput limits</td></tr>
+    <tr><td>MCP timeout</td><td>30s connect, 60s SSE read</td><td>Prevents hung tool calls</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="mcp">5. FastMCP Server — Tier 3 MultiAuth &amp; middleware</h2>
+
+<h3>MultiAuth — three verifiers in sequence</h3>
+<pre><code><span class="comment"># mcp_server/server.py:117-170</span>
+verifiers = []
+
+<span class="comment"># Entra v2.0 — AzureJWTVerifier auto-configures JWKS + issuer + audience</span>
+verifiers.append(AzureJWTVerifier(
+    client_id=CLIENT_ID, tenant_id=TENANT_ID,
+    required_scopes=[<span class="string">"access_as_user"</span>],
+))
+
+<span class="comment"># Entra v1.0 fallback — sts.windows.net issuer, Graph API tokens</span>
+verifiers.append(JWTVerifier(
+    jwks_uri=<span class="string">f"https://login.microsoftonline.com/{TENANT_ID}/discovery/keys"</span>,
+    issuer=<span class="string">f"https://sts.windows.net/{TENANT_ID}/"</span>,
+    audience=[CLIENT_ID, <span class="string">f"api://{CLIENT_ID}"</span>],
+    required_scopes=[<span class="string">"access_as_user"</span>],
+))
+
+<span class="comment"># Cognito — audience omitted; client_id validated in middleware</span>
+verifiers.append(JWTVerifier(
+    jwks_uri=<span class="string">f"{cognito_iss}/.well-known/jwks.json"</span>,
+    issuer=cognito_iss,
+    required_scopes=[<span class="string">"ai-agent-api/access_as_user"</span>],
+))
+
+<span class="keyword">return</span> MultiAuth(verifiers=verifiers, base_url=...)</code></pre>
+
+<h3>UserContextMiddleware — two strictness modes</h3>
+<pre><code><span class="comment"># mcp_server/server.py:317-331</span>
+<span class="keyword">async def</span> <span class="type">on_list_tools</span>(self, context, call_next):
+    <span class="comment"># Lenient — auto-selects highest available role for UI rendering</span>
+    self._resolve_context(raise_on_error=<span class="keyword">False</span>)
+    <span class="keyword">return await</span> call_next(context)
+
+<span class="keyword">async def</span> <span class="type">on_call_tool</span>(self, context, call_next):
+    <span class="comment"># Strict — requires X-Assume-Role header; raises ToolError on mismatch</span>
+    self._resolve_context(raise_on_error=<span class="keyword">True</span>)
+    <span class="keyword">return await</span> call_next(context)</code></pre>
+
+<h3>X-Abac-Attrs merge into claims</h3>
+<pre><code><span class="comment"># mcp_server/server.py:304-309</span>
+claims = dict(token.claims)
+abac_attrs = parse_abac_attrs(headers.get(<span class="string">"x-abac-attrs"</span>, <span class="string">""</span>))
+claims.update(abac_attrs)          <span class="comment"># header attrs override token claims</span>
+current_user_claims.set(claims)    <span class="comment"># ContextVar read by Cedar evaluator</span></code></pre>
+
+<h3>ContextVars — six async-safe slots</h3>
+<pre><code><span class="comment"># mcp_server/server.py:36-41</span>
+current_user_token:    ContextVar[str]       = ContextVar(<span class="string">"current_user_token"</span>,    default=<span class="string">""</span>)
+current_user_role:     ContextVar[str]       = ContextVar(<span class="string">"current_user_role"</span>,     default=<span class="string">"none"</span>)
+current_user_email:    ContextVar[str]       = ContextVar(<span class="string">"current_user_email"</span>,    default=<span class="string">""</span>)
+current_user_provider: ContextVar[str]       = ContextVar(<span class="string">"current_user_provider"</span>, default=<span class="string">""</span>)
+current_user_groups:   ContextVar[list[str]] = ContextVar(<span class="string">"current_user_groups"</span>,   default=[])
+current_user_claims:   ContextVar[dict]      = ContextVar(<span class="string">"current_user_claims"</span>,   default={})</code></pre>
+
+<div class="callout">
+  <strong>Why ContextVars instead of <code>ctx.get_state()</code>?</strong> FastMCP runs in <code>stateless_http=True</code> mode — no server-side sessions. ContextVars survive <code>await</code> boundaries within a single request's async task, giving tool functions safe access to auth data without parameter threading.
+</div>
+
+<h3>Graph OBO token exchange (Entra-only)</h3>
+<p>When <code>ENTRA_CLIENT_SECRET</code> is set, the <code>GraphOBOExchanger</code> singleton (<code>mcp_server/graph_obo.py</code>) exchanges the user's custom-audience token for a Graph-scoped token via the On-Behalf-Of flow. Cache: 128 entries (LRU by insertion order). Cognito users get <code>{"error": "provider_not_supported"}</code> from <code>_require_entra_provider()</code>. <span class="file-ref">mcp_server/server.py:416-425</span></p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="cedar">6. Cedar — policy management</h2>
+<p>Cedar is an open-source policy language from AWS. This system uses <strong>cedarpy</strong> for in-process evaluation — no external PDP network hop, policies reload on file change (<code>mtime</code> check), and evaluation is synchronous inside each MCP tool call.</p>
+
+<h3>Schema — entity types and actions</h3>
+<pre><code><span class="comment">// cedar/schema.cedarschema</span>
+namespace AgentAuth {
+  entity Role;                          <span class="comment">// admin | developer | viewer</span>
+
+  entity User <span class="keyword">in</span> [Role] {             <span class="comment">// User inherits permissions from role</span>
+    provider: String,                   <span class="comment">// "entra" | "cognito"</span>
+    email: String,
+    groups: Set&lt;String&gt;,
+    department?: String,                <span class="comment">// optional ABAC attr</span>
+    archiver?: Bool,                    <span class="comment">// optional ABAC attr — S3 archive delete</span>
+  };
+
+  entity Tool {                         <span class="comment">// each MCP tool is a Cedar resource</span>
+    sensitivity?: String,               <span class="comment">// "public" | "internal" | "confidential"</span>
+    requires_provider?: String,         <span class="comment">// "entra" | ""</span>
+  };
+
+  entity S3Folder;                      <span class="comment">// future: path-based sub-resources</span>
+
+  action call_tool appliesTo {
+    principal: [User], resource: [Tool],
+    context: { resource_path?: String, environment?: String },
+  };
+
+  action list_tools appliesTo {         <span class="comment">// discovery — no context needed</span>
+    principal: [User], resource: [Tool],
+  };
+}</code></pre>
+
+<h3>Static entities — roles and tools</h3>
+<p>Three roles and eleven tools are statically defined in <code>cedar/entities.json</code>. At evaluation time, a dynamic <code>User</code> entity is built from the JWT claims and merged with these static entities.</p>
+<table>
+  <thead><tr><th>Tool ID</th><th>Sensitivity</th><th>Provider</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>get_user_profile</code></td><td>internal</td><td>entra</td><td>Graph API /me</td></tr>
+    <tr><td><code>list_files</code></td><td>internal</td><td>entra</td><td>OneDrive enumeration</td></tr>
+    <tr><td><code>send_email</code></td><td>confidential</td><td>entra</td><td>Graph Mail.Send</td></tr>
+    <tr><td><code>delete_resource</code></td><td>confidential</td><td>any</td><td>Generic deletion</td></tr>
+    <tr><td><code>list_s3_buckets</code></td><td>internal</td><td>any</td><td>S3 bucket listing</td></tr>
+    <tr><td><code>list_s3_objects</code></td><td>internal</td><td>any</td><td>S3 object listing</td></tr>
+    <tr><td><code>get_s3_object_info</code></td><td>public</td><td>any</td><td>S3 metadata only</td></tr>
+    <tr><td><code>delete_s3_object</code></td><td>confidential</td><td>any</td><td>ABAC-only delete (archiver attr)</td></tr>
+    <tr><td><code>get_current_time</code></td><td>internal</td><td>any</td><td>Time utility</td></tr>
+    <tr><td><code>convert_timezone</code></td><td>internal</td><td>any</td><td>TZ conversion</td></tr>
+    <tr><td><code>get_time_difference</code></td><td>internal</td><td>any</td><td>TZ difference</td></tr>
+  </tbody>
+</table>
+
+<h3>rbac.cedar — role-based permits</h3>
+<pre><code><span class="comment">// cedar/policies/rbac.cedar</span>
+<span class="comment">// Admin: all tools except delete_s3_object (ABAC-only)</span>
+<span class="keyword">permit</span>(
+  principal <span class="keyword">in</span> AgentAuth::Role::<span class="string">"admin"</span>,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>, resource
+) when { resource != AgentAuth::Tool::<span class="string">"delete_s3_object"</span> };
+
+<span class="comment">// Developer: 5 specific tools</span>
+<span class="keyword">permit</span>(
+  principal <span class="keyword">in</span> AgentAuth::Role::<span class="string">"developer"</span>,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>, resource
+) when {
+  resource == AgentAuth::Tool::<span class="string">"get_user_profile"</span> ||
+  resource == AgentAuth::Tool::<span class="string">"list_files"</span>        ||
+  resource == AgentAuth::Tool::<span class="string">"list_s3_buckets"</span>   ||
+  resource == AgentAuth::Tool::<span class="string">"list_s3_objects"</span>   ||
+  resource == AgentAuth::Tool::<span class="string">"get_s3_object_info"</span>
+};
+
+<span class="comment">// Viewer: 2 read-only tools</span>
+<span class="keyword">permit</span>(
+  principal <span class="keyword">in</span> AgentAuth::Role::<span class="string">"viewer"</span>,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>, resource
+) when {
+  resource == AgentAuth::Tool::<span class="string">"get_user_profile"</span> ||
+  resource == AgentAuth::Tool::<span class="string">"get_s3_object_info"</span>
+};
+
+<span class="comment">// All authenticated users can discover tools</span>
+<span class="keyword">permit</span>(principal, action == AgentAuth::Action::<span class="string">"list_tools"</span>, resource);</code></pre>
+
+<h3>abac.cedar — attribute-based permit</h3>
+<pre><code><span class="comment">// cedar/policies/abac.cedar</span>
+<span class="comment">// Any user with archiver=true can delete in archive/ — role is irrelevant.</span>
+<span class="keyword">permit</span>(
+  principal,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>,
+  resource == AgentAuth::Tool::<span class="string">"delete_s3_object"</span>
+) when {
+  principal <span class="keyword">has</span> archiver &&
+  principal.archiver == <span class="keyword">true</span> &&
+  context <span class="keyword">has</span> resource_path &&
+  context.resource_path <span class="keyword">like</span> <span class="string">"archive/*"</span>
+};</code></pre>
+
+<h3>guardrails.cedar — hard safety limits</h3>
+<pre><code><span class="comment">// cedar/policies/guardrails.cedar</span>
+<span class="comment">// No one can delete in protected/ — forbid overrides all permits.</span>
+<span class="keyword">forbid</span>(
+  principal,
+  action == AgentAuth::Action::<span class="string">"call_tool"</span>,
+  resource == AgentAuth::Tool::<span class="string">"delete_s3_object"</span>
+) when {
+  context <span class="keyword">has</span> resource_path &&
+  context.resource_path <span class="keyword">like</span> <span class="string">"protected/*"</span>
+};</code></pre>
+
+<div class="callout success">Cedar's <strong>deny-wins semantics</strong>: a single <code>forbid</code> overrides any number of <code>permit</code> policies. This makes guardrails unconditional — even an admin with <code>archiver=true</code> cannot delete in <code>protected/</code>.</div>
+
+<h3>CedarPolicyEvaluator — key internals</h3>
+<p><span class="file-ref">mcp_server/policy.py</span> &mdash; Key behaviours:</p>
+<ul>
+  <li><strong>Hot-reload:</strong> <code>_load()</code> compares <code>mtime</code> of <code>cedar/policies/*.cedar</code> and <code>cedar/entities.json</code> on every call — file changes take effect within one request.</li>
+  <li><strong>Dynamic user entity:</strong> <code>_build_user_entity()</code> constructs the Cedar <code>User</code> with ABAC attrs from <code>ABAC_CLAIM_KEYS = {"department": str, "archiver": bool}</code>. Cognito sends booleans as strings; they are normalized.</li>
+  <li><strong>Batch evaluation:</strong> <code>check_access_batch()</code> sends all 11 tool requests to cedarpy in one call — used by the <code>/me</code> endpoint for the frontend permission matrix.</li>
+  <li><strong>Assumed-role enforcement:</strong> If the user sends <code>X-Assume-Role: developer</code>, only <code>[developer]</code> is passed as the User's <code>parents</code> — preventing privilege escalation to a higher available role.</li>
+</ul>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="two-phase">7. Tool-level RBAC and ABAC — the two-phase pattern</h2>
+
+<h3>Phase 1 — RBAC check (auth callable on the decorator)</h3>
+<pre><code><span class="comment"># mcp_server/server.py:349-376</span>
+_ABAC_ONLY_TOOLS: set[str] = {<span class="string">"delete_s3_object"</span>}  <span class="comment"># no RBAC role grants access</span>
+
+<span class="keyword">def</span> <span class="type">require_cedar</span>(tool_name: str):
+    <span class="keyword">def</span> check(ctx: AuthContext) -> bool:
+        decision = policy_evaluator.check_access(_build_access_request(tool_name))
+        <span class="keyword">if not</span> decision.allowed:
+            <span class="keyword">if</span> tool_name <span class="keyword">in</span> _ABAC_ONLY_TOOLS:
+                <span class="keyword">return True</span>   <span class="comment"># passthrough — Phase 2 will decide</span>
+            <span class="keyword">raise</span> ToolError(<span class="string">f"[TOOL_DENIAL] Access denied: {decision.reason}"</span>)
+        <span class="keyword">return True</span>
+    <span class="keyword">return</span> check
+
+<span class="comment"># Applied to every tool:</span>
+@mcp.tool(auth=require_cedar(<span class="string">"get_user_profile"</span>))
+<span class="keyword">async def</span> get_user_profile() -> dict: ...
+
+@mcp.tool(auth=require_cedar(<span class="string">"delete_s3_object"</span>))   <span class="comment"># passthrough → Phase 2</span>
+<span class="keyword">async def</span> delete_s3_object(bucket: str, key: str) -> dict: ...</code></pre>
+
+<h3>Phase 2 — ABAC check (inside the tool function)</h3>
+<pre><code><span class="comment"># mcp_server/server.py:379-385</span>
+<span class="keyword">def</span> <span class="type">cedar_check_with_context</span>(tool_name: str, context: dict) -> AccessDecision:
+    <span class="keyword">return</span> policy_evaluator.check_access(_build_access_request(tool_name, context))
+
+<span class="comment"># Inside delete_s3_object:</span>
+decision = cedar_check_with_context(<span class="string">"delete_s3_object"</span>, {<span class="string">"resource_path"</span>: key})
+<span class="keyword">if not</span> decision.allowed:
+    <span class="keyword">return</span> {<span class="string">"error"</span>: <span class="string">"abac_denied"</span>, <span class="string">"message"</span>: <span class="string">f"[TOOL_DENIAL] {decision.reason}"</span>}</code></pre>
+
+<h3>delete_s3_object — ABAC decision tree</h3>
+<figure class="dtree" aria-label="ABAC decision tree for delete_s3_object">
+  <div class="dt-start">REQUEST: call_tool → delete_s3_object</div>
+  <div class="dt-down"></div>
+
+  <div class="dt-fork">
+    <div class="dt-fork-left">
+      <span class="dt-label">ABAC-only tool?</span><br>
+      <span class="dt-outcome dt-passthrough">↓ YES — Phase 1 passes through</span>
+    </div>
+    <div class="dt-diamond phase1" title="Phase 1 RBAC check">Phase 1<br>RBAC check<br><small>(no context)</small></div>
+    <div class="dt-fork-right">
+      <span class="dt-label">Any other tool →</span><br>
+      <span class="dt-outcome dt-deny">✕ DENY (RBAC)&nbsp;&nbsp;&nbsp;&nbsp;</span>
+    </div>
+  </div>
+  <div class="dt-down"></div>
+
+  <div class="dt-fork">
+    <div class="dt-fork-left">
+      <span class="dt-outcome dt-deny">✕ DENY<br><small>no archiver attr</small></span>
+    </div>
+    <div class="dt-diamond abac" title="Check archiver attribute">principal<br>.archiver<br>== true?</div>
+    <div class="dt-fork-right">
+      <span class="dt-label">YES ↓</span>
+    </div>
+  </div>
+  <div class="dt-down"></div>
+
+  <div class="dt-fork">
+    <div class="dt-fork-left">
+      <span class="dt-outcome dt-deny">✕ DENY<br><small>wrong path prefix</small></span>
+    </div>
+    <div class="dt-diamond path" title="Check resource path prefix">resource_path<br>like<br>"archive/*"?</div>
+    <div class="dt-fork-right">
+      <span class="dt-label">YES ↓</span>
+    </div>
+  </div>
+  <div class="dt-down"></div>
+
+  <div class="dt-fork">
+    <div class="dt-fork-left">
+      <span class="dt-label">NO ↓</span>
+    </div>
+    <div class="dt-diamond guard" title="Guardrail: check protected path">resource_path<br>like<br>"protected/*"?</div>
+    <div class="dt-fork-right">
+      <span class="dt-outcome dt-deny">✕ DENY<br><small>guardrail forbid</small></span>
+    </div>
+  </div>
+  <div class="dt-down"></div>
+
+  <div class="dt-outcome dt-allow" style="font-size:1rem;padding:0.6rem 2rem">✓ ALLOW — S3 delete_object proceeds</div>
+  <figcaption style="font-size:0.78rem;color:var(--text-muted);margin-top:0.75rem">Fig 2. Two-phase Cedar evaluation for <code>delete_s3_object</code>. Guardrail <code>forbid</code> overrides all permits.</figcaption>
+</figure>
+
+<h3>Full permissions matrix</h3>
+<table class="role-matrix">
+  <thead><tr><th>Tool</th><th>Admin</th><th>Developer</th><th>Viewer</th><th>+ archiver=true</th></tr></thead>
+  <tbody>
+    <tr><td><code>get_user_profile</code></td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td><td class="cross">—</td></tr>
+    <tr><td><code>list_files</code></td><td class="check">✓</td><td class="check">✓</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>send_email</code></td><td class="check">✓</td><td class="cross">✕</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>delete_resource</code></td><td class="check">✓</td><td class="cross">✕</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>list_s3_buckets</code></td><td class="check">✓</td><td class="check">✓</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>list_s3_objects</code></td><td class="check">✓</td><td class="check">✓</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>get_s3_object_info</code></td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td><td class="cross">—</td></tr>
+    <tr><td><code>delete_s3_object</code></td><td class="abac-cell">ABAC only</td><td class="abac-cell">ABAC only</td><td class="abac-cell">ABAC only</td><td class="check">✓ archive/* only</td></tr>
+    <tr><td><code>get_current_time</code></td><td class="check">✓</td><td class="cross">✕</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>convert_timezone</code></td><td class="check">✓</td><td class="cross">✕</td><td class="cross">✕</td><td class="cross">—</td></tr>
+    <tr><td><code>get_time_difference</code></td><td class="check">✓</td><td class="cross">✕</td><td class="cross">✕</td><td class="cross">—</td></tr>
+  </tbody>
+</table>
+<p style="font-size:0.82rem;color:var(--text-muted)">✓ RBAC permit &nbsp; ✕ RBAC deny &nbsp; ABAC only = no role grants access; only <code>archiver=true</code> + path <code>archive/*</code> allows. Guardrail always forbids <code>protected/*</code>.</p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="abac-prop">8. ABAC attribute propagation — the archiver toggle</h2>
+<p>The <code>archiver</code> attribute travels the full chain from a UI checkbox to the Cedar policy evaluator. Here's how:</p>
+
+<table>
+  <thead><tr><th>Step</th><th>Location</th><th>Mechanism</th></tr></thead>
+  <tbody>
+    <tr><td>1. UI toggle</td><td><code>SecurityContextPanel.js:146-156</code></td><td>Checkbox sets <code>archiverEnabled</code> state</td></tr>
+    <tr><td>2. Header build</td><td><code>SecurityContextPanel.js:32-36</code></td><td><code>X-Abac-Attrs: {"archiver": true}</code> sent to A2A + MCP</td></tr>
+    <tr><td>3. A2A ContextVar</td><td><code>a2a_server/server.py:30</code></td><td><code>current_abac_attrs.set(parse_abac_attrs(header))</code></td></tr>
+    <tr><td>4. ADK session</td><td><code>adk_agent/agent.py:222</code></td><td><code>"user:abac_attrs": json.dumps(abac_attrs)</code></td></tr>
+    <tr><td>5. MCP header</td><td><code>adk_agent/agent.py:114-115</code></td><td><code>mcp_header_provider</code> re-injects as <code>X-Abac-Attrs</code></td></tr>
+    <tr><td>6. Claims merge</td><td><code>mcp_server/server.py:307-308</code></td><td><code>claims.update(abac_attrs)</code> — header overrides token</td></tr>
+    <tr><td>7. Cedar entity</td><td><code>mcp_server/policy.py:ABAC_CLAIM_KEYS</code></td><td><code>_build_user_entity()</code> sets <code>principal.archiver = true</code></td></tr>
+    <tr><td>8. Policy eval</td><td><code>cedar/policies/abac.cedar</code></td><td><code>principal.archiver == true && resource_path like "archive/*"</code></td></tr>
+  </tbody>
+</table>
+
+<pre><code><span class="comment"># dev_config.py:64-79 — parse_abac_attrs() — used by all three servers</span>
+<span class="keyword">def</span> <span class="type">parse_abac_attrs</span>(raw: str) -> dict:
+    <span class="keyword">if not</span> raw: <span class="keyword">return</span> {}
+    <span class="keyword">try</span>:
+        attrs = json.loads(raw)
+        <span class="keyword">return</span> attrs <span class="keyword">if isinstance</span>(attrs, dict) <span class="keyword">else</span> {}
+    <span class="keyword">except</span> (json.JSONDecodeError, TypeError):
+        logger.warning(<span class="string">"Invalid ABAC attrs JSON: %.100s"</span>, raw)
+        <span class="keyword">return</span> {}</code></pre>
+
+<div class="callout warn">
+  <strong>Security note:</strong> The <code>X-Abac-Attrs</code> header is client-controlled — the frontend can claim <code>archiver: true</code> without a signed token assertion. This is intentional for this demo. In production, ABAC attributes should come from the IdP token (Entra optional claims / Cognito Pre-Token-Generation Lambda) and the header should be <em>ignored or validated</em> server-side.
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="skills">9. MCP tools as Cedar resources — what the branch name means</h2>
+<div class="callout">
+  <strong>Clarification:</strong> The branch name <code>mcp-skills-as-resources-abac-rbac</code> does <em>not</em> mean MCP protocol <code>@mcp.resource()</code> / <code>list_resources()</code> / <code>read_resource()</code>. <strong>No such endpoints exist in this codebase.</strong> The name means that the agent's skills (MCP tools) are modelled as Cedar <code>Tool</code> <em>resources</em> for authorization policy evaluation — the standard Cedar terminology where a <em>resource</em> is the thing being authorized against.
+</div>
+
+<p>Each of the 11 MCP tools is a <code>AgentAuth::Tool</code> entity in Cedar with a unique ID matching the tool's Python function name. Authorization asks: <em>"Can principal <code>User::"alice@company.com"</code> perform <code>Action::"call_tool"</code> on <code>Tool::"delete_s3_object"</code>?"</em></p>
+
+<h3>What real MCP resource serving would look like (future)</h3>
+<p>If the project later added skill definitions as MCP protocol resources (e.g., dynamic agent cards), the same Cedar pattern would apply:</p>
+<ul>
+  <li>Add a <code>Skill</code> entity type to <code>cedar/schema.cedarschema</code></li>
+  <li>Add a <code>read_resource</code> action</li>
+  <li>Add RBAC/ABAC policies in <code>cedar/policies/</code></li>
+  <li>Apply <code>auth=require_cedar("skill_name")</code> on each <code>@mcp.resource()</code> decorator</li>
+  <li>The <code>S3Folder</code> entity type already in the schema is a placeholder for exactly this kind of sub-resource extension</li>
+</ul>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="trace">10. End-to-end request trace — Entra vs Cognito</h2>
+<p>The same call flows through all tiers for both IdPs. Key divergence points are highlighted. <span class="badge badge-entra">Entra</span> = blue &nbsp; <span class="badge badge-cognito">Cognito</span> = orange</p>
+
+<figure class="seq-diagram" aria-label="Dual-IdP end-to-end sequence trace">
+  <div class="seq-lanes">
+    <div class="lane-head lh-fe">Frontend</div>
+    <div class="lane-head lh-a2a">A2A Gateway</div>
+    <div class="lane-head lh-adk">ADK Agent</div>
+    <div class="lane-head lh-mcp">FastMCP</div>
+    <div class="lane-head lh-cedar">Cedar / Resource</div>
+  </div>
+  <div class="seq-body">
+
+    <div class="seq-step">
+      <div class="seq-cell"><span class="seq-msg entra">acquireTokenSilent()</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+    <div class="seq-step">
+      <div class="seq-cell"><span class="seq-msg cognito">fetchAuthSession()</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-both-row">↓&nbsp; Both IdPs: POST / with Authorization: Bearer {token} + X-Assume-Role + X-Abac-Attrs</div>
+
+    <div class="seq-step">
+      <div class="seq-cell"><span class="seq-msg both">→ POST /</span></div>
+      <div class="seq-cell"><span class="seq-msg both">detect iss claim → IdP</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg entra">JWKS fetch (.../v2.0/keys)</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+    <div class="seq-step">
+      <div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg cognito">JWKS fetch (cognito-idp/.../jwks.json)</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg entra">validate aud claim</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+    <div class="seq-step">
+      <div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg cognito">validate client_id claim (manual)</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-both-row">↓&nbsp; Both IdPs: group ACL check → set ContextVars → forward to ADK</div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg both">groups: [] → role map</span></div>
+      <div class="seq-cell"><span class="seq-msg both">POST /session → /chat</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div><div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg both">session state user:* updated</span></div>
+      <div class="seq-cell"></div><div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div><div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg both">mcp_header_provider() → headers</span></div>
+      <div class="seq-cell"><span class="seq-msg both">MultiAuth verifier chain</span></div>
+      <div class="seq-cell"></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg both">UserContextMiddleware → ContextVars</span></div>
+      <div class="seq-cell"><span class="seq-msg cedar">Phase 1 RBAC (no context)</span></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg both">tool fn: Phase 2 ABAC + context</span></div>
+      <div class="seq-cell"><span class="seq-msg cedar">archiver + path → AccessDecision</span></div>
+    </div>
+
+    <div class="seq-step">
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg entra">OBO exchange → Graph API call</span></div>
+      <div class="seq-cell"><span class="seq-msg entra">graph.microsoft.com/v1.0</span></div>
+    </div>
+    <div class="seq-step">
+      <div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div>
+      <div class="seq-cell"><span class="seq-msg cognito">server AWS creds → S3 call</span></div>
+      <div class="seq-cell"><span class="seq-msg cognito">boto3 → s3.list_objects</span></div>
+    </div>
+
+    <div class="seq-both-row">↑&nbsp; Response propagates back: MCP → ADK → A2A → Frontend JSON-RPC reply</div>
+
+  </div>
+  <figcaption style="text-align:center;font-size:0.78rem;color:var(--text-muted);margin-top:0.75rem">Fig 3. Dual-IdP end-to-end sequence. Blue = Entra-specific path; orange = Cognito-specific path.</figcaption>
+</figure>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="production">11. Production considerations</h2>
+
+<table>
+  <thead><tr><th>Area</th><th>Current (demo)</th><th>Production recommendation</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>ABAC attributes</strong></td>
+      <td>Client-controlled <code>X-Abac-Attrs</code> header — frontend can claim any attribute</td>
+      <td>Source from signed IdP token: Entra optional claims or Cognito Pre-Token-Generation Lambda. Reject or ignore client-provided overrides.</td>
+    </tr>
+    <tr>
+      <td><strong>JWKS cache (A2A)</strong></td>
+      <td>In-memory dict, never time-invalidated, only cleared on key-not-found</td>
+      <td>Add TTL (e.g., 1 hour) and a background refresh to handle keys added before expiry.</td>
+    </tr>
+    <tr>
+      <td><strong>Session store (ADK)</strong></td>
+      <td><code>InMemorySessionService</code> — lost on restart</td>
+      <td>Replace with Redis or DynamoDB-backed session service for multi-instance deployment.</td>
+    </tr>
+    <tr>
+      <td><strong>Cedar decision cache</strong></td>
+      <td>Evaluated per request — stateless is safe but adds latency</td>
+      <td>For hot-path tools, cache <code>AccessDecision</code> keyed by <code>(email, role, tool, abac_hash)</code> with a short TTL (30s).</td>
+    </tr>
+    <tr>
+      <td><strong>Group overage (Entra)</strong></td>
+      <td>Logged, groups returned as <code>[]</code></td>
+      <td>Implement <code>GET /me/memberOf</code> via Graph API when <code>_claim_names.groups</code> appears. Requires OBO token with <code>GroupMember.Read.All</code>.</td>
+    </tr>
+    <tr>
+      <td><strong>Rate limiting</strong></td>
+      <td>No rate limiting at any tier</td>
+      <td>Add per-user rate limits at A2A gateway. ADK already retries 3× on Bedrock throttles.</td>
+    </tr>
+    <tr>
+      <td><strong>S3 delete simulation</strong></td>
+      <td><code>delete_resource</code> is simulated (logs only)</td>
+      <td>Wire to real IAM-scoped role; add pre-deletion audit log write.</td>
+    </tr>
+    <tr>
+      <td><strong>Token refresh</strong></td>
+      <td>Token stored in ADK session at creation; may expire mid-session</td>
+      <td>Check <code>exp</code> claim in <code>mcp_header_provider</code>; trigger silent refresh before forwarding.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Related documentation</h3>
+<ul>
+  <li><a href="mcp-server-reverse-engineered.html">MCP Server — Reverse Engineering Guide</a> — deep-dive into CedarPolicyEvaluator internals, OBO flow, UserContextMiddleware</li>
+  <li><a href="../EXECUTIVE_SUMMARY.md">Executive Summary</a> — leadership overview with live test results</li>
+  <li><a href="../tests/test_cedar_smoke.py"><code>tests/test_cedar_smoke.py</code></a> — 31 Cedar RBAC/ABAC policy tests</li>
+</ul>
+
+<p style="margin-top:3rem;color:var(--text-muted);font-size:0.8rem;border-top:1px solid var(--border);padding-top:1rem">Generated 2026-04-20 &middot; Branch: <code>mcp-skills-as-resources-abac-rbac</code> &middot; Sources verified against live code.</p>
+
+</body>
+</html>
