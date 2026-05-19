@@ -113,6 +113,34 @@
 
 ---
 
+## ServiceNow ABAC scenarios (2026-05-19 branch)
+
+Added on the `test-integration-servicenow` branch. Cedar pre-check enforces
+composite role + department for dept-scoped SN tools. The `department`
+attribute is claim-only (Entra `department` or Cognito `custom:department`);
+X-Abac-Attrs cannot override it.
+
+| # | Scenario | Role | Principal.dept | Tool | Target | Expected | Cedar layer |
+|---|----------|------|---------------|------|--------|----------|-------------|
+| 1 | Admin lists any KB | admin | (any) | list_knowledge_bases | – | ALLOW | RBAC |
+| 2 | Admin lists IT articles | admin | (any) | list_articles | IT KB | ALLOW | RBAC |
+| 3 | Dev IT lists IT articles | developer | IT | list_articles | IT KB | ALLOW | ABAC composite |
+| 4 | Dev IT lists HR articles | developer | IT | list_articles | HR KB | DENY (TOOL) | ABAC composite |
+| 5 | Viewer IT reads IT articles | viewer | IT | list_articles | IT KB | ALLOW | ABAC composite |
+| 6 | Viewer IT reads HR articles | viewer | IT | list_articles | HR KB | DENY (TOOL) | ABAC composite |
+| 7 | Viewer lists incidents | viewer | (any) | list_incidents | – | DENY (TOOL) | RBAC (no permit) |
+| 8 | Dev IT lists own dept incidents | developer | IT | list_incidents | (defaults to IT) | ALLOW | ABAC composite |
+| 9 | Dev IT lists HR incidents | developer | IT | list_incidents | HR | DENY (TOOL) | ABAC composite |
+| 10 | Dev IT creates IT incident | developer | IT | create_incident | IT | ALLOW | ABAC composite |
+| 11 | Dev IT updates HR incident | developer | IT | update_incident | (HR via fetch) | DENY (TOOL) | ABAC composite (fetch-then-check) |
+| 12 | Dev w/o dept claim → any | developer | (missing) | list_articles | IT KB | DENY (TOOL) | ABAC guard `principal has department` |
+
+**Coverage:** Cedar unit tests (`TestCedarServiceNowPolicies` in
+`tests/test_cedar_smoke.py`, 14 tests) and mocked integration tests
+(`TestServiceNowMocked` in `tests/test_servicenow_integration.py`, 11 tests)
+already exercise these. Real-tier `@slow` tests cover KB-only (read-only, 4
+tests).
+
 ## Bugs Found
 
 | # | Title | Severity | Status | Description | Fix |
