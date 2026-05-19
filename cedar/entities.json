@@ -69,5 +69,41 @@
     "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_time_difference" } },
     "attrs": { "sensitivity": "internal", "requires_provider": "" },
     "parents": []
+  },
+
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "list_knowledge_bases" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "list_articles" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_article" } },
+    "attrs": { "sensitivity": "internal", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "list_incidents" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "get_incident" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "create_incident" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "" },
+    "parents": []
+  },
+  {
+    "uid": { "__entity": { "type": "AgentAuth::Tool", "id": "update_incident" } },
+    "attrs": { "sensitivity": "confidential", "requires_provider": "" },
+    "parents": []
   }
 ]

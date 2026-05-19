@@ -29,6 +29,19 @@ permit(
 // Access is granted solely via ABAC policy (abac.cedar) for users
 // with archiver=true attribute, regardless of role.
 
+// ── Developer: ServiceNow tools without dept dependency ─────────────
+// list_articles, list_incidents, create_incident, update_incident require
+// composite role+department check — see abac.cedar.
+permit(
+  principal in AgentAuth::Role::"developer",
+  action == AgentAuth::Action::"call_tool",
+  resource
+) when {
+  resource == AgentAuth::Tool::"list_knowledge_bases" ||
+  resource == AgentAuth::Tool::"get_article" ||
+  resource == AgentAuth::Tool::"get_incident"
+};
+
 // ── Viewer: limited tools ───────────────────────────────────────────
 permit(
   principal in AgentAuth::Role::"viewer",
@@ -37,6 +50,17 @@ permit(
 ) when {
   resource == AgentAuth::Tool::"get_user_profile" ||
   resource == AgentAuth::Tool::"get_s3_object_info"
+};
+
+// ── Viewer: ServiceNow KB-list and article-by-id ────────────────────
+// list_articles for viewer requires composite role+department — see abac.cedar.
+permit(
+  principal in AgentAuth::Role::"viewer",
+  action == AgentAuth::Action::"call_tool",
+  resource
+) when {
+  resource == AgentAuth::Tool::"list_knowledge_bases" ||
+  resource == AgentAuth::Tool::"get_article"
 };
 
 // ── Tool listing: all authenticated users can discover tools ────────
