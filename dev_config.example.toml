@@ -25,6 +25,20 @@ default_role = "admin"                  # admin | developer | viewer
 default_email = "dev@localhost"
 default_provider = "entra"              # entra | cognito | auth0
 default_scopes = ["User.Read", "Files.Read", "Mail.Send", "Files.ReadWrite.All"]
-# ABAC attributes for Cedar policy testing (optional, also overridable via X-Abac-Attrs JSON header)
+# ABAC attributes for Cedar policy testing
+# - archiver is header-overridable via X-Abac-Attrs JSON (controls delete_s3_object)
+# - department is claim-only — X-Abac-Attrs CANNOT override it (security)
 # default_archiver = true       # Set true to enable delete_s3_object for developer role
-# default_department = "engineering"
+# default_department = "IT"     # Mocked dept claim when auth is disabled
+
+[servicenow]
+# Empty instance_url → tool calls are routed through the in-memory mock
+# (mcp_server/servicenow_mock.py). Useful for local dev without a real
+# ServiceNow instance.
+instance_url = ""
+# Set both to use a real instance via HTTP Basic auth:
+#   instance_url = "https://devXXXXX.service-now.com"
+#   api_user     = "admin"
+#   api_password = "<your-password>"
+api_user     = ""
+api_password = ""
