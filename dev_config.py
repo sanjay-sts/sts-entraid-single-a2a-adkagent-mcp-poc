@@ -61,19 +61,30 @@ def get_section(section: str) -> dict[str, Any]:
     return _load_config().get(section, {})
 
 
+# Claim-only ABAC keys: NEVER accepted from the X-Abac-Attrs header.
+# These attributes must come exclusively from validated JWT claims so the
+# client cannot spoof them (e.g. cross-department privilege escalation).
+HEADER_BLOCKED_ABAC_KEYS = frozenset({"department"})
+
+
 def parse_abac_attrs(raw: str) -> dict:
     """Parse a JSON string of ABAC attributes into a dict.
 
-    Used by A2A and MCP servers to decode the X-Abac-Attrs header.
-    Returns empty dict on missing/invalid input. Unknown keys are
-    harmlessly ignored — only keys in ABAC_CLAIM_KEYS are extracted
-    during Cedar entity building.
+    Used by A2A and MCP servers to decode the X-Abac-Attrs header. Keys
+    listed in HEADER_BLOCKED_ABAC_KEYS are stripped — those attributes
+    are claim-only and must not be settable via the header.
+
+    Returns empty dict on missing/invalid input. Unknown keys (other than
+    the blocked set) are harmlessly ignored — only keys in ABAC_CLAIM_KEYS
+    are extracted during Cedar entity building.
     """
     if not raw:
         return {}
     try:
         attrs = json.loads(raw)
-        return attrs if isinstance(attrs, dict) else {}
+        if not isinstance(attrs, dict):
+            return {}
+        return {k: v for k, v in attrs.items() if k not in HEADER_BLOCKED_ABAC_KEYS}
     except (json.JSONDecodeError, TypeError):
         logger.warning("Invalid ABAC attrs JSON: %.100s", raw)
         return {}
