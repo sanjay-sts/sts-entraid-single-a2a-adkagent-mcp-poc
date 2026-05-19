@@ -23,6 +23,26 @@ logger = logging.getLogger("mcp_server.servicenow")
 # Module-level singleton (set by init_servicenow_client at startup)
 _client: "ServiceNowClient | ServiceNowMockClient | None" = None
 
+# Map specific status codes to a stable error string. Unmapped 5xx falls
+# through to the generic "ServiceNow server error" branch in _request().
+_STATUS_ERROR: dict[int, str] = {
+    401: "ServiceNow auth failed",
+    403: "ServiceNow access denied",
+    404: "record not found",
+    429: "ServiceNow rate limited; retry later",
+}
+
+
+def _is_sys_id(identifier: str) -> bool:
+    """True if `identifier` is a ServiceNow sys_id (32-char hex)."""
+    if len(identifier) != 32:
+        return False
+    try:
+        int(identifier, 16)
+    except ValueError:
+        return False
+    return True
+
 
 class ServiceNowClient:
     """ServiceNow Table API client (service-account auth).
@@ -47,16 +67,11 @@ class ServiceNowClient:
         except httpx.TimeoutException:
             return {"error": "ServiceNow timed out"}
 
-        if resp.status_code == 401:
-            return {"error": "ServiceNow auth failed", "status": 401}
-        if resp.status_code == 403:
-            return {"error": "ServiceNow access denied", "status": 403}
-        if resp.status_code == 404:
-            return {"error": "record not found", "status": 404}
-        if resp.status_code == 429:
-            return {"error": "ServiceNow rate limited; retry later", "status": 429}
-        if resp.status_code >= 500:
-            return {"error": "ServiceNow server error", "status": resp.status_code}
+        status = resp.status_code
+        if status in _STATUS_ERROR:
+            return {"error": _STATUS_ERROR[status], "status": status}
+        if status >= 500:
+            return {"error": "ServiceNow server error", "status": status}
 
         try:
             body = resp.json()
@@ -83,11 +98,13 @@ class ServiceNowClient:
         Returns the SN record dict (with u_department) or None if not found
         or on error.
         """
-        # Try sys_id-style lookup first if identifier looks hex-y enough
-        if len(identifier) == 32 and all(c in "0123456789abcdefABCDEF" for c in identifier):
+        fields = "sys_id,title,u_department"
+
+        # Direct sys_id lookup first if identifier looks like one.
+        if _is_sys_id(identifier):
             body = await self._request(
                 "GET", f"/api/now/table/kb_knowledge_base/{identifier}",
-                params={"sysparm_fields": "sys_id,title,u_department"},
+                params={"sysparm_fields": fields},
             )
             if "error" not in body and isinstance(body.get("result"), dict):
                 return body["result"]
@@ -98,7 +115,7 @@ class ServiceNowClient:
             params={
                 "sysparm_query": f"title={identifier}",
                 "sysparm_limit": "1",
-                "sysparm_fields": "sys_id,title,u_department",
+                "sysparm_fields": fields,
             },
         )
         result = body.get("result") if isinstance(body, dict) else None
@@ -168,8 +185,15 @@ def init_servicenow_client(
     """Initialise the ServiceNow client.
 
     Empty `instance_url` → falls back to the in-memory mock from
-    servicenow_mock.py. Tools call get_servicenow_client() without
-    caring which one they got.
+    servicenow_mock.py (intentional dev-mode behaviour).
+
+    `instance_url` set but `api_user` or `api_password` missing → raises
+    RuntimeError. We refuse to silently serve mock data when the operator
+    has clearly intended to point at a real instance — that would let
+    misconfiguration look like real-but-empty data, which is worse than a
+    loud startup failure.
+
+    Tools call get_servicenow_client() without caring which client they got.
     """
     global _client
 
@@ -181,16 +205,15 @@ def init_servicenow_client(
         return
 
     if not api_user or not api_password:
-        from servicenow_mock import ServiceNowMockClient
-        _client = ServiceNowMockClient()
-        logger.warning(
-            "ServiceNow mock client initialised — instance_url set (%s) but "
-            "api_user/api_password missing", instance_url,
+        raise RuntimeError(
+            f"ServiceNow misconfigured: instance_url={instance_url!r} is set but "
+            "api_user/api_password is empty. Either populate the credentials in "
+            "dev_config.toml / env, or clear instance_url to use the mock."
         )
-        return
 
     _client = ServiceNowClient(instance_url, api_user, api_password)
     logger.info("ServiceNow client initialised (instance: %s)", instance_url)
+
 
 
 def get_servicenow_client() -> "ServiceNowClient | ServiceNowMockClient | None":

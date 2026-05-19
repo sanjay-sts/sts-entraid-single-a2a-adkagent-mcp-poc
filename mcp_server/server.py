@@ -396,6 +396,37 @@ def cedar_check_with_context(tool_name: str, context: dict) -> AccessDecision:
     return policy_evaluator.check_access(_build_access_request(tool_name, context))
 
 
+def _caller_department() -> str | None:
+    """Return the caller's `department` claim, or None if absent."""
+    return (current_user_claims.get() or {}).get("department")
+
+
+def _cedar_check_department(
+    tool_name: str, target_dept: str | None, log_extra: dict | None = None,
+) -> dict | None:
+    """Run a Phase 2 Cedar check scoped by `target_department`.
+
+    Returns None on allow, or a `[TOOL_DENIAL]` error dict on deny. Empty
+    context is used when `target_dept` is None (Cedar then evaluates the
+    role-only branch of the ABAC policy).
+    """
+    context = {"target_department": target_dept} if target_dept else {}
+    decision = cedar_check_with_context(tool_name, context)
+    if decision.allowed:
+        return None
+    if log_extra:
+        logger.info(
+            "Cedar denied %s: user=%s role=%s %s ctx.dept=%s reason=%s",
+            tool_name,
+            current_user_email.get(),
+            current_user_role.get(),
+            " ".join(f"{k}={v}" for k, v in log_extra.items()),
+            target_dept,
+            decision.reason,
+        )
+    return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+
+
 async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
     """Get a Graph API token via OBO exchange.
 
@@ -1006,16 +1037,21 @@ async def list_articles(kb_identifier: str, query: str = "") -> dict:
         return {"error": "[TOOL_DENIAL] knowledge base not found"}
 
     target_dept = kb_meta.get("u_department")
-    decision = cedar_check_with_context(
-        "list_articles", {"target_department": target_dept} if target_dept else {},
-    )
-    if not decision.allowed:
-        logger.info(
-            "Cedar denied list_articles: user=%s role=%s kb=%s ctx.dept=%s reason=%s",
-            current_user_email.get(), current_user_role.get(),
-            kb_meta.get("title"), target_dept, decision.reason,
+    # Distinguish a misconfigured KB (no u_department field) from a real
+    # access denial — admins still bypass via RBAC, but for dev/viewer the
+    # default Cedar message would mask the real cause (SN admin should set
+    # u_department on the KB).
+    if not target_dept and current_user_role.get() != "admin":
+        logger.warning(
+            "KB %s missing u_department; treating as config error", kb_meta.get("title"),
         )
-        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+        return {"error": "[CONFIG_ERROR] knowledge base has no department configured"}
+
+    denial = _cedar_check_department(
+        "list_articles", target_dept, {"kb": kb_meta.get("title")},
+    )
+    if denial:
+        return denial
 
     return await client.list_articles(kb_meta["sys_id"], query)
 
@@ -1045,12 +1081,10 @@ async def list_incidents(department: str | None = None) -> dict:
     field — that's deferred until the OBO upgrade. The dept check is purely
     Cedar-side; SN returns whatever the integration user can see.
     """
-    target_dept = department or (current_user_claims.get() or {}).get("department")
-    decision = cedar_check_with_context(
-        "list_incidents", {"target_department": target_dept} if target_dept else {},
-    )
-    if not decision.allowed:
-        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+    target_dept = department or _caller_department()
+    denial = _cedar_check_department("list_incidents", target_dept)
+    if denial:
+        return denial
 
     client = get_servicenow_client()
     if client is None:
@@ -1086,19 +1120,15 @@ async def create_incident(
         description: long-form details (optional).
         urgency: 1 (high) - 4 (low). Default 3.
     """
-    target_dept = department or (current_user_claims.get() or {}).get("department")
-    decision = cedar_check_with_context(
-        "create_incident", {"target_department": target_dept} if target_dept else {},
-    )
-    if not decision.allowed:
-        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+    target_dept = department or _caller_department()
+    denial = _cedar_check_department("create_incident", target_dept)
+    if denial:
+        return denial
 
     client = get_servicenow_client()
     if client is None:
         return {"error": "ServiceNow client not initialised"}
-    extras: dict = {}
-    if target_dept:
-        extras["u_department"] = target_dept
+    extras = {"u_department": target_dept} if target_dept else {}
     return await client.create_incident(
         short_description, description=description, urgency=urgency, **extras,
     )
@@ -1121,22 +1151,29 @@ async def update_incident(sys_id: str, payload: dict) -> dict:
     if client is None:
         return {"error": "ServiceNow client not initialised"}
 
+    # Fetch-then-check (load-bearing for defense-in-depth — see docstring).
     incident_resp = await client.get_incident(sys_id)
-    incident = incident_resp.get("result") if isinstance(incident_resp, dict) else None
+    if not isinstance(incident_resp, dict):
+        return {"error": "[TOOL_ERROR] unexpected response from ServiceNow"}
+    # Distinguish SN-side failure (connect error, 5xx) from a real 404.
+    if "error" in incident_resp and "result" not in incident_resp:
+        return {"error": f"[TOOL_ERROR] {incident_resp['error']}"}
+    incident = incident_resp.get("result")
     if not isinstance(incident, dict):
         return {"error": "[TOOL_DENIAL] incident not found"}
 
     target_dept = incident.get("u_department")
-    decision = cedar_check_with_context(
-        "update_incident", {"target_department": target_dept} if target_dept else {},
-    )
-    if not decision.allowed:
-        logger.info(
-            "Cedar denied update_incident: user=%s role=%s sys_id=%s ctx.dept=%s reason=%s",
-            current_user_email.get(), current_user_role.get(),
-            sys_id, target_dept, decision.reason,
+    if not target_dept and current_user_role.get() != "admin":
+        logger.warning(
+            "Incident %s missing u_department; treating as config error", sys_id,
         )
-        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+        return {"error": "[CONFIG_ERROR] incident has no department configured"}
+
+    denial = _cedar_check_department(
+        "update_incident", target_dept, {"sys_id": sys_id},
+    )
+    if denial:
+        return denial
 
     return await client.update_incident(sys_id, payload)
 

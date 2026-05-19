@@ -43,12 +43,12 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ├── adk_agent/
 │   └── agent.py               # Google ADK agent — session mgmt, streaming, retry
 ├── mcp_server/
-│   ├── server.py              # FastMCP tools — Cedar ABAC auth, UserContextMiddleware, 11 tools
+│   ├── server.py              # FastMCP tools — Cedar ABAC auth, UserContextMiddleware, 18 tools (11 original + 7 ServiceNow)
 │   ├── graph_obo.py           # OBO token exchange for Graph API — GraphOBOExchanger singleton
 │   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator + CedarPolicyEvaluator
 ├── cedar/
 │   ├── schema.cedarschema     # Cedar entity types: User, Role, Tool, S3Folder + actions
-│   ├── entities.json          # Static entities: 3 roles + 11 tools
+│   ├── entities.json          # Static entities: 3 roles + 18 tools (11 original + 7 ServiceNow)
 │   └── policies/
 │       ├── rbac.cedar         # RBAC permit policies (admin/developer/viewer → tools)
 │       ├── abac.cedar         # ABAC policy (developer + archiver → delete in archive/)
@@ -104,10 +104,21 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ### Role Hierarchy & Tool Permissions
 
 ```
-admin      → All 11 tools (delete_s3_object blocked in protected/ by forbid guardrail)
+admin      → All 18 tools (delete_s3_object blocked in protected/ by forbid guardrail)
 developer  → get_user_profile, list_files, list_s3_buckets, list_s3_objects, get_s3_object_info
              + delete_s3_object (only with archiver=true attribute, only in archive/ path)
+             + ServiceNow KB read: list_knowledge_bases, get_article, get_incident
+             + ServiceNow dept-scoped (composite role+dept ABAC):
+                 list_articles(kb), list_incidents(dept), create_incident(dept), update_incident(sys_id)
 viewer     → get_user_profile, get_s3_object_info
+             + ServiceNow KB read: list_knowledge_bases, get_article
+             + list_articles(kb) (composite role+dept ABAC)
+
+ServiceNow dept-ABAC is enforced via Cedar pre-check at the agent layer
+BEFORE the SN call. The dept claim comes from the validated JWT (Entra
+`department` claim or Cognito `custom:department`); it is NOT settable
+via the X-Abac-Attrs header (see `dev_config.HEADER_BLOCKED_ABAC_KEYS`).
+See `docs/servicenow-integration.md` and `docs/entra-department-claim-mapping.md`.
 ```
 
 Tool permissions are declared as Cedar policies in `cedar/policies/` and enforced via `auth=require_cedar("tool_name")` on each `@mcp.tool()` decorator in `mcp_server/server.py`. ABAC tools (e.g., `delete_s3_object`) additionally call `cedar_check_with_context()` inside the tool function for path-based access control.
@@ -201,7 +212,7 @@ Authorization is handled by Cedar policies evaluated in-process via `cedarpy`. T
 - `abac.cedar` — Attribute-based: developer + `archiver=true` → delete in `archive/` only
 - `guardrails.cedar` — Forbid: no delete in `protected/` (overrides all permits)
 
-**Batch evaluation**: `/me` endpoint uses `check_access_batch()` which calls `is_authorized_batch()` once for all 11 tools, instead of 11 individual calls.
+**Batch evaluation**: `/me` endpoint uses `check_access_batch()` which calls `is_authorized_batch()` once for all 18 tools (11 original + 7 ServiceNow), instead of 11 individual calls.
 
 **Hot-reload**: Cedar policies and entities are reloaded on file change (mtime-based).
 

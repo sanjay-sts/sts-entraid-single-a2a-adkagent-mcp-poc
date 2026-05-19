@@ -64,6 +64,14 @@ def get_section(section: str) -> dict[str, Any]:
 # Claim-only ABAC keys: NEVER accepted from the X-Abac-Attrs header.
 # These attributes must come exclusively from validated JWT claims so the
 # client cannot spoof them (e.g. cross-department privilege escalation).
+#
+# `department` is here because it carries enterprise-wide access semantics
+# attested by the IdP (Entra `department` optional claim or Cognito
+# `custom:department`); allowing a client header to override it would let
+# any authenticated user request cross-dept resources. By contrast,
+# `archiver` is intentionally header-overridable (the frontend toggle is
+# the only way to flip it for testing delete_s3_object), so it stays out
+# of this set.
 HEADER_BLOCKED_ABAC_KEYS = frozenset({"department"})
 
 

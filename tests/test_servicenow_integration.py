@@ -76,27 +76,32 @@ def set_user():
         set_user(email="dev@co.com", role="developer", groups=["dev-group"],
                  claims={"department": "IT"})
     """
-    tokens = []
+    # (ContextVar, token) pairs so the teardown resets each var with its own token.
+    reset_pairs: list = []
 
     def _set(*, email: str, role: str, groups: list[str], claims: dict | None = None,
              provider: str = "entra"):
         c = dict(claims or {})
         # detect_provider() relies on iss; default to entra
         c.setdefault("iss", "https://login.microsoftonline.com/test-tenant/v2.0")
-        tokens.append(srv.current_user_email.set(email))
-        tokens.append(srv.current_user_role.set(role))
-        tokens.append(srv.current_user_groups.set(groups))
-        tokens.append(srv.current_user_provider.set(provider))
-        tokens.append(srv.current_user_token.set("test-token"))
-        tokens.append(srv.current_user_claims.set(c))
+        for var, value in (
+            (srv.current_user_email, email),
+            (srv.current_user_role, role),
+            (srv.current_user_groups, groups),
+            (srv.current_user_provider, provider),
+            (srv.current_user_token, "test-token"),
+            (srv.current_user_claims, c),
+        ):
+            reset_pairs.append((var, var.set(value)))
         return c
 
     yield _set
-    # Reset ContextVars to avoid bleeding between tests
-    for t in reversed(tokens):
+    # Reset ContextVars in reverse order to avoid bleeding between tests
+    for var, token in reversed(reset_pairs):
         try:
-            srv.current_user_email.reset(t)
-        except Exception:
+            var.reset(token)
+        except ValueError:
+            # Token created in a different context (e.g. across asyncio tasks).
             pass
 
 
@@ -294,6 +299,87 @@ class TestServiceNowMocked:
             result = await srv.list_knowledge_bases()
         assert "error" in result
         assert "ServiceNow unavailable" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_list_articles_kb_missing_u_department_is_config_error(
+        self, permissions_toml, set_user,
+    ):
+        """KB exists but has no u_department populated → CONFIG_ERROR for
+        non-admin (admin still bypasses via RBAC). Distinguishes a SN admin
+        config mistake from an actual access denial."""
+        set_user(
+            email="dev-it@co.com", role="developer", groups=["dev-group"],
+            claims={"department": "IT"},
+        )
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=False) as mock:
+            mock.get("/api/now/table/kb_knowledge_base").mock(
+                return_value=httpx.Response(200, json={
+                    "result": [{"sys_id": "kb-x", "title": "X KB", "u_department": ""}]
+                })
+            )
+            articles_route = mock.get("/api/now/table/kb_knowledge")
+            result = await srv.list_articles("X KB")
+        assert "error" in result
+        assert "CONFIG_ERROR" in result["error"], (
+            f"misconfigured KB must surface as CONFIG_ERROR, got: {result['error']}"
+        )
+        assert not articles_route.called
+
+    @pytest.mark.asyncio
+    async def test_list_articles_kb_missing_u_department_admin_bypass(
+        self, permissions_toml, set_user,
+    ):
+        """Same misconfigured KB: admin still succeeds (admin permit has no
+        dept condition)."""
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=True) as mock:
+            mock.get("/api/now/table/kb_knowledge_base").mock(
+                return_value=httpx.Response(200, json={
+                    "result": [{"sys_id": "kb-x", "title": "X KB"}]  # no u_department
+                })
+            )
+            mock.get("/api/now/table/kb_knowledge").mock(
+                return_value=httpx.Response(200, json={"result": []})
+            )
+            result = await srv.list_articles("X KB")
+        assert "error" not in result
+
+    def test_init_servicenow_client_raises_on_partial_config(self):
+        """instance_url set but credentials empty → RuntimeError, not silent
+        mock fallback. Misconfiguration must fail loudly at startup."""
+        from servicenow import init_servicenow_client
+
+        with pytest.raises(RuntimeError, match="ServiceNow misconfigured"):
+            init_servicenow_client(
+                instance_url="https://devXXXXX.service-now.com",
+                api_user="",
+                api_password="",
+            )
+        # Restore mock for subsequent tests (the autouse fixture only restores
+        # *after* the test body, but the raise here aborts before any client
+        # is reset).
+        srv.init_servicenow_client("")
+
+    @pytest.mark.asyncio
+    async def test_update_incident_distinguishes_sn_error_from_404(
+        self, permissions_toml, set_user,
+    ):
+        """A SN connect failure during the fetch-then-check phase must NOT be
+        reported as `incident not found` (TOOL_DENIAL). It's a TOOL_ERROR so the
+        audit trail and the LLM can distinguish availability from authorization."""
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=False) as mock:
+            mock.get("/api/now/table/incident/inc-x").mock(
+                side_effect=httpx.ConnectError("connection refused")
+            )
+            put_route = mock.put("/api/now/table/incident/inc-x")
+            result = await srv.update_incident("inc-x", {"state": "6"})
+        assert "error" in result
+        assert "TOOL_ERROR" in result["error"], (
+            f"SN failure must surface as TOOL_ERROR, not TOOL_DENIAL; got: {result['error']}"
+        )
+        assert "ServiceNow unavailable" in result["error"]
+        assert not put_route.called
 
 
 # ─── Real-tier @slow tests (KB-only, read-only) ─────────────────────────
