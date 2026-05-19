@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_provider, parse_abac_attrs, PERMISSIONS_PATH, CEDAR_DIR
 from policy import AccessRequest, AccessDecision, PolicyEvaluator, TomlPolicyEvaluator, CedarPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
+from servicenow import init_servicenow_client, get_servicenow_client
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
@@ -346,10 +347,20 @@ def _build_access_request(tool_name: str, context: dict | None = None) -> Access
     )
 
 
-# ABAC-only tools — no RBAC role grants access, only attributes do.
-# Phase 1 (no context) always passes through; Phase 2 (inside tool) enforces.
-# Without this, Cedar denies at Phase 1 because ABAC conditions need context.
-_ABAC_ONLY_TOOLS: set[str] = {"delete_s3_object"}
+# Tools whose Phase 1 RBAC check may deny for non-admin roles because the
+# permit is ABAC-conditional on runtime context (e.g. target_department).
+# Phase 1 (no context) is allowed to fall through; Phase 2 (inside the
+# tool function) provides context and re-evaluates Cedar with the full
+# request shape. Without this set, Cedar would deny at Phase 1 for any
+# role whose permit depends on context, even when the tool would have
+# been allowed at Phase 2.
+_ABAC_ONLY_TOOLS: set[str] = {
+    "delete_s3_object",
+    "list_articles",
+    "list_incidents",
+    "create_incident",
+    "update_incident",
+}
 
 
 def require_cedar(tool_name: str):
@@ -440,6 +451,14 @@ async def _get_effective_graph_token(scope: str) -> tuple[str, bool]:
 mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())
 mcp.add_middleware(UserContextMiddleware(policy_evaluator))
 init_obo_exchanger()
+
+# ServiceNow client (service-account auth). Empty instance_url → in-memory mock.
+_sn_cfg = get_section("servicenow")
+init_servicenow_client(
+    instance_url=_sn_cfg.get("instance_url", ""),
+    api_user=_sn_cfg.get("api_user", ""),
+    api_password=_sn_cfg.get("api_password", ""),
+)
 
 
 # ============================================================================
@@ -943,6 +962,183 @@ async def get_time_difference(
         }
     except ValueError as e:
         return {"error": str(e)}
+
+
+# ============================================================================
+# SERVICENOW TOOLS - Cedar pre-check (user-aware) + ServiceNow native ACL
+# Auth model: fixed API token / service account (see mcp_server/servicenow.py).
+# For dept-scoped tools (list_articles, list_incidents, create_incident,
+# update_incident), the tool fetches the resource's u_department from SN and
+# runs a Phase 2 Cedar check (cedar_check_with_context) before the write.
+# OBO upgrade documented as a follow-up in the 2026-05-19 spec.
+# ============================================================================
+
+@mcp.tool(auth=require_cedar("list_knowledge_bases"))
+async def list_knowledge_bases() -> dict:
+    """List ServiceNow knowledge bases visible to the integration user.
+
+    Role-based access (admin/developer/viewer); ServiceNow's own user_criteria
+    filters which KBs the integration user can actually see.
+    """
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+    return await client.list_knowledge_bases()
+
+
+@mcp.tool(auth=require_cedar("list_articles"))
+async def list_articles(kb_identifier: str, query: str = "") -> dict:
+    """List articles in a knowledge base. Composite role + department check.
+
+    Args:
+        kb_identifier: KB sys_id (32-hex) or title (e.g. "IT KB").
+        query: optional substring to match against article short_description.
+
+    Cedar Phase 2 check uses the KB's u_department field as target_department.
+    Developer/viewer must have a matching `principal.department` claim.
+    """
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+
+    kb_meta = await client.get_knowledge_base_metadata(kb_identifier)
+    if kb_meta is None:
+        return {"error": "[TOOL_DENIAL] knowledge base not found"}
+
+    target_dept = kb_meta.get("u_department")
+    decision = cedar_check_with_context(
+        "list_articles", {"target_department": target_dept} if target_dept else {},
+    )
+    if not decision.allowed:
+        logger.info(
+            "Cedar denied list_articles: user=%s role=%s kb=%s ctx.dept=%s reason=%s",
+            current_user_email.get(), current_user_role.get(),
+            kb_meta.get("title"), target_dept, decision.reason,
+        )
+        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+
+    return await client.list_articles(kb_meta["sys_id"], query)
+
+
+@mcp.tool(auth=require_cedar("get_article"))
+async def get_article(sys_id: str) -> dict:
+    """Fetch one knowledge article by sys_id (admin/developer/viewer).
+
+    SN's native ACL on the article filters access; no dept check here because
+    the article's KB lineage isn't reliably inferable without an extra round-trip.
+    """
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+    return await client.get_article(sys_id)
+
+
+@mcp.tool(auth=require_cedar("list_incidents"))
+async def list_incidents(department: str | None = None) -> dict:
+    """List ServiceNow incidents. Composite role + department check when scoped.
+
+    Args:
+        department: optional dept filter. When omitted, defaults to the caller's
+            `principal.department` claim. Cedar enforces match for developer.
+
+    NOTE: In this branch the SN incident table does NOT have a u_department
+    field — that's deferred until the OBO upgrade. The dept check is purely
+    Cedar-side; SN returns whatever the integration user can see.
+    """
+    target_dept = department or (current_user_claims.get() or {}).get("department")
+    decision = cedar_check_with_context(
+        "list_incidents", {"target_department": target_dept} if target_dept else {},
+    )
+    if not decision.allowed:
+        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+    return await client.list_incidents(department=target_dept)
+
+
+@mcp.tool(auth=require_cedar("get_incident"))
+async def get_incident(sys_id: str) -> dict:
+    """Fetch one ServiceNow incident by sys_id (admin/developer).
+
+    SN's native ACL filters per-record access. No Cedar dept check here in
+    this branch — the OBO follow-up adds the fetch-then-check pattern.
+    """
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+    return await client.get_incident(sys_id)
+
+
+@mcp.tool(auth=require_cedar("create_incident"))
+async def create_incident(
+    short_description: str,
+    department: str | None = None,
+    description: str = "",
+    urgency: str = "3",
+) -> dict:
+    """Create a ServiceNow incident. Composite role + department check.
+
+    Args:
+        short_description: brief summary (required).
+        department: dept attribution; defaults to caller's principal.department.
+        description: long-form details (optional).
+        urgency: 1 (high) - 4 (low). Default 3.
+    """
+    target_dept = department or (current_user_claims.get() or {}).get("department")
+    decision = cedar_check_with_context(
+        "create_incident", {"target_department": target_dept} if target_dept else {},
+    )
+    if not decision.allowed:
+        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+    extras: dict = {}
+    if target_dept:
+        extras["u_department"] = target_dept
+    return await client.create_incident(
+        short_description, description=description, urgency=urgency, **extras,
+    )
+
+
+@mcp.tool(auth=require_cedar("update_incident"))
+async def update_incident(sys_id: str, payload: dict) -> dict:
+    """Update a ServiceNow incident (admin or developer in the incident's dept).
+
+    Fetch-then-check pattern: tool first reads the incident's u_department,
+    runs a Phase 2 Cedar check, and only then issues the PUT. This closes
+    a defense-in-depth gap in service-account mode where SN's ACL applies
+    to the integration user rather than the calling end user.
+
+    Args:
+        sys_id: the incident's sys_id.
+        payload: fields to update (e.g. `{"state": "6"}` to resolve).
+    """
+    client = get_servicenow_client()
+    if client is None:
+        return {"error": "ServiceNow client not initialised"}
+
+    incident_resp = await client.get_incident(sys_id)
+    incident = incident_resp.get("result") if isinstance(incident_resp, dict) else None
+    if not isinstance(incident, dict):
+        return {"error": "[TOOL_DENIAL] incident not found"}
+
+    target_dept = incident.get("u_department")
+    decision = cedar_check_with_context(
+        "update_incident", {"target_department": target_dept} if target_dept else {},
+    )
+    if not decision.allowed:
+        logger.info(
+            "Cedar denied update_incident: user=%s role=%s sys_id=%s ctx.dept=%s reason=%s",
+            current_user_email.get(), current_user_role.get(),
+            sys_id, target_dept, decision.reason,
+        )
+        return {"error": f"[TOOL_DENIAL] {decision.reason}"}
+
+    return await client.update_incident(sys_id, payload)
 
 
 if __name__ == "__main__":
