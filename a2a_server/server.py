@@ -699,6 +699,14 @@ TOOL_SCOPES = {
     "list_s3_buckets": [],
     "list_s3_objects": [],
     "get_s3_object_info": [],
+    # ServiceNow tools — no token scopes; SN auth is service-account.
+    "list_knowledge_bases": [],
+    "list_articles": [],
+    "get_article": [],
+    "list_incidents": [],
+    "get_incident": [],
+    "create_incident": [],
+    "update_incident": [],
 }
 
 # All tools known to Cedar (used by /me endpoint to build permissions matrix)
@@ -796,6 +804,7 @@ async def get_me(request: Request):
             "provider": provider,
             "role": active_role,
             "available_roles": available_roles,
+            "department": claims.get("department") or claims.get("custom:department"),
             "groups": user_groups,
             "group_names": group_names,
             "token_scopes": token_scopes,

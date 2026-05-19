@@ -144,6 +144,13 @@ export default function SecurityContextPanel({ scopeKey, onSecurityContext, sele
       </div>
 
       <div className="panel-section">
+        <label>Department</label>
+        {security.department
+          ? <span className="dept-badge">{security.department}</span>
+          : <span className="panel-muted">&mdash; (no claim)</span>}
+      </div>
+
+      <div className="panel-section">
         <label>ABAC Attributes</label>
         <label className="abac-toggle">
           <input
