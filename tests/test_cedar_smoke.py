@@ -626,3 +626,195 @@ unknown_users = "none"
         )
         decision = evaluator.check_access(request, [])
         assert decision.allowed, "User assuming admin should be allowed send_email"
+
+    def test_check_access_batch_includes_servicenow(self, evaluator):
+        """Batch eval must handle all 7 new ServiceNow tools without choking.
+
+        Note: batch eval used by /me does not pass runtime context, so ABAC
+        permits (which require context.target_department) won't fire for
+        developer/viewer. Admin permits are RBAC and require no context, so
+        admin gets all 7 tools in the matrix.
+        """
+        permissions = evaluator.check_access_batch(
+            email="admin@company.com",
+            provider="entra",
+            groups=["admin-group"],
+            tool_names=[
+                "list_knowledge_bases", "list_articles", "get_article",
+                "list_incidents", "get_incident", "create_incident", "update_incident",
+            ],
+            claims={"department": "IT"},
+            assumed_role="admin",
+        )
+        assert all(permissions.values()), (
+            f"Admin should be allowed all 7 SN tools, got: {permissions}"
+        )
+
+
+# ── Test: ServiceNow Cedar policies (RBAC + composite role+dept ABAC) ────
+
+class TestCedarServiceNowPolicies:
+    """ServiceNow tool policies: RBAC for non-dept tools, composite role+dept for dept-scoped tools.
+
+    Validates the two-tier model:
+    1. RBAC (rbac.cedar) — admin: all SN tools; developer + viewer: select tools without dept context.
+    2. ABAC (abac.cedar) — developer + viewer: dept-scoped tools require principal.department == context.target_department.
+    """
+
+    def _sn_request(self, principal_email, tool, target_department=None):
+        ctx = {}
+        if target_department is not None:
+            ctx["target_department"] = target_department
+        return {
+            "principal": f'AgentAuth::User::"{principal_email}"',
+            "action": 'AgentAuth::Action::"call_tool"',
+            "resource": f'AgentAuth::Tool::"{tool}"',
+            "context": ctx,
+        }
+
+    # ── Admin: no dept condition (covered by existing rbac.cedar admin permit) ──
+
+    def test_admin_can_list_any_kb(self, static_entities, file_policies):
+        user = _user_entity("admin@co.com", "entra", ["admin"])
+        result = is_authorized(
+            request=self._sn_request("admin@co.com", "list_knowledge_bases"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    def test_admin_can_list_articles_any_kb(self, static_entities, file_policies):
+        """Admin can call list_articles with no target_department in context."""
+        user = _user_entity("admin@co.com", "entra", ["admin"])
+        result = is_authorized(
+            request=self._sn_request("admin@co.com", "list_articles"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    # ── Developer: composite role + department ──
+
+    def test_developer_lists_own_dept_articles(self, static_entities, file_policies):
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "list_articles", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    def test_developer_blocked_from_other_dept_articles(self, static_entities, file_policies):
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "list_articles", target_department="HR"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
+
+    def test_developer_lists_own_dept_incidents(self, static_entities, file_policies):
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "list_incidents", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    def test_developer_blocked_other_dept_incidents(self, static_entities, file_policies):
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "list_incidents", target_department="HR"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
+
+    def test_developer_creates_own_dept_incident(self, static_entities, file_policies):
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "create_incident", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    def test_developer_updates_own_dept_incident(self, static_entities, file_policies):
+        """Defense-in-depth check on update_incident via fetch-then-Cedar pattern."""
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "update_incident", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    def test_developer_blocked_updating_other_dept_incident(self, static_entities, file_policies):
+        """The bug closure: dev IT must not update HR's incident even via update_incident."""
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "update_incident", target_department="HR"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
+
+    # ── Viewer: composite role + department, KB articles only ──
+
+    def test_viewer_can_read_own_dept_articles(self, static_entities, file_policies):
+        user = _user_entity("viewer-it@co.com", "entra", ["viewer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("viewer-it@co.com", "list_articles", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert result.allowed
+
+    def test_viewer_blocked_from_other_dept_articles(self, static_entities, file_policies):
+        user = _user_entity("viewer-it@co.com", "entra", ["viewer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("viewer-it@co.com", "list_articles", target_department="HR"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
+
+    def test_viewer_cannot_list_incidents(self, static_entities, file_policies):
+        """Viewer has no incident permit anywhere (RBAC nor ABAC)."""
+        user = _user_entity("viewer-it@co.com", "entra", ["viewer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("viewer-it@co.com", "list_incidents", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
+
+    # ── Edge case: principal missing department claim ──
+
+    def test_principal_missing_department_denied(self, static_entities, file_policies):
+        """Developer without department claim → denied on dept-scoped tools."""
+        user = _user_entity("dev-nodept@co.com", "entra", ["developer"])  # no department=
+        result = is_authorized(
+            request=self._sn_request("dev-nodept@co.com", "list_articles", target_department="IT"),
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
+
+    # ── Edge case: tool called without target_department in context ──
+    # (This is what require_cedar()'s Phase 1 sees before the tool body
+    # provides context. Phase 1 passthrough must let the call through.)
+
+    def test_phase1_no_context_denies_developer_param_tools(self, static_entities, file_policies):
+        """Without target_department context, developer's ABAC permit cannot fire.
+        Cedar denies; require_cedar() must rely on _ABAC_PHASE1_PASSTHROUGH to let
+        the call reach Phase 2 where the tool provides context.
+        """
+        user = _user_entity("dev-it@co.com", "entra", ["developer"], department="IT")
+        result = is_authorized(
+            request=self._sn_request("dev-it@co.com", "list_articles"),  # NO target_department
+            policies=file_policies,
+            entities=static_entities + [user],
+        )
+        assert not result.allowed
