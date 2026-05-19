@@ -294,3 +294,98 @@ class TestServiceNowMocked:
             result = await srv.list_knowledge_bases()
         assert "error" in result
         assert "ServiceNow unavailable" in result["error"]
+
+
+# ─── Real-tier @slow tests (KB-only, read-only) ─────────────────────────
+#
+# Gated on TEST_SERVICENOW_INSTANCE env var. Skip cleanly when not set.
+# Per the 2026-05-19 spec: incident u_department field is deferred until
+# the OBO follow-up, so real-tier covers ONLY KB read tools + auth failure.
+# Use real admin credentials in env; admin permits are not dept-conditional.
+
+
+REAL_SN_INSTANCE = os.getenv("TEST_SERVICENOW_INSTANCE", "")
+REAL_SN_USER = os.getenv("TEST_SERVICENOW_USER", "")
+REAL_SN_PASS = os.getenv("TEST_SERVICENOW_PASS", "")
+
+real_sn_required = pytest.mark.skipif(
+    not (REAL_SN_INSTANCE and REAL_SN_USER and REAL_SN_PASS),
+    reason="TEST_SERVICENOW_* env vars not set",
+)
+
+
+@pytest.fixture
+def real_sn_live_client():
+    """Override the autouse fake-instance fixture: point the singleton at a
+    real ServiceNow instance via env vars. Used by TestServiceNowReal."""
+    srv.init_servicenow_client(REAL_SN_INSTANCE, REAL_SN_USER, REAL_SN_PASS)
+    yield
+    srv.init_servicenow_client("")  # restore mock for other tests
+
+
+@pytest.mark.slow
+@real_sn_required
+class TestServiceNowReal:
+    """Read-only @slow smoke tests against a real ServiceNow dev instance.
+
+    Skipped unless TEST_SERVICENOW_INSTANCE, TEST_SERVICENOW_USER, and
+    TEST_SERVICENOW_PASS are all set.
+    """
+
+    @pytest.mark.asyncio
+    async def test_real_admin_lists_knowledge_bases(
+        self, permissions_toml, real_sn_live_client, set_user,
+    ):
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        result = await srv.list_knowledge_bases()
+        assert "error" not in result, f"Real SN call failed: {result}"
+        assert isinstance(result.get("result"), list)
+
+    @pytest.mark.asyncio
+    async def test_real_admin_lists_articles_in_kb(
+        self, permissions_toml, real_sn_live_client, set_user,
+    ):
+        """Pick the first available KB and list its articles. Read-only."""
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        kbs = await srv.list_knowledge_bases()
+        assert "error" not in kbs and kbs.get("result"), \
+            "Need at least one KB to exercise list_articles"
+        first_kb = kbs["result"][0]
+        result = await srv.list_articles(first_kb["sys_id"])
+        # Admin permits without dept context, so a KB without u_department
+        # still returns articles (Cedar admin permit fires unconditionally).
+        assert "error" not in result, f"Real SN list_articles failed: {result}"
+
+    @pytest.mark.asyncio
+    async def test_real_admin_gets_specific_article(
+        self, permissions_toml, real_sn_live_client, set_user,
+    ):
+        """Round-trip: fetch a KB, list its articles, then GET one by sys_id."""
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        kbs = await srv.list_knowledge_bases()
+        first_kb = kbs["result"][0]
+        articles = await srv.list_articles(first_kb["sys_id"])
+        if not articles.get("result"):
+            pytest.skip("Real instance has no articles in the first KB")
+        first_art = articles["result"][0]
+        result = await srv.get_article(first_art["sys_id"])
+        assert "error" not in result
+        assert result["result"]["sys_id"] == first_art["sys_id"]
+
+    @pytest.mark.asyncio
+    async def test_real_servicenow_auth_failure_handled(
+        self, permissions_toml, set_user,
+    ):
+        """Wrong credentials → normalised auth error, not a stack trace."""
+        srv.init_servicenow_client(REAL_SN_INSTANCE, "fake-user", "fake-password")
+        try:
+            set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+            result = await srv.list_knowledge_bases()
+            assert "error" in result
+            assert (
+                "auth failed" in result["error"].lower()
+                or result.get("status") == 401
+                or "access denied" in result["error"].lower()
+            ), f"Unexpected response for bad credentials: {result}"
+        finally:
+            srv.init_servicenow_client("")  # restore mock
