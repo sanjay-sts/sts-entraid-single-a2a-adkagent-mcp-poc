@@ -42,3 +42,9 @@ instance_url = ""
 #   api_password = "<your-password>"
 api_user     = ""
 api_password = ""
+# OBO (hybrid model): when set, the MCP server exchanges the end user's Entra
+# token for a ServiceNow-scoped token so SN applies that user's own ACLs.
+# Empty → OBO off; every call uses the service account above. Entra-only;
+# requires ENTRA_CLIENT_SECRET. See docs/servicenow-obo-setup.md.
+#   obo_scope = "api://<servicenow-app-id>/.default"
+obo_scope    = ""

@@ -382,6 +382,93 @@ class TestServiceNowMocked:
         assert not put_route.called
 
 
+class _StubExchanger:
+    """Stand-in OBO exchanger that always yields a fixed user token."""
+
+    async def get_sn_token(self, assertion: str) -> str:
+        return "fake-sn-token"
+
+
+class TestServiceNowOBOSeam:
+    """The OBO token seam (hybrid model, 2026-05-20 spec).
+
+    When an exchanger yields a user token, the SN client must send
+    `Authorization: Bearer <token>` so ServiceNow can apply that user's ACLs.
+    Otherwise it falls back to the service-account Basic auth. Real per-user
+    enforcement is verified against a live instance once SN is provisioned;
+    here we assert only that the token is threaded correctly.
+    """
+
+    @pytest.mark.asyncio
+    async def test_obo_token_used_when_entra_and_configured(
+        self, permissions_toml, set_user, monkeypatch,
+    ):
+        monkeypatch.setattr(srv, "get_sn_obo_exchanger", lambda: _StubExchanger())
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=True) as mock:
+            route = mock.get("/api/now/table/kb_knowledge_base").mock(
+                return_value=httpx.Response(200, json={"result": []})
+            )
+            await srv.list_knowledge_bases()
+        assert route.calls.last.request.headers.get("Authorization") == "Bearer fake-sn-token"
+
+    @pytest.mark.asyncio
+    async def test_obo_falls_back_to_basic_when_exchanger_absent(
+        self, permissions_toml, set_user, monkeypatch,
+    ):
+        monkeypatch.setattr(srv, "get_sn_obo_exchanger", lambda: None)
+        set_user(email="admin@co.com", role="admin", groups=["admin-group"])
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=True) as mock:
+            route = mock.get("/api/now/table/kb_knowledge_base").mock(
+                return_value=httpx.Response(200, json={"result": []})
+            )
+            await srv.list_knowledge_bases()
+        auth = route.calls.last.request.headers.get("Authorization", "")
+        assert auth.startswith("Basic "), f"expected service-account Basic, got: {auth!r}"
+
+    @pytest.mark.asyncio
+    async def test_obo_skipped_for_non_entra_user(
+        self, permissions_toml, set_user, monkeypatch,
+    ):
+        """OBO is Entra-only: a Cognito user must use Basic even when an
+        exchanger is present — the Entra guard short-circuits first."""
+        monkeypatch.setattr(srv, "get_sn_obo_exchanger", lambda: _StubExchanger())
+        set_user(
+            email="dev@co.com", role="admin", groups=["admin-group"],
+            provider="cognito",
+        )
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=True) as mock:
+            route = mock.get("/api/now/table/kb_knowledge_base").mock(
+                return_value=httpx.Response(200, json={"result": []})
+            )
+            await srv.list_knowledge_bases()
+        auth = route.calls.last.request.headers.get("Authorization", "")
+        assert auth.startswith("Basic "), f"non-Entra must use Basic, got: {auth!r}"
+
+    @pytest.mark.asyncio
+    async def test_obo_threaded_through_both_list_articles_calls(
+        self, permissions_toml, set_user, monkeypatch,
+    ):
+        """list_articles makes two SN calls (KB metadata, then articles); both
+        must carry the user's OBO token."""
+        monkeypatch.setattr(srv, "get_sn_obo_exchanger", lambda: _StubExchanger())
+        set_user(
+            email="dev-it@co.com", role="developer", groups=["dev-group"],
+            claims={"department": "IT"},
+        )
+        with respx.mock(base_url=INSTANCE_URL, assert_all_called=True) as mock:
+            kb_route = mock.get("/api/now/table/kb_knowledge_base").mock(
+                return_value=httpx.Response(200, json={"result": [_kb("kb-it", "IT KB", "IT")]})
+            )
+            art_route = mock.get("/api/now/table/kb_knowledge").mock(
+                return_value=httpx.Response(200, json={"result": [_article("a1", "kb-it", "VPN")]})
+            )
+            result = await srv.list_articles("IT KB")
+        assert "error" not in result
+        assert kb_route.calls.last.request.headers.get("Authorization") == "Bearer fake-sn-token"
+        assert art_route.calls.last.request.headers.get("Authorization") == "Bearer fake-sn-token"
+
+
 # ─── Real-tier @slow tests (KB-only, read-only) ─────────────────────────
 #
 # Gated on TEST_SERVICENOW_INSTANCE env var. Skip cleanly when not set.
@@ -474,4 +561,60 @@ class TestServiceNowReal:
                 or "access denied" in result["error"].lower()
             ), f"Unexpected response for bad credentials: {result}"
         finally:
+            srv.init_servicenow_client("")  # restore mock
+
+
+# ─── Real-tier OBO smoke (per-user identity reaches ServiceNow) ──────────
+#
+# Gated on the KB real-tier env vars PLUS:
+#   TEST_SERVICENOW_OBO=1
+#   TEST_SERVICENOW_OBO_SCOPE = api://<sn-app-id>/.default
+#   TEST_SERVICENOW_OBO_USER_TOKEN = a pre-acquired Entra user assertion JWT
+#   ENTRA_TENANT_ID / ENTRA_CLIENT_ID / ENTRA_CLIENT_SECRET (for the exchange)
+# Skips cleanly otherwise. Read-only. Proves the OBO exchange + bearer call
+# succeed end-to-end and ServiceNow accepts the user's identity.
+
+REAL_SN_OBO = os.getenv("TEST_SERVICENOW_OBO", "")
+REAL_SN_OBO_SCOPE = os.getenv("TEST_SERVICENOW_OBO_SCOPE", "")
+REAL_SN_OBO_USER_TOKEN = os.getenv("TEST_SERVICENOW_OBO_USER_TOKEN", "")
+
+real_sn_obo_required = pytest.mark.skipif(
+    not (
+        REAL_SN_INSTANCE and REAL_SN_USER and REAL_SN_PASS
+        and REAL_SN_OBO and REAL_SN_OBO_SCOPE and REAL_SN_OBO_USER_TOKEN
+    ),
+    reason="TEST_SERVICENOW_OBO* env vars not set",
+)
+
+
+@pytest.mark.slow
+@real_sn_obo_required
+class TestServiceNowRealOBO:
+    """Read-only @slow smoke proving OBO carries the end user to ServiceNow."""
+
+    @pytest.mark.asyncio
+    async def test_real_obo_user_identity_reaches_sn(
+        self, permissions_toml, set_user,
+    ):
+        import servicenow_obo
+
+        srv.init_servicenow_client(REAL_SN_INSTANCE, REAL_SN_USER, REAL_SN_PASS)
+        servicenow_obo.init_sn_obo_exchanger(REAL_SN_OBO_SCOPE)
+        try:
+            assert srv.get_sn_obo_exchanger() is not None, (
+                "OBO exchanger not configured — set ENTRA_CLIENT_SECRET so the "
+                "exchange path is actually exercised (not the Basic fallback)."
+            )
+            set_user(
+                email="obo-user@co.com", role="developer", groups=["dev-group"],
+                claims={"department": "IT"}, provider="entra",
+            )
+            # Override the placeholder token with the real Entra user assertion.
+            srv.current_user_token.set(REAL_SN_OBO_USER_TOKEN)
+
+            result = await srv.list_knowledge_bases()
+            assert "error" not in result, f"Real OBO call failed: {result}"
+            assert isinstance(result.get("result"), list)
+        finally:
+            servicenow_obo._exchanger = None
             srv.init_servicenow_client("")  # restore mock

@@ -141,6 +141,30 @@ X-Abac-Attrs cannot override it.
 already exercise these. Real-tier `@slow` tests cover KB-only (read-only, 4
 tests).
 
+## ServiceNow hybrid OBO seam (2026-05-20 branch `feature/servicenow-obo-hybrid`)
+
+Adds per-user enforcement on top of the Cedar pre-check: Cedar (fail-fast) →
+Entra OBO token → ServiceNow native ACL (authoritative). The SN client sends
+`Authorization: Bearer <user-OBO-token>` when an exchanger is configured, else
+falls back to service-account Basic auth. The seam is dormant until
+`[servicenow].obo_scope` + `ENTRA_CLIENT_SECRET` are set, so all prior tests are
+unaffected (verified: baseline stayed green).
+
+| # | Scenario | Provider | Exchanger | Tool | Expected auth | Test |
+|---|----------|----------|-----------|------|---------------|------|
+| 1 | OBO token threaded when configured | entra | stub→token | list_knowledge_bases | `Bearer fake-sn-token` | test_obo_token_used_when_entra_and_configured |
+| 2 | Fallback to service account | entra | none | list_knowledge_bases | `Basic …` | test_obo_falls_back_to_basic_when_exchanger_absent |
+| 3 | Entra-only guard | cognito | stub→token | list_knowledge_bases | `Basic …` (no OBO) | test_obo_skipped_for_non_entra_user |
+| 4 | Threaded through both SN calls | entra | stub→token | list_articles | `Bearer` on KB + article GET | test_obo_threaded_through_both_list_articles_calls |
+
+**OBO exchanger unit tests** (`tests/test_servicenow_obo.py`, 6 tests): scope
+passed to `OnBehalfOfCredential`, exchange failure → `None`, per-assertion
+credential cache, disabled when scope/secret unset.
+
+**Real-tier `@slow`** (`TestServiceNowRealOBO`, 1 test): env-gated end-to-end
+OBO smoke (`TEST_SERVICENOW_OBO*`); read-only; skips cleanly without a live
+instance.
+
 ## Bugs Found
 
 | # | Title | Severity | Status | Description | Fix |

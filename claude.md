@@ -45,6 +45,9 @@ A secure, multi-tier AI agent system where user identity propagates from fronten
 ├── mcp_server/
 │   ├── server.py              # FastMCP tools — Cedar ABAC auth, UserContextMiddleware, 18 tools (11 original + 7 ServiceNow)
 │   ├── graph_obo.py           # OBO token exchange for Graph API — GraphOBOExchanger singleton
+│   ├── servicenow.py          # ServiceNow Table API client — Bearer (OBO) or Basic (service account)
+│   ├── servicenow_obo.py      # OBO token exchange for ServiceNow — ServiceNowOBOExchanger singleton
+│   ├── servicenow_mock.py     # In-memory ServiceNow mock (used when instance_url empty)
 │   └── policy.py              # PolicyEvaluator interface + TomlPolicyEvaluator + CedarPolicyEvaluator
 ├── cedar/
 │   ├── schema.cedarschema     # Cedar entity types: User, Role, Tool, S3Folder + actions
@@ -118,7 +121,11 @@ ServiceNow dept-ABAC is enforced via Cedar pre-check at the agent layer
 BEFORE the SN call. The dept claim comes from the validated JWT (Entra
 `department` claim or Cognito `custom:department`); it is NOT settable
 via the X-Abac-Attrs header (see `dev_config.HEADER_BLOCKED_ABAC_KEYS`).
-See `docs/servicenow-integration.md` and `docs/entra-department-claim-mapping.md`.
+Hybrid OBO mode (Entra-only; dormant until `[servicenow].obo_scope` is set)
+additionally exchanges the user's token so ServiceNow enforces its own
+per-user ACLs — Cedar stays the fail-fast gate. See
+`docs/servicenow-integration.md`, `docs/servicenow-obo-setup.md`, and
+`docs/entra-department-claim-mapping.md`.
 ```
 
 Tool permissions are declared as Cedar policies in `cedar/policies/` and enforced via `auth=require_cedar("tool_name")` on each `@mcp.tool()` decorator in `mcp_server/server.py`. ABAC tools (e.g., `delete_s3_object`) additionally call `cedar_check_with_context()` inside the tool function for path-based access control.
@@ -195,9 +202,12 @@ When `ENTRA_CLIENT_SECRET` is set, Graph tools exchange the user's custom-audien
 - `list_files`, `send_email` return informative errors
 - Non-Entra users get `{"error": "provider_not_supported"}`
 
+**ServiceNow (hybrid model):** the 7 SN tools use the same pattern via `ServiceNowOBOExchanger` (`mcp_server/servicenow_obo.py`). When `[servicenow].obo_scope` + `ENTRA_CLIENT_SECRET` are set, each call carries the user's OBO token (`Authorization: Bearer`) so ServiceNow applies that user's ACLs; otherwise the SN client falls back to service-account HTTP Basic and Cedar is the sole authority. Entra-only — Cognito users always use the service-account path. Dormant by default. See `docs/servicenow-obo-setup.md`.
+
 Helper functions in `mcp_server/server.py`:
 - `_require_entra_provider()` — returns error dict for non-Entra users
 - `_get_effective_graph_token(scope)` — returns `(token, obo_used)` tuple
+- `_get_effective_sn_token()` — returns `(token, obo_used)` for ServiceNow calls
 
 ### Cedar Authorization (ABAC)
 
@@ -392,7 +402,7 @@ uv run pytest tests/test_access_control.py -v
 6. **Permission store**: `permissions.toml` is gitignored; group-to-role mappings are per-provider
 7. **Multi-IdP**: Provider detected from `iss` claim; group mappings under `[group_rules.<provider>]`
 8. **Graph API constants**: `GRAPH_API_BASE` in `mcp_server/server.py`
-9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` / `_parse_abac_attrs_header()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `_build_access_request()` / `require_cedar()` / `cedar_check_with_context()` / `_parse_abac_attrs_header()` (MCP), `detect_provider()` / `PERMISSIONS_PATH` / `CEDAR_DIR` (shared in `dev_config.py`), `check_access_batch()` (CedarPolicyEvaluator)
+9. **Extracted helpers**: `_extract_bearer_token()` (ADK), `_make_task_event()` / `_extract_user_info()` / `_parse_abac_attrs_header()` (A2A), `_require_entra_provider()` / `_get_effective_graph_token()` / `_get_effective_sn_token()` / `_build_access_request()` / `require_cedar()` / `cedar_check_with_context()` / `_parse_abac_attrs_header()` (MCP), `detect_provider()` / `PERMISSIONS_PATH` / `CEDAR_DIR` (shared in `dev_config.py`), `check_access_batch()` (CedarPolicyEvaluator)
 10. **Frontend shared utilities**: `a2aClient.js` centralizes API calls + `buildAuditEntry()`; `constants.js` holds `A2A_SERVER_URL` and `PROVIDER_LABELS`
 11. **Lazy logger formatting**: Use `logger.info("msg: %s", val)` not f-strings in hot paths
 

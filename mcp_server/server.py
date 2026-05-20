@@ -32,6 +32,7 @@ from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN, detect_p
 from policy import AccessRequest, AccessDecision, PolicyEvaluator, TomlPolicyEvaluator, CedarPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
 from servicenow import init_servicenow_client, get_servicenow_client
+from servicenow_obo import init_sn_obo_exchanger, get_sn_obo_exchanger
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
 current_user_token: ContextVar[str] = ContextVar("current_user_token", default="")
@@ -477,6 +478,28 @@ async def _get_effective_graph_token(scope: str) -> tuple[str, bool]:
     return effective_token, graph_token is not None
 
 
+async def _get_effective_sn_token() -> tuple[str | None, bool]:
+    """Best token for ServiceNow REST calls. Returns (token, obo_used).
+
+    A None token tells ServiceNowClient to use service-account Basic auth (and
+    the mock to ignore it). Mirrors _get_graph_token: OBO is Entra-only and
+    stays dormant unless [servicenow].obo_scope + ENTRA_CLIENT_SECRET are set.
+    """
+    if current_user_provider.get() != "entra":
+        return None, False
+
+    exchanger = get_sn_obo_exchanger()
+    if not exchanger:
+        return None, False
+
+    user_token = current_user_token.get()
+    if not user_token or user_token == DEV_BYPASS_TOKEN:
+        return None, False
+
+    sn_token = await exchanger.get_sn_token(user_token)
+    return sn_token, sn_token is not None
+
+
 # --- Initialize FastMCP with built-in auth + middleware ---
 
 mcp = FastMCP(name="Identity-Aware MCP Server", auth=_build_auth())
@@ -490,6 +513,8 @@ init_servicenow_client(
     api_user=_sn_cfg.get("api_user", ""),
     api_password=_sn_cfg.get("api_password", ""),
 )
+# OBO is Entra-only and dormant unless obo_scope + ENTRA_CLIENT_SECRET are set.
+init_sn_obo_exchanger(_sn_cfg.get("obo_scope", ""))
 
 
 # ============================================================================
@@ -1014,7 +1039,8 @@ async def list_knowledge_bases() -> dict:
     client = get_servicenow_client()
     if client is None:
         return {"error": "ServiceNow client not initialised"}
-    return await client.list_knowledge_bases()
+    sn_token, _ = await _get_effective_sn_token()
+    return await client.list_knowledge_bases(token=sn_token)
 
 
 @mcp.tool(auth=require_cedar("list_articles"))
@@ -1032,7 +1058,8 @@ async def list_articles(kb_identifier: str, query: str = "") -> dict:
     if client is None:
         return {"error": "ServiceNow client not initialised"}
 
-    kb_meta = await client.get_knowledge_base_metadata(kb_identifier)
+    sn_token, _ = await _get_effective_sn_token()
+    kb_meta = await client.get_knowledge_base_metadata(kb_identifier, token=sn_token)
     if kb_meta is None:
         return {"error": "[TOOL_DENIAL] knowledge base not found"}
 
@@ -1053,7 +1080,7 @@ async def list_articles(kb_identifier: str, query: str = "") -> dict:
     if denial:
         return denial
 
-    return await client.list_articles(kb_meta["sys_id"], query)
+    return await client.list_articles(kb_meta["sys_id"], query, token=sn_token)
 
 
 @mcp.tool(auth=require_cedar("get_article"))
@@ -1066,7 +1093,8 @@ async def get_article(sys_id: str) -> dict:
     client = get_servicenow_client()
     if client is None:
         return {"error": "ServiceNow client not initialised"}
-    return await client.get_article(sys_id)
+    sn_token, _ = await _get_effective_sn_token()
+    return await client.get_article(sys_id, token=sn_token)
 
 
 @mcp.tool(auth=require_cedar("list_incidents"))
@@ -1089,7 +1117,8 @@ async def list_incidents(department: str | None = None) -> dict:
     client = get_servicenow_client()
     if client is None:
         return {"error": "ServiceNow client not initialised"}
-    return await client.list_incidents(department=target_dept)
+    sn_token, _ = await _get_effective_sn_token()
+    return await client.list_incidents(department=target_dept, token=sn_token)
 
 
 @mcp.tool(auth=require_cedar("get_incident"))
@@ -1102,7 +1131,8 @@ async def get_incident(sys_id: str) -> dict:
     client = get_servicenow_client()
     if client is None:
         return {"error": "ServiceNow client not initialised"}
-    return await client.get_incident(sys_id)
+    sn_token, _ = await _get_effective_sn_token()
+    return await client.get_incident(sys_id, token=sn_token)
 
 
 @mcp.tool(auth=require_cedar("create_incident"))
@@ -1128,9 +1158,11 @@ async def create_incident(
     client = get_servicenow_client()
     if client is None:
         return {"error": "ServiceNow client not initialised"}
+    sn_token, _ = await _get_effective_sn_token()
     extras = {"u_department": target_dept} if target_dept else {}
     return await client.create_incident(
-        short_description, description=description, urgency=urgency, **extras,
+        short_description, description=description, urgency=urgency,
+        token=sn_token, **extras,
     )
 
 
@@ -1151,8 +1183,9 @@ async def update_incident(sys_id: str, payload: dict) -> dict:
     if client is None:
         return {"error": "ServiceNow client not initialised"}
 
+    sn_token, _ = await _get_effective_sn_token()
     # Fetch-then-check (load-bearing for defense-in-depth — see docstring).
-    incident_resp = await client.get_incident(sys_id)
+    incident_resp = await client.get_incident(sys_id, token=sn_token)
     if not isinstance(incident_resp, dict):
         return {"error": "[TOOL_ERROR] unexpected response from ServiceNow"}
     # Distinguish SN-side failure (connect error, 5xx) from a real 404.
@@ -1175,7 +1208,7 @@ async def update_incident(sys_id: str, payload: dict) -> dict:
     if denial:
         return denial
 
-    return await client.update_incident(sys_id, payload)
+    return await client.update_incident(sys_id, payload, token=sn_token)
 
 
 if __name__ == "__main__":

@@ -123,14 +123,19 @@ The real-tier tests are **read-only**: list KBs, list articles, get one
 article, and one auth-failure check with bad credentials. No data is created
 or modified.
 
-## Switching to OBO (future)
+## Hybrid OBO mode
 
-The spec's "post-plan-exit follow-ups" section documents the OBO upgrade:
+The service-account auth above is the **fallback**. The hybrid model adds
+per-user enforcement: when configured, the MCP server exchanges the end user's
+Entra token (On-Behalf-Of) for a ServiceNow-scoped token, so ServiceNow applies
+that user's own ACLs (KB `user_criteria`, incident record rules). Cedar stays as
+the fail-fast agent-side gate (defense in depth).
 
-- Configure ServiceNow as an Entra OAuth resource (App Registry + OIDC trust)
-- Add `mcp_server/servicenow_obo.py` mirroring `graph_obo.py`
-- Add `u_department` to the incident table
-- Update `list_incidents` / `get_incident` / `create_incident` / `update_incident`
-  to use SN's native `caller_id.department` join where appropriate
+The code seam ships in this branch — `mcp_server/servicenow_obo.py` and
+`_get_effective_sn_token()` in `mcp_server/server.py` — and stays **dormant**
+until `[servicenow].obo_scope` and `ENTRA_CLIENT_SECRET` are set. To turn it on,
+follow **[`servicenow-obo-setup.md`](servicenow-obo-setup.md)**.
 
-That's a separate branch.
+> OBO is Entra-only. Cognito users keep the service-account path, so Cedar is
+> the only authority for them. The incident `u_department` field remains
+> deferred (real-tier incident dept-ABAC is exercised only by mocked tests).

@@ -1,7 +1,10 @@
 """In-memory ServiceNow mock — used when [servicenow].instance_url is empty.
 
-Same method surface as `servicenow.ServiceNowClient`. Wraps the same
-{"result": ...} envelope ServiceNow uses on the real REST API so tool
+Same method surface as `servicenow.ServiceNowClient`, including the optional
+per-call `token` kwarg (the OBO bearer token). The mock cannot enforce a real
+ACL, so it ignores the token for data filtering but records it as
+`last_token` so tests can assert the tool layer threaded it through. Wraps the
+same {"result": ...} envelope ServiceNow uses on the real REST API so tool
 code that consumes either client looks identical.
 
 The mock includes a `u_department` field on incidents (which real SN does
@@ -59,7 +62,8 @@ class ServiceNowMockClient:
 
     State is per-instance (not shared between tests in the same process
     unless the singleton is reused). Tests that want a fresh state should
-    reinitialise via init_servicenow_client("").
+    reinitialise via init_servicenow_client(""). The `token` kwarg on each
+    method is recorded as `last_token` but does not affect returned data.
     """
 
     def __init__(self) -> None:
@@ -67,13 +71,18 @@ class ServiceNowMockClient:
         self._articles = copy.deepcopy(_ARTICLE_DATA)
         self._incidents = copy.deepcopy(_INCIDENT_DATA)
         self._inc_counter = max(int(i["number"][3:]) for i in self._incidents) + 1
+        self.last_token: str | None = None
 
     # ── Knowledge Bases ──────────────────────────────────────────────
 
-    async def list_knowledge_bases(self) -> dict:
+    async def list_knowledge_bases(self, token: str | None = None) -> dict:
+        self.last_token = token
         return _envelope(list(self._kbs))
 
-    async def get_knowledge_base_metadata(self, identifier: str) -> dict | None:
+    async def get_knowledge_base_metadata(
+        self, identifier: str, token: str | None = None
+    ) -> dict | None:
+        self.last_token = token
         for kb in self._kbs:
             if kb["sys_id"] == identifier or kb["title"] == identifier:
                 return kb
@@ -81,14 +90,18 @@ class ServiceNowMockClient:
 
     # ── Articles ─────────────────────────────────────────────────────
 
-    async def list_articles(self, kb_sys_id: str, query: str = "") -> dict:
+    async def list_articles(
+        self, kb_sys_id: str, query: str = "", token: str | None = None
+    ) -> dict:
+        self.last_token = token
         matches = [a for a in self._articles if a["kb_knowledge_base"] == kb_sys_id]
         if query:
             q = query.lower()
             matches = [a for a in matches if q in a["short_description"].lower()]
         return _envelope(matches)
 
-    async def get_article(self, sys_id: str) -> dict:
+    async def get_article(self, sys_id: str, token: str | None = None) -> dict:
+        self.last_token = token
         for a in self._articles:
             if a["sys_id"] == sys_id:
                 return _envelope(a)
@@ -96,10 +109,14 @@ class ServiceNowMockClient:
 
     # ── Incidents ────────────────────────────────────────────────────
 
-    async def list_incidents(self, department: str | None = None) -> dict:
+    async def list_incidents(
+        self, department: str | None = None, token: str | None = None
+    ) -> dict:
+        self.last_token = token
         return _envelope(list(self._incidents))
 
-    async def get_incident(self, sys_id: str) -> dict:
+    async def get_incident(self, sys_id: str, token: str | None = None) -> dict:
+        self.last_token = token
         for i in self._incidents:
             if i["sys_id"] == sys_id:
                 return _envelope(i)
@@ -110,8 +127,10 @@ class ServiceNowMockClient:
         short_description: str,
         description: str = "",
         urgency: str = "3",
+        token: str | None = None,
         **extras: Any,
     ) -> dict:
+        self.last_token = token
         new_num = f"INC{self._inc_counter:07d}"
         self._inc_counter += 1
         record = {
@@ -126,7 +145,10 @@ class ServiceNowMockClient:
         self._incidents.append(record)
         return _envelope(record)
 
-    async def update_incident(self, sys_id: str, payload: dict) -> dict:
+    async def update_incident(
+        self, sys_id: str, payload: dict, token: str | None = None
+    ) -> dict:
+        self.last_token = token
         for i in self._incidents:
             if i["sys_id"] == sys_id:
                 i.update(payload)
