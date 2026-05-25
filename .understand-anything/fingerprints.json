@@ -1,0 +1,3643 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "9fd598e84a5db143dc21065e61e764f6f930ca10",
+  "generatedAt": "2026-05-25T14:06:50.740Z",
+  "files": {
+    ".env.example": {
+      "filePath": ".env.example",
+      "contentHash": "306b4e982814cdff49d4ccad19c5dce5b39a4354e60eeb8c6e5551571efbe627",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 88,
+      "hasStructuralAnalysis": true
+    },
+    "a2a_server/server.py": {
+      "filePath": "a2a_server/server.py",
+      "contentHash": "a3aba7d139cc1e39d6e86ac680d3ebdc36b575404675ea46fcc2758e816082b2",
+      "functions": [
+        {
+          "name": "_build_idp_configs",
+          "params": [],
+          "returnType": "list[IdPConfig]",
+          "exported": true,
+          "lineCount": 35
+        },
+        {
+          "name": "_make_task_event",
+          "params": [
+            "context",
+            "state",
+            "text",
+            "final"
+          ],
+          "returnType": "TaskStatusUpdateEvent",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "_extract_message_text",
+          "params": [
+            "message"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "_cors_headers",
+          "params": [
+            "request"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "_auth_error",
+          "params": [
+            "request",
+            "status_code",
+            "error",
+            "message",
+            "denial_reason",
+            "extra_headers"
+          ],
+          "returnType": "Response",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "auth_middleware",
+          "params": [
+            "request",
+            "call_next"
+          ],
+          "exported": true,
+          "lineCount": 100
+        },
+        {
+          "name": "_extract_user_info",
+          "params": [
+            "claims",
+            "provider"
+          ],
+          "returnType": "tuple[str, str, list]",
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "health",
+          "params": [],
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "get_me",
+          "params": [
+            "request"
+          ],
+          "exported": true,
+          "lineCount": 73
+        }
+      ],
+      "classes": [
+        {
+          "name": "IdPConfig",
+          "methods": [
+            "__post_init__"
+          ],
+          "properties": [
+            "name",
+            "jwks_uris",
+            "valid_issuers",
+            "valid_audiences",
+            "algorithms",
+            "audience_claim"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TokenValidator",
+          "methods": [
+            "__init__",
+            "get_jwks",
+            "clear_cache",
+            "_detect_idp",
+            "_get_keys_for_idp",
+            "validate"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 120
+        },
+        {
+          "name": "IdentityAwareAgentExecutor",
+          "methods": [
+            "execute",
+            "cancel",
+            "_ensure_session"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 97
+        }
+      ],
+      "imports": [
+        {
+          "source": "asyncio",
+          "specifiers": [
+            "asyncio"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "uuid",
+          "specifiers": [
+            "uuid"
+          ]
+        },
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "contextvars",
+          "specifiers": [
+            "ContextVar"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "httpx",
+          "specifiers": [
+            "httpx"
+          ]
+        },
+        {
+          "source": "jwt",
+          "specifiers": [
+            "jwt"
+          ]
+        },
+        {
+          "source": "dotenv",
+          "specifiers": [
+            "load_dotenv"
+          ]
+        },
+        {
+          "source": "fastapi",
+          "specifiers": [
+            "FastAPI",
+            "Request",
+            "Response"
+          ]
+        },
+        {
+          "source": "fastapi.middleware.cors",
+          "specifiers": [
+            "CORSMiddleware"
+          ]
+        },
+        {
+          "source": "dev_config",
+          "specifiers": [
+            "is_auth_disabled",
+            "get_section",
+            "DEV_BYPASS_TOKEN",
+            "detect_provider",
+            "parse_abac_attrs",
+            "PERMISSIONS_PATH",
+            "CEDAR_DIR"
+          ]
+        },
+        {
+          "source": "policy",
+          "specifiers": [
+            "TomlPolicyEvaluator",
+            "CedarPolicyEvaluator"
+          ]
+        },
+        {
+          "source": "a2a.server.apps",
+          "specifiers": [
+            "A2AStarletteApplication"
+          ]
+        },
+        {
+          "source": "a2a.server.request_handlers",
+          "specifiers": [
+            "DefaultRequestHandler"
+          ]
+        },
+        {
+          "source": "a2a.server.agent_execution",
+          "specifiers": [
+            "AgentExecutor",
+            "RequestContext"
+          ]
+        },
+        {
+          "source": "a2a.server.events",
+          "specifiers": [
+            "EventQueue"
+          ]
+        },
+        {
+          "source": "a2a.server.tasks",
+          "specifiers": [
+            "InMemoryTaskStore"
+          ]
+        },
+        {
+          "source": "a2a.types",
+          "specifiers": [
+            "AgentCard",
+            "AgentSkill",
+            "AgentCapabilities",
+            "Message",
+            "Part",
+            "TextPart",
+            "TaskState",
+            "TaskStatus",
+            "TaskStatusUpdateEvent",
+            "SecurityScheme",
+            "HTTPAuthSecurityScheme"
+          ]
+        }
+      ],
+      "exports": [
+        "IdPConfig",
+        "_build_idp_configs",
+        "TokenValidator",
+        "_make_task_event",
+        "_extract_message_text",
+        "IdentityAwareAgentExecutor",
+        "_cors_headers",
+        "_auth_error",
+        "auth_middleware",
+        "_extract_user_info",
+        "health",
+        "get_me"
+      ],
+      "totalLines": 822,
+      "hasStructuralAnalysis": true
+    },
+    "adk_agent/agent.py": {
+      "filePath": "adk_agent/agent.py",
+      "contentHash": "0faf6894848fd235cedb8fbeb8d3a93434ea5e247f04f7a537f21bae11fb3917",
+      "functions": [
+        {
+          "name": "mcp_header_provider",
+          "params": [
+            "readonly_context"
+          ],
+          "returnType": "dict[str, str]",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "_extract_bearer_token",
+          "params": [
+            "request",
+            "endpoint"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "_validate_user_id",
+          "params": [
+            "access_token",
+            "user_id"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "create_session",
+          "params": [
+            "request"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "_parse_chat_request",
+          "params": [
+            "request",
+            "endpoint"
+          ],
+          "returnType": "tuple[str, str, str, str, str, dict]",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "chat",
+          "params": [
+            "request"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "chat_stream",
+          "params": [
+            "request"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "health",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "IdentityAwareAgent",
+          "methods": [
+            "__init__",
+            "create_session",
+            "_determine_role",
+            "get_identity_info",
+            "check_my_permissions",
+            "chat"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 199
+        }
+      ],
+      "imports": [
+        {
+          "source": "asyncio",
+          "specifiers": [
+            "asyncio"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "AsyncGenerator"
+          ]
+        },
+        {
+          "source": "dotenv",
+          "specifiers": [
+            "load_dotenv"
+          ]
+        },
+        {
+          "source": "fastapi",
+          "specifiers": [
+            "FastAPI",
+            "Request",
+            "HTTPException"
+          ]
+        },
+        {
+          "source": "fastapi.middleware.cors",
+          "specifiers": [
+            "CORSMiddleware"
+          ]
+        },
+        {
+          "source": "fastapi.responses",
+          "specifiers": [
+            "StreamingResponse"
+          ]
+        },
+        {
+          "source": "google.adk.agents",
+          "specifiers": [
+            "LlmAgent"
+          ]
+        },
+        {
+          "source": "google.adk.agents.readonly_context",
+          "specifiers": [
+            "ReadonlyContext"
+          ]
+        },
+        {
+          "source": "google.adk.models.lite_llm",
+          "specifiers": [
+            "LiteLlm"
+          ]
+        },
+        {
+          "source": "google.adk.runners",
+          "specifiers": [
+            "Runner",
+            "RunConfig"
+          ]
+        },
+        {
+          "source": "google.adk.sessions",
+          "specifiers": [
+            "InMemorySessionService"
+          ]
+        },
+        {
+          "source": "google.adk.tools",
+          "specifiers": [
+            "FunctionTool",
+            "ToolContext"
+          ]
+        },
+        {
+          "source": "google.adk.tools.mcp_tool.mcp_toolset",
+          "specifiers": [
+            "McpToolset",
+            "StreamableHTTPConnectionParams"
+          ]
+        },
+        {
+          "source": "google.genai",
+          "specifiers": [
+            "types"
+          ]
+        },
+        {
+          "source": "litellm.exceptions",
+          "specifiers": [
+            "RateLimitError"
+          ]
+        },
+        {
+          "source": "dev_config",
+          "specifiers": [
+            "is_auth_disabled",
+            "DEV_BYPASS_TOKEN"
+          ]
+        }
+      ],
+      "exports": [
+        "mcp_header_provider",
+        "IdentityAwareAgent",
+        "_extract_bearer_token",
+        "_validate_user_id",
+        "create_session",
+        "_parse_chat_request",
+        "chat",
+        "chat_stream",
+        "health"
+      ],
+      "totalLines": 474,
+      "hasStructuralAnalysis": true
+    },
+    "cedar/entities.json": {
+      "filePath": "cedar/entities.json",
+      "contentHash": "e4f278d2e6bffb7ff450b09a01005436f2fef6176940226292ddf5bafa21b1b2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 110,
+      "hasStructuralAnalysis": true
+    },
+    "cedar/policies/abac.cedar": {
+      "filePath": "cedar/policies/abac.cedar",
+      "contentHash": "a185f3563181975576e65e4c79490d1e123ee88db158e1ce5969d5f4713e17f2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 52,
+      "hasStructuralAnalysis": false
+    },
+    "cedar/policies/guardrails.cedar": {
+      "filePath": "cedar/policies/guardrails.cedar",
+      "contentHash": "8b8b7e2c69c3bc3b9bbc389f672b46f230cb31a571e37c4d09a57bda6f3398d4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 13,
+      "hasStructuralAnalysis": false
+    },
+    "cedar/policies/rbac.cedar": {
+      "filePath": "cedar/policies/rbac.cedar",
+      "contentHash": "a24915915a5cc31132863bf5c644dc3d4e8d169ec04d6b16f60cee6c21d90120",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 72,
+      "hasStructuralAnalysis": false
+    },
+    "cedar/schema.cedarschema": {
+      "filePath": "cedar/schema.cedarschema",
+      "contentHash": "8601e8643ecb19fedf20fd821d190c1e1b7ab0eb7c74527d307305b638f25ec0",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 47,
+      "hasStructuralAnalysis": false
+    },
+    "claude.md": {
+      "filePath": "claude.md",
+      "contentHash": "c683fefe8f36d9ae6278666de4ef2f396bb7a2a0ae8380b12631157522928c59",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 428,
+      "hasStructuralAnalysis": true
+    },
+    "dev_config.example.toml": {
+      "filePath": "dev_config.example.toml",
+      "contentHash": "5454ed9c14b9edf673125148ce8b213c7a6aac8ac4bc60d0de0a5e734d0a0f9f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 51,
+      "hasStructuralAnalysis": true
+    },
+    "dev_config.py": {
+      "filePath": "dev_config.py",
+      "contentHash": "5c6c6d1fd9dd72200d784b251b9fb79e29b8d6e02a852cf8720bb317376ed1ac",
+      "functions": [
+        {
+          "name": "_load_config",
+          "params": [],
+          "returnType": "dict[str, Any]",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "is_auth_disabled",
+          "params": [
+            "section"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "get_section",
+          "params": [
+            "section"
+          ],
+          "returnType": "dict[str, Any]",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "parse_abac_attrs",
+          "params": [
+            "raw"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "detect_provider",
+          "params": [
+            "claims"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 13
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "tomllib",
+          "specifiers": [
+            "tomllib"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Any"
+          ]
+        }
+      ],
+      "exports": [
+        "_load_config",
+        "is_auth_disabled",
+        "get_section",
+        "parse_abac_attrs",
+        "detect_provider"
+      ],
+      "totalLines": 114,
+      "hasStructuralAnalysis": true
+    },
+    "docs/entra-department-claim-mapping.md": {
+      "filePath": "docs/entra-department-claim-mapping.md",
+      "contentHash": "ceaecdf0ca51c74d588731a1496832a6a780106d3c339b4ae2c141adfe3a7299",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 94,
+      "hasStructuralAnalysis": true
+    },
+    "docs/mcp-server-reverse-engineered.md": {
+      "filePath": "docs/mcp-server-reverse-engineered.md",
+      "contentHash": "9a327b33d76bb1d180405895ed20dddd5bb9b552a58b48fb7b799d5d83d70ef1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 835,
+      "hasStructuralAnalysis": true
+    },
+    "docs/servicenow-integration.md": {
+      "filePath": "docs/servicenow-integration.md",
+      "contentHash": "3394b63f870602cdc88419580c7fb0e47a88689b7353f5db26786f5da6553478",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 142,
+      "hasStructuralAnalysis": true
+    },
+    "docs/servicenow-obo-setup.md": {
+      "filePath": "docs/servicenow-obo-setup.md",
+      "contentHash": "7ecc50236706eaee7198e9a854079d04d0456fdd68d46205c88ae5c02b4355cf",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 150,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md": {
+      "filePath": "docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md",
+      "contentHash": "0e0a402368f39aa5fb03305a96bffb7b159008db05555b7e39417fb5340da90d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 450,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md": {
+      "filePath": "docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md",
+      "contentHash": "a09fce11eb774efb9dffa4e1e6c025e09c8e50400a4cc58fc892e634c739a5bc",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 104,
+      "hasStructuralAnalysis": true
+    },
+    "EXECUTIVE_SUMMARY.md": {
+      "filePath": "EXECUTIVE_SUMMARY.md",
+      "contentHash": "f70847e2f3325b75e0e9e6a8ea0998f9a7f1e87de09a7edc6baf98404b154567",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 229,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/.env.example": {
+      "filePath": "frontend/.env.example",
+      "contentHash": "b09ababce3421cf4b76363dc29d791b5c9bfde26d9ffeaaeb77cd0258225e6a4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 16,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/package.json": {
+      "filePath": "frontend/package.json",
+      "contentHash": "0f2ae2863c2052bfc6fad3dee0e52ddcfaf35cf3180d559a6741903e592f7e92",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 38,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/App.css": {
+      "filePath": "frontend/src/App.css",
+      "contentHash": "47df15752e40ce7082c30f31d7fe0b6a32e721dbef6e9c6ef79f7311fd46da6f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1257,
+      "hasStructuralAnalysis": false
+    },
+    "frontend/src/App.js": {
+      "filePath": "frontend/src/App.js",
+      "contentHash": "7ab00435f262479d5094b5e42d0f5f712ad636e8f66e034cc622679c7f098b46",
+      "functions": [
+        {
+          "name": "App",
+          "params": [],
+          "exported": false,
+          "lineCount": 84
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState",
+            "useCallback"
+          ]
+        },
+        {
+          "source": "./AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "./components/AuthStatus",
+          "specifiers": [
+            "AuthStatus"
+          ]
+        },
+        {
+          "source": "./components/LoginPrompt",
+          "specifiers": [
+            "LoginPrompt"
+          ]
+        },
+        {
+          "source": "./components/SecurityContextPanel",
+          "specifiers": [
+            "SecurityContextPanel"
+          ]
+        },
+        {
+          "source": "./components/TokenInspector",
+          "specifiers": [
+            "TokenInspector"
+          ]
+        },
+        {
+          "source": "./components/RBACTestMatrix",
+          "specifiers": [
+            "RBACTestMatrix"
+          ]
+        },
+        {
+          "source": "./components/ConversationTabs",
+          "specifiers": [
+            "ConversationTabs"
+          ]
+        },
+        {
+          "source": "./components/AuditLog",
+          "specifiers": [
+            "AuditLog"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 99,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/authConfig.js": {
+      "filePath": "frontend/src/authConfig.js",
+      "contentHash": "423dbb3f3022c79e4edf447e1b5e7fa9106865e5f89c7f35baf8c18a6fed620a",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@azure/msal-browser",
+          "specifiers": [
+            "LogLevel"
+          ]
+        }
+      ],
+      "exports": [
+        "msalConfig",
+        "loginRequest",
+        "graphScopes"
+      ],
+      "totalLines": 41,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/AuthProvider.js": {
+      "filePath": "frontend/src/AuthProvider.js",
+      "contentHash": "99ea7426ad2877352608b59e8bc90bb98534e2421750673664bb9b01b2ace348",
+      "functions": [
+        {
+          "name": "useAuth",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getMsalInstance",
+          "params": [],
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "ensureMsalReady",
+          "params": [],
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "ensureAmplifyConfigured",
+          "params": [],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "EntraAuthInner",
+          "params": [],
+          "exported": false,
+          "lineCount": 20
+        },
+        {
+          "name": "AuthProvider",
+          "params": [],
+          "exported": true,
+          "lineCount": 166
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "createContext",
+            "useContext",
+            "useState",
+            "useCallback",
+            "useEffect",
+            "useRef"
+          ]
+        },
+        {
+          "source": "@azure/msal-browser",
+          "specifiers": [
+            "PublicClientApplication",
+            "EventType",
+            "InteractionRequiredAuthError"
+          ]
+        },
+        {
+          "source": "@azure/msal-react",
+          "specifiers": [
+            "MsalProvider",
+            "useMsal",
+            "useAccount"
+          ]
+        },
+        {
+          "source": "aws-amplify",
+          "specifiers": [
+            "Amplify"
+          ]
+        },
+        {
+          "source": "aws-amplify/auth",
+          "specifiers": [
+            "signInWithRedirect",
+            "signOut",
+            "getCurrentUser",
+            "fetchAuthSession"
+          ]
+        },
+        {
+          "source": "aws-amplify/utils",
+          "specifiers": [
+            "Hub"
+          ]
+        },
+        {
+          "source": "./authConfig",
+          "specifiers": [
+            "msalConfig",
+            "loginRequest",
+            "graphScopes"
+          ]
+        },
+        {
+          "source": "./cognitoConfig",
+          "specifiers": [
+            "cognitoConfig"
+          ]
+        }
+      ],
+      "exports": [
+        "useAuth",
+        "AuthProvider"
+      ],
+      "totalLines": 270,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/cognitoConfig.js": {
+      "filePath": "frontend/src/cognitoConfig.js",
+      "contentHash": "1a877594a2b4e68687ff0027663fa7ec82427159d3edd8ed69cc93c8dc8f1269",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "cognitoConfig"
+      ],
+      "totalLines": 23,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/AuditLog.js": {
+      "filePath": "frontend/src/components/AuditLog.js",
+      "contentHash": "3b1d5bc2502065fe8b157b53e88c622cdeb0122cfa78efc6f16eb5f74362c8a0",
+      "functions": [
+        {
+          "name": "truncate",
+          "params": [
+            "text",
+            "maxLength"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "AuditLog",
+          "params": [],
+          "exported": true,
+          "lineCount": 80
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState"
+          ]
+        },
+        {
+          "source": "./DenialIndicator",
+          "specifiers": [
+            "DenialIndicator"
+          ]
+        }
+      ],
+      "exports": [
+        "AuditLog"
+      ],
+      "totalLines": 91,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/AuthStatus.js": {
+      "filePath": "frontend/src/components/AuthStatus.js",
+      "contentHash": "f613632d981a0bbce588bbebf5cd7985eb9a8f574907f863ed391c1273a61058",
+      "functions": [
+        {
+          "name": "AuthStatus",
+          "params": [],
+          "exported": true,
+          "lineCount": 36
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "../utils/constants",
+          "specifiers": [
+            "PROVIDER_LABELS"
+          ]
+        }
+      ],
+      "exports": [
+        "AuthStatus"
+      ],
+      "totalLines": 41,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/ChatInterface.js": {
+      "filePath": "frontend/src/components/ChatInterface.js",
+      "contentHash": "181b3a8059c245b9d774dcccd0bc23aa8036aacd81799f846bd12dc246fa56b3",
+      "functions": [
+        {
+          "name": "ChatInterface",
+          "params": [],
+          "exported": true,
+          "lineCount": 103
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState",
+            "useRef",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "../utils/a2aClient",
+          "specifiers": [
+            "sendA2AMessage",
+            "buildAuditEntry"
+          ]
+        },
+        {
+          "source": "./DenialIndicator",
+          "specifiers": [
+            "DenialIndicator"
+          ]
+        }
+      ],
+      "exports": [
+        "ChatInterface"
+      ],
+      "totalLines": 111,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/ConversationTabs.js": {
+      "filePath": "frontend/src/components/ConversationTabs.js",
+      "contentHash": "95fe36eba8bd88b3d80ef394a49ba6b81a7cb1b2568ea7f30a38807ca22451ab",
+      "functions": [
+        {
+          "name": "ConversationTabs",
+          "params": [],
+          "exported": true,
+          "lineCount": 96
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "../authConfig",
+          "specifiers": [
+            "graphScopes"
+          ]
+        },
+        {
+          "source": "./ChatInterface",
+          "specifiers": [
+            "ChatInterface"
+          ]
+        }
+      ],
+      "exports": [
+        "ConversationTabs"
+      ],
+      "totalLines": 105,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/DenialIndicator.js": {
+      "filePath": "frontend/src/components/DenialIndicator.js",
+      "contentHash": "bf4757351c17ea4a0c96ebb0381610f4af5ecc531835dd8eca4d7f2d28b60653",
+      "functions": [
+        {
+          "name": "DenialIndicator",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React"
+          ]
+        }
+      ],
+      "exports": [
+        "DenialIndicator"
+      ],
+      "totalLines": 21,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/LoginPrompt.js": {
+      "filePath": "frontend/src/components/LoginPrompt.js",
+      "contentHash": "1c4f3a30674a034e2231a6d201de24613d9f3d016ab34b8d9a2df4642d87111d",
+      "functions": [
+        {
+          "name": "LoginPrompt",
+          "params": [],
+          "exported": true,
+          "lineCount": 37
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        }
+      ],
+      "exports": [
+        "LoginPrompt"
+      ],
+      "totalLines": 41,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/RBACTestMatrix.js": {
+      "filePath": "frontend/src/components/RBACTestMatrix.js",
+      "contentHash": "865a00d0b9e3b0d44e7f416853ece9d351d8a92c577d317829afc7832a383f51",
+      "functions": [
+        {
+          "name": "ResultCell",
+          "params": [],
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "RBACTestMatrix",
+          "params": [],
+          "exported": true,
+          "lineCount": 134
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState",
+            "useCallback",
+            "useEffect",
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "../utils/a2aClient",
+          "specifiers": [
+            "sendA2AMessage",
+            "buildAuditEntry"
+          ]
+        },
+        {
+          "source": "../utils/testScenarios",
+          "specifiers": [
+            "getScenariosForRole"
+          ]
+        },
+        {
+          "source": "./DenialIndicator",
+          "specifiers": [
+            "DenialIndicator"
+          ]
+        }
+      ],
+      "exports": [
+        "RBACTestMatrix"
+      ],
+      "totalLines": 162,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/SecurityContextPanel.js": {
+      "filePath": "frontend/src/components/SecurityContextPanel.js",
+      "contentHash": "7568ca5a159bc6b26e8f2b19be6159717b81ce8ff2da823b7a0d529191d16018",
+      "functions": [
+        {
+          "name": "getExpiryClass",
+          "params": [
+            "countdown",
+            "tokenExpiry"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "SecurityContextPanel",
+          "params": [],
+          "exported": true,
+          "lineCount": 195
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState",
+            "useEffect",
+            "useCallback"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "../utils/constants",
+          "specifiers": [
+            "A2A_SERVER_URL",
+            "PROVIDER_LABELS"
+          ]
+        }
+      ],
+      "exports": [
+        "SecurityContextPanel"
+      ],
+      "totalLines": 209,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/components/TokenInspector.js": {
+      "filePath": "frontend/src/components/TokenInspector.js",
+      "contentHash": "1679a9a3bddd4c1cbf5bae24810bbfeb8b8129dbf2496f93e9d2194f1240cf5c",
+      "functions": [
+        {
+          "name": "TokenInspector",
+          "params": [],
+          "exported": true,
+          "lineCount": 59
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React",
+            "useState",
+            "useEffect",
+            "useCallback"
+          ]
+        },
+        {
+          "source": "../AuthProvider",
+          "specifiers": [
+            "useAuth"
+          ]
+        },
+        {
+          "source": "../utils/tokenDecoder",
+          "specifiers": [
+            "decodeToken"
+          ]
+        }
+      ],
+      "exports": [
+        "TokenInspector"
+      ],
+      "totalLines": 66,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/index.js": {
+      "filePath": "frontend/src/index.js",
+      "contentHash": "cce97419cdd6c7a488678037e77cdb466f50f8d5eb32f7407098e927fe299ea7",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "React"
+          ]
+        },
+        {
+          "source": "react-dom/client",
+          "specifiers": [
+            "createRoot"
+          ]
+        },
+        {
+          "source": "./AuthProvider",
+          "specifiers": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "source": "./App",
+          "specifiers": [
+            "App"
+          ]
+        },
+        {
+          "source": "./App.css",
+          "specifiers": []
+        }
+      ],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/utils/a2aClient.js": {
+      "filePath": "frontend/src/utils/a2aClient.js",
+      "contentHash": "6c440e6c4cdf0e29ddbaa171125ddc992534d5879440c86ac2fba46e877b55e5",
+      "functions": [
+        {
+          "name": "extractResponseText",
+          "params": [
+            "data"
+          ],
+          "exported": false,
+          "lineCount": 20
+        },
+        {
+          "name": "sendA2AMessage",
+          "params": [],
+          "exported": true,
+          "lineCount": 46
+        },
+        {
+          "name": "buildAuditEntry",
+          "params": [],
+          "exported": true,
+          "lineCount": 12
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "./constants",
+          "specifiers": [
+            "A2A_SERVER_URL"
+          ]
+        },
+        {
+          "source": "./denialClassifier",
+          "specifiers": [
+            "classifyDenial"
+          ]
+        }
+      ],
+      "exports": [
+        "sendA2AMessage",
+        "buildAuditEntry"
+      ],
+      "totalLines": 95,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/utils/constants.js": {
+      "filePath": "frontend/src/utils/constants.js",
+      "contentHash": "cce63445c0087e9b2746650c7771ecaba1581cee12a079faa5b471b8f33cdf33",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "A2A_SERVER_URL",
+        "PROVIDER_LABELS"
+      ],
+      "totalLines": 8,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/utils/denialClassifier.js": {
+      "filePath": "frontend/src/utils/denialClassifier.js",
+      "contentHash": "5398d17daea843461cc610dde2f5b1fd1cbe7baebdbddc734905b2cb425aaaa7",
+      "functions": [
+        {
+          "name": "matchesAny",
+          "params": [
+            "text",
+            "patterns"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "classifyDenial",
+          "params": [
+            "httpStatus",
+            "responseBody",
+            "responseText"
+          ],
+          "exported": true,
+          "lineCount": 44
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "classifyDenial"
+      ],
+      "totalLines": 73,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/utils/testScenarios.js": {
+      "filePath": "frontend/src/utils/testScenarios.js",
+      "contentHash": "05c33213007d65ff34d0ff27fb27e76c1f574a698760b4f56f19024e847a622d",
+      "functions": [
+        {
+          "name": "getScenariosForRole",
+          "params": [
+            "role"
+          ],
+          "exported": true,
+          "lineCount": 41
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "getScenariosForRole"
+      ],
+      "totalLines": 455,
+      "hasStructuralAnalysis": true
+    },
+    "frontend/src/utils/tokenDecoder.js": {
+      "filePath": "frontend/src/utils/tokenDecoder.js",
+      "contentHash": "05644ad6f7b130ccc082e9ad1825829c53c84d6daec0d323d50f821889bd2eb7",
+      "functions": [
+        {
+          "name": "decodeToken",
+          "params": [
+            "token"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "base64UrlDecode",
+          "params": [
+            "str"
+          ],
+          "exported": false,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "decodeToken"
+      ],
+      "totalLines": 30,
+      "hasStructuralAnalysis": true
+    },
+    "MANUAL_TESTING.md": {
+      "filePath": "MANUAL_TESTING.md",
+      "contentHash": "f0883d343e7e18f5845283267f48669ff935b936c48a26408dd11c3964a21eac",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 365,
+      "hasStructuralAnalysis": true
+    },
+    "mcp_server/graph_obo.py": {
+      "filePath": "mcp_server/graph_obo.py",
+      "contentHash": "ab1d4f313052b5f70b729659f7d0e775be9f1265738eeed11ef899fff0b31924",
+      "functions": [
+        {
+          "name": "init_obo_exchanger",
+          "params": [],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "get_obo_exchanger",
+          "params": [],
+          "returnType": "\"GraphOBOExchanger | None\"",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "GraphOBOExchanger",
+          "methods": [
+            "__init__",
+            "_get_credential",
+            "get_graph_token",
+            "close"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 62
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "hashlib",
+          "specifiers": [
+            "hashlib"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "azure.identity.aio",
+          "specifiers": [
+            "OnBehalfOfCredential"
+          ]
+        }
+      ],
+      "exports": [
+        "GraphOBOExchanger",
+        "init_obo_exchanger",
+        "get_obo_exchanger"
+      ],
+      "totalLines": 114,
+      "hasStructuralAnalysis": true
+    },
+    "mcp_server/policy.py": {
+      "filePath": "mcp_server/policy.py",
+      "contentHash": "038e4bbf4c89139ca0693d8d84098f19893b38239ea56daaa1a3d1a78d3040c0",
+      "functions": [],
+      "classes": [
+        {
+          "name": "AccessRequest",
+          "methods": [],
+          "properties": [
+            "email",
+            "provider",
+            "groups",
+            "tool_name",
+            "claims",
+            "assumed_role",
+            "context"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "AccessDecision",
+          "methods": [],
+          "properties": [
+            "allowed",
+            "role",
+            "reason"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "PolicyEvaluator",
+          "methods": [
+            "get_available_roles",
+            "check_access"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "TomlPolicyEvaluator",
+          "methods": [
+            "__init__",
+            "_load",
+            "get_available_roles",
+            "check_access"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 75
+        },
+        {
+          "name": "CedarPolicyEvaluator",
+          "methods": [
+            "__init__",
+            "_load",
+            "_load_policies",
+            "_load_entities",
+            "_build_user_entity",
+            "get_available_roles",
+            "check_access",
+            "check_access_batch"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 234
+        }
+      ],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "tomllib",
+          "specifiers": [
+            "tomllib"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "abc",
+          "specifiers": [
+            "ABC",
+            "abstractmethod"
+          ]
+        },
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass",
+            "field"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "cedarpy",
+          "specifiers": [
+            "is_authorized",
+            "is_authorized_batch"
+          ]
+        }
+      ],
+      "exports": [
+        "AccessRequest",
+        "AccessDecision",
+        "PolicyEvaluator",
+        "TomlPolicyEvaluator",
+        "CedarPolicyEvaluator"
+      ],
+      "totalLines": 380,
+      "hasStructuralAnalysis": true
+    },
+    "mcp_server/server.py": {
+      "filePath": "mcp_server/server.py",
+      "contentHash": "1ccdbe23199b95af21406082f8b5a13960c2d32e4f9300aea85542d8f293574e",
+      "functions": [
+        {
+          "name": "_extract_email",
+          "params": [
+            "claims",
+            "provider"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "_extract_groups",
+          "params": [
+            "claims"
+          ],
+          "returnType": "list[str]",
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "_build_auth",
+          "params": [],
+          "exported": true,
+          "lineCount": 54
+        },
+        {
+          "name": "_build_access_request",
+          "params": [
+            "tool_name",
+            "context"
+          ],
+          "returnType": "AccessRequest",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "require_cedar",
+          "params": [
+            "tool_name"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "cedar_check_with_context",
+          "params": [
+            "tool_name",
+            "context"
+          ],
+          "returnType": "AccessDecision",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "_caller_department",
+          "params": [],
+          "returnType": "str | None",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "_cedar_check_department",
+          "params": [
+            "tool_name",
+            "target_dept",
+            "log_extra"
+          ],
+          "returnType": "dict | None",
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "_get_graph_token",
+          "params": [
+            "scopes"
+          ],
+          "returnType": "str | None",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "_require_entra_provider",
+          "params": [],
+          "returnType": "dict | None",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "_get_effective_graph_token",
+          "params": [
+            "scope"
+          ],
+          "returnType": "tuple[str, bool]",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "_get_effective_sn_token",
+          "params": [],
+          "returnType": "tuple[str | None, bool]",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "get_user_profile",
+          "params": [],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "list_files",
+          "params": [
+            "folder_path"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "send_email",
+          "params": [
+            "to",
+            "subject",
+            "body"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "delete_resource",
+          "params": [
+            "resource_id"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "_run_s3_operation",
+          "params": [
+            "operation",
+            "error_map"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "list_s3_buckets",
+          "params": [],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "list_s3_objects",
+          "params": [
+            "bucket",
+            "prefix",
+            "max_keys"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 43
+        },
+        {
+          "name": "get_s3_object_info",
+          "params": [
+            "bucket",
+            "key"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "delete_s3_object",
+          "params": [
+            "bucket",
+            "key"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "resolve_timezone",
+          "params": [
+            "tz_input"
+          ],
+          "returnType": "ZoneInfo",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "get_current_time",
+          "params": [
+            "timezone"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "_parse_time_string",
+          "params": [
+            "time_str"
+          ],
+          "returnType": "datetime | None",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "convert_timezone",
+          "params": [
+            "time_str",
+            "from_timezone",
+            "to_timezone"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 47
+        },
+        {
+          "name": "get_time_difference",
+          "params": [
+            "timezone1",
+            "timezone2"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 49
+        },
+        {
+          "name": "list_knowledge_bases",
+          "params": [],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "list_articles",
+          "params": [
+            "kb_identifier",
+            "query"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 37
+        },
+        {
+          "name": "get_article",
+          "params": [
+            "sys_id"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "list_incidents",
+          "params": [
+            "department"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "get_incident",
+          "params": [
+            "sys_id"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "create_incident",
+          "params": [
+            "short_description",
+            "department",
+            "description",
+            "urgency"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "update_incident",
+          "params": [
+            "sys_id",
+            "payload"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 42
+        }
+      ],
+      "classes": [
+        {
+          "name": "UserContextMiddleware",
+          "methods": [
+            "__init__",
+            "_set_bypass_context",
+            "_resolve_context",
+            "on_list_tools",
+            "on_call_tool"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 151
+        }
+      ],
+      "imports": [
+        {
+          "source": "asyncio",
+          "specifiers": [
+            "asyncio"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "datetime",
+          "specifiers": [
+            "datetime",
+            "tz"
+          ]
+        },
+        {
+          "source": "zoneinfo",
+          "specifiers": [
+            "ZoneInfo"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "contextvars",
+          "specifiers": [
+            "ContextVar"
+          ]
+        },
+        {
+          "source": "httpx",
+          "specifiers": [
+            "httpx"
+          ]
+        },
+        {
+          "source": "dotenv",
+          "specifiers": [
+            "load_dotenv"
+          ]
+        },
+        {
+          "source": "fastmcp",
+          "specifiers": [
+            "FastMCP"
+          ]
+        },
+        {
+          "source": "fastmcp.server.dependencies",
+          "specifiers": [
+            "get_http_headers",
+            "get_access_token"
+          ]
+        },
+        {
+          "source": "fastmcp.server.middleware",
+          "specifiers": [
+            "Middleware",
+            "MiddlewareContext"
+          ]
+        },
+        {
+          "source": "fastmcp.server.auth",
+          "specifiers": [
+            "AuthContext",
+            "MultiAuth"
+          ]
+        },
+        {
+          "source": "fastmcp.server.auth.providers.azure",
+          "specifiers": [
+            "AzureJWTVerifier"
+          ]
+        },
+        {
+          "source": "fastmcp.server.auth.providers.jwt",
+          "specifiers": [
+            "JWTVerifier"
+          ]
+        },
+        {
+          "source": "fastmcp.exceptions",
+          "specifiers": [
+            "ToolError"
+          ]
+        },
+        {
+          "source": "dev_config",
+          "specifiers": [
+            "is_auth_disabled",
+            "get_section",
+            "DEV_BYPASS_TOKEN",
+            "detect_provider",
+            "parse_abac_attrs",
+            "PERMISSIONS_PATH",
+            "CEDAR_DIR"
+          ]
+        },
+        {
+          "source": "policy",
+          "specifiers": [
+            "AccessRequest",
+            "AccessDecision",
+            "PolicyEvaluator",
+            "TomlPolicyEvaluator",
+            "CedarPolicyEvaluator"
+          ]
+        },
+        {
+          "source": "graph_obo",
+          "specifiers": [
+            "init_obo_exchanger",
+            "get_obo_exchanger"
+          ]
+        },
+        {
+          "source": "servicenow",
+          "specifiers": [
+            "init_servicenow_client",
+            "get_servicenow_client"
+          ]
+        },
+        {
+          "source": "servicenow_obo",
+          "specifiers": [
+            "init_sn_obo_exchanger",
+            "get_sn_obo_exchanger"
+          ]
+        }
+      ],
+      "exports": [
+        "_extract_email",
+        "_extract_groups",
+        "_build_auth",
+        "UserContextMiddleware",
+        "_build_access_request",
+        "require_cedar",
+        "cedar_check_with_context",
+        "_caller_department",
+        "_cedar_check_department",
+        "_get_graph_token",
+        "_require_entra_provider",
+        "_get_effective_graph_token",
+        "_get_effective_sn_token",
+        "get_user_profile",
+        "list_files",
+        "send_email",
+        "delete_resource",
+        "_run_s3_operation",
+        "list_s3_buckets",
+        "list_s3_objects",
+        "get_s3_object_info",
+        "delete_s3_object",
+        "resolve_timezone",
+        "get_current_time",
+        "_parse_time_string",
+        "convert_timezone",
+        "get_time_difference",
+        "list_knowledge_bases",
+        "list_articles",
+        "get_article",
+        "list_incidents",
+        "get_incident",
+        "create_incident",
+        "update_incident"
+      ],
+      "totalLines": 1222,
+      "hasStructuralAnalysis": true
+    },
+    "mcp_server/servicenow_mock.py": {
+      "filePath": "mcp_server/servicenow_mock.py",
+      "contentHash": "16766cb674e12773f82f2d87017477f092a3e05def28e7032177889fa87cb402",
+      "functions": [
+        {
+          "name": "_envelope",
+          "params": [
+            "result"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "ServiceNowMockClient",
+          "methods": [
+            "__init__",
+            "list_knowledge_bases",
+            "get_knowledge_base_metadata",
+            "list_articles",
+            "get_article",
+            "list_incidents",
+            "get_incident",
+            "create_incident",
+            "update_incident"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 97
+        }
+      ],
+      "imports": [
+        {
+          "source": "copy",
+          "specifiers": [
+            "copy"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Any"
+          ]
+        }
+      ],
+      "exports": [
+        "_envelope",
+        "ServiceNowMockClient"
+      ],
+      "totalLines": 157,
+      "hasStructuralAnalysis": true
+    },
+    "mcp_server/servicenow_obo.py": {
+      "filePath": "mcp_server/servicenow_obo.py",
+      "contentHash": "675a38bca00ed0e1e183521cd43e82b94762d0ec3fb48434255b1b3d580721bd",
+      "functions": [
+        {
+          "name": "init_sn_obo_exchanger",
+          "params": [
+            "scope"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "get_sn_obo_exchanger",
+          "params": [],
+          "returnType": "\"ServiceNowOBOExchanger | None\"",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "ServiceNowOBOExchanger",
+          "methods": [
+            "__init__",
+            "_get_credential",
+            "get_sn_token",
+            "close"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 55
+        }
+      ],
+      "imports": [
+        {
+          "source": "hashlib",
+          "specifiers": [
+            "hashlib"
+          ]
+        },
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "azure.identity.aio",
+          "specifiers": [
+            "OnBehalfOfCredential"
+          ]
+        }
+      ],
+      "exports": [
+        "ServiceNowOBOExchanger",
+        "init_sn_obo_exchanger",
+        "get_sn_obo_exchanger"
+      ],
+      "totalLines": 123,
+      "hasStructuralAnalysis": true
+    },
+    "mcp_server/servicenow.py": {
+      "filePath": "mcp_server/servicenow.py",
+      "contentHash": "7f25ef4f701456a1907b757df2faa1d8be2fab5597bfa411dd87d789a0580824",
+      "functions": [
+        {
+          "name": "_is_sys_id",
+          "params": [
+            "identifier"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "init_servicenow_client",
+          "params": [
+            "instance_url",
+            "api_user",
+            "api_password"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 37
+        },
+        {
+          "name": "get_servicenow_client",
+          "params": [],
+          "returnType": "\"ServiceNowClient | ServiceNowMockClient | None\"",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "ServiceNowClient",
+          "methods": [
+            "__init__",
+            "_request",
+            "list_knowledge_bases",
+            "get_knowledge_base_metadata",
+            "list_articles",
+            "get_article",
+            "list_incidents",
+            "get_incident",
+            "create_incident",
+            "update_incident"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 164
+        }
+      ],
+      "imports": [
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Any"
+          ]
+        },
+        {
+          "source": "httpx",
+          "specifiers": [
+            "httpx"
+          ]
+        }
+      ],
+      "exports": [
+        "_is_sys_id",
+        "ServiceNowClient",
+        "init_servicenow_client",
+        "get_servicenow_client"
+      ],
+      "totalLines": 262,
+      "hasStructuralAnalysis": true
+    },
+    "permissions.example.toml": {
+      "filePath": "permissions.example.toml",
+      "contentHash": "cc180387b9128c720dcea2078e2748e72d172895780e18abd05cd6e676e52c63",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 36,
+      "hasStructuralAnalysis": true
+    },
+    "pyproject.toml": {
+      "filePath": "pyproject.toml",
+      "contentHash": "e3127cd45973b28bc414125e23b80b36b8421fd25a517873caaa81e6c14da2ed",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 35,
+      "hasStructuralAnalysis": true
+    },
+    "README.md": {
+      "filePath": "README.md",
+      "contentHash": "4a02c1446acd0f8758a1e1595a2cdf7a08cac815a98b53bbba61055e630ff304",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 915,
+      "hasStructuralAnalysis": true
+    },
+    "requirements.txt": {
+      "filePath": "requirements.txt",
+      "contentHash": "2a71e9b09dd86f011a2e37f451220c5f7f7d3eccbb706f330814d41e1d63e96a",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 43,
+      "hasStructuralAnalysis": false
+    },
+    "TESTING.md": {
+      "filePath": "TESTING.md",
+      "contentHash": "b354c253ad9e27e03af9e2e8cb6c2549bb28add033b7a729956fea76b831ed37",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 721,
+      "hasStructuralAnalysis": true
+    },
+    "tests/__init__.py": {
+      "filePath": "tests/__init__.py",
+      "contentHash": "5d136e35f96a3c342ea5f8663d3a688e580fc87e4693498b29d57d71d7994cf5",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 2,
+      "hasStructuralAnalysis": true
+    },
+    "tests/conftest.py": {
+      "filePath": "tests/conftest.py",
+      "contentHash": "5b3e9d71e484097444b6d2cf753f5fef3fa7d4fccf69d160afb7af537bef68ae",
+      "functions": [
+        {
+          "name": "event_loop",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "admin_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "developer_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "viewer_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "create_cognito_test_token",
+          "params": [
+            "user_id",
+            "groups",
+            "email"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "cognito_admin_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "cognito_developer_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "cognito_viewer_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "real_admin_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "real_developer_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "real_viewer_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "real_nogroup_token",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "a2a_url",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "adk_url",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "mcp_url",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "require_services",
+          "params": [
+            "a2a_url",
+            "adk_url"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "make_a2a_message",
+          "params": [],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "extract_agent_text",
+          "params": [],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "pytest_html_report_title",
+          "params": [
+            "report"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "pytest_configure",
+          "params": [
+            "config"
+          ],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "asyncio",
+          "specifiers": [
+            "asyncio"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "datetime",
+          "specifiers": [
+            "datetime",
+            "timezone",
+            "timedelta"
+          ]
+        },
+        {
+          "source": "dotenv",
+          "specifiers": [
+            "load_dotenv"
+          ]
+        }
+      ],
+      "exports": [
+        "event_loop",
+        "admin_token",
+        "developer_token",
+        "viewer_token",
+        "create_cognito_test_token",
+        "cognito_admin_token",
+        "cognito_developer_token",
+        "cognito_viewer_token",
+        "real_admin_token",
+        "real_developer_token",
+        "real_viewer_token",
+        "real_nogroup_token",
+        "a2a_url",
+        "adk_url",
+        "mcp_url",
+        "require_services",
+        "make_a2a_message",
+        "extract_agent_text",
+        "pytest_html_report_title",
+        "pytest_configure"
+      ],
+      "totalLines": 272,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_abac_security.py": {
+      "filePath": "tests/test_abac_security.py",
+      "contentHash": "eb14fc7f588bcf01beac79ab7bec826d2acfb00bf8431584848323a2062acad4",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TestHeaderBlockedAbacKeys",
+          "methods": [
+            "test_department_in_header_is_stripped",
+            "test_department_stripped_but_other_attrs_kept",
+            "test_archiver_only_passes_through",
+            "test_empty_header_returns_empty",
+            "test_invalid_json_returns_empty",
+            "test_department_stripped_even_with_unrelated_keys"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 39
+        }
+      ],
+      "imports": [
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "dev_config",
+          "specifiers": [
+            "parse_abac_attrs"
+          ]
+        }
+      ],
+      "exports": [
+        "TestHeaderBlockedAbacKeys"
+      ],
+      "totalLines": 55,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_access_control.py": {
+      "filePath": "tests/test_access_control.py",
+      "contentHash": "0ccfbdc846732d00e622d010470bff90b55ae4fde3f2f28002ea2221bff22b33",
+      "functions": [
+        {
+          "name": "create_test_token",
+          "params": [
+            "user_id",
+            "groups",
+            "scopes",
+            "email"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "a2a_message",
+          "params": [
+            "text"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 14
+        }
+      ],
+      "classes": [
+        {
+          "name": "TestAgentLevelAccess",
+          "methods": [
+            "test_unauthenticated_request_denied",
+            "test_invalid_token_denied",
+            "test_blocked_user_denied",
+            "test_no_group_membership_denied",
+            "test_valid_user_allowed",
+            "test_agent_card_accessible_without_auth"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 97
+        },
+        {
+          "name": "TestToolLevelAccess",
+          "methods": [
+            "test_viewer_cannot_send_email",
+            "test_developer_cannot_send_email",
+            "test_viewer_cannot_list_files",
+            "test_admin_can_check_permissions"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 88
+        },
+        {
+          "name": "TestResourceLevelAccess",
+          "methods": [
+            "test_missing_files_scope_denied",
+            "test_missing_mail_scope_denied"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 45
+        },
+        {
+          "name": "TestHealthEndpoints",
+          "methods": [
+            "test_a2a_health",
+            "test_mcp_health"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "TestCognitoAccess",
+          "methods": [
+            "test_cognito_admin_s3_tool_allowed",
+            "test_cognito_viewer_s3_list_denied",
+            "test_cognito_user_graph_not_supported"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 66
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "httpx",
+          "specifiers": [
+            "httpx"
+          ]
+        },
+        {
+          "source": "jwt",
+          "specifiers": [
+            "jwt"
+          ]
+        },
+        {
+          "source": "datetime",
+          "specifiers": [
+            "datetime",
+            "timezone",
+            "timedelta"
+          ]
+        },
+        {
+          "source": "tests.conftest",
+          "specifiers": [
+            "create_cognito_test_token"
+          ]
+        }
+      ],
+      "exports": [
+        "create_test_token",
+        "a2a_message",
+        "TestAgentLevelAccess",
+        "TestToolLevelAccess",
+        "TestResourceLevelAccess",
+        "TestHealthEndpoints",
+        "TestCognitoAccess"
+      ],
+      "totalLines": 400,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_cedar_smoke.py": {
+      "filePath": "tests/test_cedar_smoke.py",
+      "contentHash": "f9967df7aab4a489179bb9db965e6cb52cc3b41837f6365616df293ec32e4475",
+      "functions": [
+        {
+          "name": "schema",
+          "params": [],
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "static_entities",
+          "params": [],
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "file_policies",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "_user_entity",
+          "params": [
+            "email",
+            "provider",
+            "roles",
+            "groups",
+            "archiver",
+            "department"
+          ],
+          "exported": true,
+          "lineCount": 20
+        }
+      ],
+      "classes": [
+        {
+          "name": "TestCedarSmoke",
+          "methods": [
+            "test_admin_can_call_any_tool",
+            "test_viewer_denied_send_email",
+            "test_developer_can_call_list_files",
+            "test_viewer_can_call_get_user_profile",
+            "test_no_role_denied"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 119
+        },
+        {
+          "name": "TestCedarABAC",
+          "methods": [
+            "test_admin_can_delete_anywhere",
+            "test_archiver_can_delete_in_archive",
+            "test_archiver_denied_outside_archive",
+            "test_developer_without_archiver_denied",
+            "test_forbid_protected_overrides_admin"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 118
+        },
+        {
+          "name": "TestCedarFilePolicies",
+          "methods": [
+            "test_admin_send_email_allowed",
+            "test_developer_send_email_denied",
+            "test_viewer_get_s3_object_info_allowed",
+            "test_viewer_list_s3_buckets_denied",
+            "test_archiver_delete_in_archive_allowed",
+            "test_archiver_delete_outside_archive_denied",
+            "test_admin_delete_in_protected_denied",
+            "test_list_tools_allowed_for_any_user"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 116
+        },
+        {
+          "name": "TestCedarPolicyEvaluator",
+          "methods": [
+            "evaluator",
+            "test_admin_allowed",
+            "test_viewer_denied_admin_tool",
+            "test_developer_allowed_list_files",
+            "test_archiver_delete_allowed",
+            "test_archiver_delete_wrong_path_denied",
+            "test_developer_no_archiver_denied",
+            "test_protected_forbid_overrides_admin",
+            "test_get_available_roles_delegates_to_toml",
+            "test_cognito_user_works",
+            "test_user_override_from_toml",
+            "test_assumed_role_enforced_check_access",
+            "test_assumed_role_enforced_batch",
+            "test_assumed_admin_still_works",
+            "test_check_access_batch_includes_servicenow"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 214
+        },
+        {
+          "name": "TestCedarServiceNowPolicies",
+          "methods": [
+            "_sn_request",
+            "test_admin_can_list_any_kb",
+            "test_admin_can_list_articles_any_kb",
+            "test_developer_lists_own_dept_articles",
+            "test_developer_blocked_from_other_dept_articles",
+            "test_developer_lists_own_dept_incidents",
+            "test_developer_blocked_other_dept_incidents",
+            "test_developer_creates_own_dept_incident",
+            "test_developer_updates_own_dept_incident",
+            "test_developer_blocked_updating_other_dept_incident",
+            "test_viewer_can_read_own_dept_articles",
+            "test_viewer_blocked_from_other_dept_articles",
+            "test_viewer_cannot_list_incidents",
+            "test_principal_missing_department_denied",
+            "test_phase1_no_context_denies_developer_param_tools"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 165
+        }
+      ],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "cedarpy",
+          "specifiers": [
+            "is_authorized",
+            "Decision"
+          ]
+        },
+        {
+          "source": "policy",
+          "specifiers": [
+            "AccessRequest",
+            "AccessDecision",
+            "CedarPolicyEvaluator",
+            "TomlPolicyEvaluator"
+          ]
+        }
+      ],
+      "exports": [
+        "schema",
+        "static_entities",
+        "file_policies",
+        "_user_entity",
+        "TestCedarSmoke",
+        "TestCedarABAC",
+        "TestCedarFilePolicies",
+        "TestCedarPolicyEvaluator",
+        "TestCedarServiceNowPolicies"
+      ],
+      "totalLines": 821,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_security_dashboard.py": {
+      "filePath": "tests/test_security_dashboard.py",
+      "contentHash": "a92ac05ab874e7368436938a38fe95704f41943c895be7014aa78ab1c73a5a3e",
+      "functions": [
+        {
+          "name": "_assert_denial",
+          "params": [
+            "text",
+            "context"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "_assert_success",
+          "params": [
+            "text",
+            "context"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "TestHealthAndDiscovery",
+          "methods": [
+            "test_a2a_health_returns_healthy",
+            "test_adk_health_returns_healthy",
+            "test_agent_card_new_endpoint",
+            "test_agent_card_legacy_endpoint",
+            "test_agent_card_skills_complete"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 49
+        },
+        {
+          "name": "TestAgentLevelAccessControl",
+          "methods": [
+            "test_no_token_returns_401_with_denial_fields",
+            "test_invalid_format_returns_401",
+            "test_garbage_token_returns_401",
+            "test_nogroup_user_returns_403",
+            "test_admin_token_accepted",
+            "test_developer_token_accepted",
+            "test_viewer_token_accepted"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 82
+        },
+        {
+          "name": "TestMeEndpoint",
+          "methods": [
+            "test_me_no_token_returns_401",
+            "test_me_admin_role_and_permissions",
+            "test_me_developer_role_and_permissions",
+            "test_me_viewer_role_and_permissions",
+            "test_me_response_structure_complete",
+            "test_me_group_names_mapping",
+            "test_me_token_expiry_in_future"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 121
+        },
+        {
+          "name": "TestToolLevelAccessControl",
+          "methods": [
+            "test_admin_get_user_profile",
+            "test_admin_get_current_time",
+            "test_developer_get_user_profile",
+            "test_developer_time_tool_denied",
+            "test_viewer_get_user_profile",
+            "test_viewer_list_files_denied",
+            "test_viewer_send_email_denied",
+            "test_developer_send_email_denied"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 137
+        },
+        {
+          "name": "TestDenialClassification",
+          "methods": [
+            "test_agent_denial_fields_on_401",
+            "test_agent_denial_fields_on_403",
+            "test_tool_denial_contains_prefix",
+            "test_all_denial_reasons_documented"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 73
+        },
+        {
+          "name": "TestRoleHierarchy",
+          "methods": [
+            "test_multi_group_user_gets_highest_role",
+            "test_admin_user_has_groups_in_response",
+            "test_issuer_is_valid_entra_id"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 41
+        },
+        {
+          "name": "TestCrossServiceIntegration",
+          "methods": [
+            "test_full_pipeline_identity_query",
+            "test_full_pipeline_permission_query",
+            "test_second_message_reuses_session"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 67
+        }
+      ],
+      "imports": [
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "httpx",
+          "specifiers": [
+            "httpx"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "datetime",
+          "specifiers": [
+            "datetime",
+            "timezone"
+          ]
+        }
+      ],
+      "exports": [
+        "TestHealthAndDiscovery",
+        "TestAgentLevelAccessControl",
+        "TestMeEndpoint",
+        "_assert_denial",
+        "_assert_success",
+        "TestToolLevelAccessControl",
+        "TestDenialClassification",
+        "TestRoleHierarchy",
+        "TestCrossServiceIntegration"
+      ],
+      "totalLines": 659,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_servicenow_integration.py": {
+      "filePath": "tests/test_servicenow_integration.py",
+      "contentHash": "8c49ceb2f134ee1df620aa32b5b811d0609830979dfbb1c82789ee6b7c1966f9",
+      "functions": [
+        {
+          "name": "real_sn_client",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "permissions_toml",
+          "params": [
+            "tmp_path",
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "set_user",
+          "params": [],
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "_kb",
+          "params": [
+            "sys_id",
+            "title",
+            "dept"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_article",
+          "params": [
+            "sys_id",
+            "kb_sys_id",
+            "short"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "real_sn_live_client",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "TestServiceNowMocked",
+          "methods": [
+            "test_admin_lists_knowledge_bases",
+            "test_developer_lists_own_dept_kb_articles",
+            "test_developer_lists_other_dept_kb_articles_denied",
+            "test_viewer_reads_own_dept_kb_articles",
+            "test_viewer_blocked_from_other_dept_articles",
+            "test_admin_lists_incidents_no_dept_filter",
+            "test_developer_own_dept_incidents",
+            "test_developer_explicit_other_dept_denied",
+            "test_create_incident_own_dept_payload_includes_dept",
+            "test_update_incident_fetch_then_check_denied_cross_dept",
+            "test_servicenow_unavailable_graceful_error",
+            "test_list_articles_kb_missing_u_department_is_config_error",
+            "test_list_articles_kb_missing_u_department_admin_bypass",
+            "test_init_servicenow_client_raises_on_partial_config",
+            "test_update_incident_distinguishes_sn_error_from_404"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 263
+        },
+        {
+          "name": "_StubExchanger",
+          "methods": [
+            "get_sn_token"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "TestServiceNowOBOSeam",
+          "methods": [
+            "test_obo_token_used_when_entra_and_configured",
+            "test_obo_falls_back_to_basic_when_exchanger_absent",
+            "test_obo_skipped_for_non_entra_user",
+            "test_obo_threaded_through_both_list_articles_calls"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 78
+        },
+        {
+          "name": "TestServiceNowReal",
+          "methods": [
+            "test_real_admin_lists_knowledge_bases",
+            "test_real_admin_lists_articles_in_kb",
+            "test_real_admin_gets_specific_article",
+            "test_real_servicenow_auth_failure_handled"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 64
+        },
+        {
+          "name": "TestServiceNowRealOBO",
+          "methods": [
+            "test_real_obo_user_identity_reaches_sn"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 29
+        }
+      ],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Iterator"
+          ]
+        },
+        {
+          "source": "httpx",
+          "specifiers": [
+            "httpx"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "respx",
+          "specifiers": [
+            "respx"
+          ]
+        },
+        {
+          "source": "server",
+          "specifiers": [
+            "srv"
+          ]
+        },
+        {
+          "source": "policy",
+          "specifiers": [
+            "AccessRequest"
+          ]
+        }
+      ],
+      "exports": [
+        "real_sn_client",
+        "permissions_toml",
+        "set_user",
+        "_kb",
+        "_article",
+        "TestServiceNowMocked",
+        "_StubExchanger",
+        "TestServiceNowOBOSeam",
+        "real_sn_live_client",
+        "TestServiceNowReal",
+        "TestServiceNowRealOBO"
+      ],
+      "totalLines": 621,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_servicenow_obo.py": {
+      "filePath": "tests/test_servicenow_obo.py",
+      "contentHash": "736ef47f92ed06621f6163e01eb51ac0605dcb6bb491f26687245bc1747d8835",
+      "functions": [
+        {
+          "name": "_reset_singleton",
+          "params": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "test_get_sn_token_requests_configured_scope",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "test_get_sn_token_returns_none_on_exchange_failure",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "test_credentials_cached_per_assertion",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_init_disabled_without_scope",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "test_init_disabled_without_client_secret",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "test_init_enabled_with_full_config",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "classes": [
+        {
+          "name": "_FakeToken",
+          "methods": [
+            "__init__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "_FakeCredential",
+          "methods": [
+            "__init__",
+            "get_token",
+            "close"
+          ],
+          "properties": [
+            "last_scopes"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "_RaisingCredential",
+          "methods": [
+            "__init__",
+            "get_token",
+            "close"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "imports": [
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "servicenow_obo",
+          "specifiers": [
+            "servicenow_obo"
+          ]
+        }
+      ],
+      "exports": [
+        "_FakeToken",
+        "_FakeCredential",
+        "_RaisingCredential",
+        "_reset_singleton",
+        "test_get_sn_token_requests_configured_scope",
+        "test_get_sn_token_returns_none_on_exchange_failure",
+        "test_credentials_cached_per_assertion",
+        "test_init_disabled_without_scope",
+        "test_init_disabled_without_client_secret",
+        "test_init_enabled_with_full_config"
+      ],
+      "totalLines": 113,
+      "hasStructuralAnalysis": true
+    }
+  }
+}

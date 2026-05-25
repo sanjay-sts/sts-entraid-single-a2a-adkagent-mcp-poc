@@ -1,0 +1,25 @@
+# .understandignore — patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+#
+# Built-in defaults (always excluded unless negated):
+#   node_modules/, .git/, dist/, build/, .venv/, venv/, __pycache__/,
+#   *.lock, package-lock.json, *.min.js, *.log, images/fonts/media, etc.
+#
+# --- Project-specific exclusions (active) ---
+
+# Generated graphify knowledge-graph output (63 cache/result files)
+graphify-out/
+
+# Historical design/planning notes (throwaway scratch, superseded by docs/)
+scratchpad/
+
+# Test-run artifacts and rendered reports
+reports/
+test_results/
+
+# Logs and pytest cache
+logs/
+.pytest_cache/
+
+# Rendered HTML docs (duplicates of .md sources / generated output)
+*.html

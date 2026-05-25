@@ -1,0 +1,4543 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "identity-aware-agent",
+    "languages": [
+      "cedar",
+      "cedarschema",
+      "config",
+      "css",
+      "javascript",
+      "json",
+      "markdown",
+      "python",
+      "toml",
+      "txt"
+    ],
+    "frameworks": [
+      "AWS Amplify",
+      "boto3",
+      "Create React App",
+      "FastAPI",
+      "FastMCP",
+      "LiteLLM",
+      "MSAL",
+      "pytest",
+      "React",
+      "Uvicorn"
+    ],
+    "description": "A secure, multi-tier AI agent system where user identity propagates from frontend authentication through an A2A gateway and Google ADK agent down to resource APIs. Access control is enforced at three independent levels (agent, tool, and resource) using Cedar RBAC/ABAC policies, providing defense in depth across Microsoft Entra ID and AWS Cognito identity providers.",
+    "analyzedAt": "2026-05-25T14:06:29.507522+00:00",
+    "gitCommitHash": "9fd598e84a5db143dc21065e61e764f6f930ca10"
+  },
+  "nodes": [
+    {
+      "id": "file:a2a_server/server.py",
+      "type": "file",
+      "name": "server.py",
+      "filePath": "a2a_server/server.py",
+      "summary": "A2A protocol gateway (FastAPI) that validates multi-IdP JWTs, enforces agent-level group ACLs, propagates identity via ContextVars, and exposes the /me security-context endpoint backed by a Cedar PDP.",
+      "tags": [
+        "entry-point",
+        "api-handler",
+        "middleware",
+        "authentication",
+        "gateway",
+        "tested"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Uses ContextVars for async-safe per-request auth propagation and an IdPConfig dataclass to route JWT validation across Entra and Cognito issuers."
+    },
+    {
+      "id": "class:a2a_server/server.py:IdPConfig",
+      "type": "class",
+      "name": "IdPConfig",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        103,
+        114
+      ],
+      "summary": "Dataclass describing a single identity provider's JWKS URIs, valid issuers/audiences, signing algorithms, and audience-claim name used during token validation.",
+      "tags": [
+        "data-model",
+        "configuration",
+        "authentication",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:a2a_server/server.py:TokenValidator",
+      "type": "class",
+      "name": "TokenValidator",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        156,
+        275
+      ],
+      "summary": "Multi-IdP JWT validator that detects the provider from the iss claim, fetches and caches JWKS keys, and verifies signature/issuer/audience for Entra and Cognito tokens.",
+      "tags": [
+        "authentication",
+        "validation",
+        "service",
+        "jwt"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "JWKS cache auto-clears on a key-not-found miss and re-fetches; handles Cognito's non-standard client_id audience claim."
+    },
+    {
+      "id": "class:a2a_server/server.py:IdentityAwareAgentExecutor",
+      "type": "class",
+      "name": "IdentityAwareAgentExecutor",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        317,
+        413
+      ],
+      "summary": "A2A AgentExecutor that bridges incoming tasks to the downstream ADK agent, ensuring a per-user session exists and forwarding identity, role, and ABAC attributes on each chat call.",
+      "tags": [
+        "service",
+        "event-handler",
+        "gateway",
+        "integration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:a2a_server/server.py:auth_middleware",
+      "type": "function",
+      "name": "auth_middleware",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        570,
+        669
+      ],
+      "summary": "ASGI middleware that extracts the Bearer token, validates it, enforces blocklist and group-membership checks, and stores claims/token/role/ABAC attributes in ContextVars for the request.",
+      "tags": [
+        "middleware",
+        "authentication",
+        "validation",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:a2a_server/server.py:get_me",
+      "type": "function",
+      "name": "get_me",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        744,
+        816
+      ],
+      "summary": "Handler for the GET /me endpoint that returns the caller's security context (roles, groups, scopes, expiry) and batch-evaluates per-tool permissions via the Cedar evaluator.",
+      "tags": [
+        "api-handler",
+        "authorization",
+        "endpoint"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:a2a_server/server.py:_build_idp_configs",
+      "type": "function",
+      "name": "_build_idp_configs",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        117,
+        151
+      ],
+      "summary": "Builds the list of IdPConfig objects for Entra and Cognito from environment variables, defining their JWKS endpoints and validation parameters.",
+      "tags": [
+        "configuration",
+        "factory",
+        "authentication"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:a2a_server/server.py:_extract_user_info",
+      "type": "function",
+      "name": "_extract_user_info",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        716,
+        734
+      ],
+      "summary": "Normalizes provider-specific JWT claims (Entra vs Cognito) into a common user-info dict with id, email, name, and department.",
+      "tags": [
+        "utility",
+        "serialization",
+        "authentication"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:a2a_server/server.py:_make_task_event",
+      "type": "function",
+      "name": "_make_task_event",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        285,
+        301
+      ],
+      "summary": "Constructs an A2A TaskStatusUpdateEvent carrying a text message and final flag for streaming task progress back to the client.",
+      "tags": [
+        "utility",
+        "factory",
+        "event-handler"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:a2a_server/server.py:_auth_error",
+      "type": "function",
+      "name": "_auth_error",
+      "filePath": "a2a_server/server.py",
+      "lineRange": [
+        540,
+        555
+      ],
+      "summary": "Builds a standardized JSON auth-error Response with CORS headers and a denial_reason field for the frontend's denial classifier.",
+      "tags": [
+        "utility",
+        "error-handling",
+        "authentication"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:adk_agent/agent.py",
+      "type": "file",
+      "name": "agent.py",
+      "filePath": "adk_agent/agent.py",
+      "summary": "Google ADK agent service (FastAPI) that manages per-user sessions, injects identity headers into MCP tool calls, and runs buffered/streaming chat against Claude Haiku via LiteLLM with rate-limit retry.",
+      "tags": [
+        "entry-point",
+        "service",
+        "api-handler",
+        "agent",
+        "integration",
+        "tested"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Uses an McpToolset header provider to inject Authorization, X-Assume-Role, and X-Abac-Attrs from ADK session state on every MCP request."
+    },
+    {
+      "id": "class:adk_agent/agent.py:IdentityAwareAgent",
+      "type": "class",
+      "name": "IdentityAwareAgent",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        121,
+        319
+      ],
+      "summary": "Wraps a Google ADK LlmAgent with identity-aware session management, role determination, and a retrying chat loop that calls MCP tools with the user's propagated auth context.",
+      "tags": [
+        "service",
+        "agent",
+        "session",
+        "integration"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Rate-limit retry uses 3 attempts with 30s/60s/90s backoff; RunConfig caps LLM calls at 4 to prevent loops."
+    },
+    {
+      "id": "function:adk_agent/agent.py:mcp_header_provider",
+      "type": "function",
+      "name": "mcp_header_provider",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        99,
+        118
+      ],
+      "summary": "Sync header provider invoked by McpToolset that injects Authorization, X-Assume-Role, and X-Abac-Attrs headers from the ADK session state into each MCP request.",
+      "tags": [
+        "middleware",
+        "authentication",
+        "integration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:adk_agent/agent.py:create_session",
+      "type": "function",
+      "name": "create_session",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        373,
+        387
+      ],
+      "summary": "POST /session route handler that extracts the Bearer token, validates the user id against token claims, and creates a new identity-bound ADK session.",
+      "tags": [
+        "api-handler",
+        "session",
+        "endpoint"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:adk_agent/agent.py:_parse_chat_request",
+      "type": "function",
+      "name": "_parse_chat_request",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        390,
+        406
+      ],
+      "summary": "Shared helper that extracts and validates the Bearer token and chat-request body fields for the /chat and /chat/stream endpoints.",
+      "tags": [
+        "utility",
+        "validation",
+        "api-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:adk_agent/agent.py:chat",
+      "type": "function",
+      "name": "chat",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        410,
+        439
+      ],
+      "summary": "POST /chat handler that primes session state with role/ABAC attributes and returns the agent's buffered text response.",
+      "tags": [
+        "api-handler",
+        "agent",
+        "endpoint"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:adk_agent/agent.py:chat_stream",
+      "type": "function",
+      "name": "chat_stream",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        443,
+        462
+      ],
+      "summary": "POST /chat/stream handler that returns the agent's response as an SSE StreamingResponse.",
+      "tags": [
+        "api-handler",
+        "agent",
+        "streaming",
+        "endpoint"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:adk_agent/agent.py:_validate_user_id",
+      "type": "function",
+      "name": "_validate_user_id",
+      "filePath": "adk_agent/agent.py",
+      "lineRange": [
+        352,
+        369
+      ],
+      "summary": "Decodes the access token (without signature verification) to confirm the supplied user_id matches the token's subject claim.",
+      "tags": [
+        "validation",
+        "authentication",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:dev_config.py",
+      "type": "file",
+      "name": "dev_config.py",
+      "filePath": "dev_config.py",
+      "summary": "Shared development configuration module that loads dev_config.toml, exposes the auth-bypass flag per server, parses ABAC attribute headers, detects the IdP from claims, and holds shared path constants.",
+      "tags": [
+        "config",
+        "utility",
+        "shared",
+        "configuration",
+        "tested"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Uses tomllib to read an optional gitignored dev_config.toml; warns once per section when auth bypass is enabled."
+    },
+    {
+      "id": "function:dev_config.py:is_auth_disabled",
+      "type": "function",
+      "name": "is_auth_disabled",
+      "filePath": "dev_config.py",
+      "lineRange": [
+        39,
+        56
+      ],
+      "summary": "Returns whether auth bypass is enabled for a given server section in dev_config.toml, logging a one-time warning when active.",
+      "tags": [
+        "configuration",
+        "utility",
+        "security"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:dev_config.py:parse_abac_attrs",
+      "type": "function",
+      "name": "parse_abac_attrs",
+      "filePath": "dev_config.py",
+      "lineRange": [
+        78,
+        98
+      ],
+      "summary": "Parses the JSON-encoded X-Abac-Attrs header into a dict while filtering out blocked ABAC keys that must come from validated claims.",
+      "tags": [
+        "utility",
+        "validation",
+        "serialization",
+        "security"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:dev_config.py:detect_provider",
+      "type": "function",
+      "name": "detect_provider",
+      "filePath": "dev_config.py",
+      "lineRange": [
+        101,
+        113
+      ],
+      "summary": "Detects the identity provider (entra vs cognito) by inspecting the iss claim of the decoded token.",
+      "tags": [
+        "utility",
+        "authentication",
+        "shared"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp_server/server.py",
+      "type": "file",
+      "name": "server.py",
+      "filePath": "mcp_server/server.py",
+      "summary": "FastMCP tool server exposing 18 tools (Graph, S3, time, ServiceNow) guarded by a two-phase Cedar authorization model via require_cedar and UserContextMiddleware, with OBO token exchange for Graph and ServiceNow.",
+      "tags": [
+        "entry-point",
+        "api-handler",
+        "authorization",
+        "middleware",
+        "service",
+        "tested"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Runs in stateless HTTP mode using ContextVars (6 vars) instead of session state; Phase 1 RBAC passthrough lets ABAC tools defer to Phase 2 context checks."
+    },
+    {
+      "id": "class:mcp_server/server.py:UserContextMiddleware",
+      "type": "class",
+      "name": "UserContextMiddleware",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        183,
+        333
+      ],
+      "summary": "FastMCP middleware that resolves user identity from the validated token (or bypass), sets the six auth ContextVars, and enforces role selection on list-tools and call-tool hooks.",
+      "tags": [
+        "middleware",
+        "authentication",
+        "authorization",
+        "event-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp_server/server.py:require_cedar",
+      "type": "function",
+      "name": "require_cedar",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        367,
+        388
+      ],
+      "summary": "Factory returning a FastMCP auth callable that performs the Phase 1 Cedar RBAC check for a named tool, with passthrough for ABAC tools that need runtime context.",
+      "tags": [
+        "authorization",
+        "factory",
+        "middleware"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:cedar_check_with_context",
+      "type": "function",
+      "name": "cedar_check_with_context",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        391,
+        397
+      ],
+      "summary": "Performs the Phase 2 Cedar ABAC check inside a tool, evaluating the policy with runtime context such as the S3 resource path.",
+      "tags": [
+        "authorization",
+        "validation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp_server/server.py:_cedar_check_department",
+      "type": "function",
+      "name": "_cedar_check_department",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        405,
+        428
+      ],
+      "summary": "Composite role+department Cedar pre-check for ServiceNow tools, comparing the caller's JWT department claim against the target department before the SN call.",
+      "tags": [
+        "authorization",
+        "validation",
+        "abac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:_build_auth",
+      "type": "function",
+      "name": "_build_auth",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        119,
+        172
+      ],
+      "summary": "Builds the FastMCP MultiAuth verifier chain combining an Azure JWT verifier for Entra and a JWT verifier for Cognito.",
+      "tags": [
+        "authentication",
+        "factory",
+        "configuration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:_get_effective_graph_token",
+      "type": "function",
+      "name": "_get_effective_graph_token",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        471,
+        478
+      ],
+      "summary": "Returns a (token, obo_used) tuple, exchanging the user's token for a Graph-scoped OBO token when available or falling back to the raw token.",
+      "tags": [
+        "authentication",
+        "obo",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp_server/server.py:_get_effective_sn_token",
+      "type": "function",
+      "name": "_get_effective_sn_token",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        481,
+        500
+      ],
+      "summary": "Returns a (token, obo_used) tuple for ServiceNow calls, performing OBO exchange for Entra users when configured and otherwise signalling service-account fallback.",
+      "tags": [
+        "authentication",
+        "obo",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:_run_s3_operation",
+      "type": "function",
+      "name": "_run_s3_operation",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        649,
+        674
+      ],
+      "summary": "Wraps boto3 S3 calls in asyncio.to_thread with standardized error mapping for the S3 tool family.",
+      "tags": [
+        "utility",
+        "service",
+        "error-handling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:get_user_profile",
+      "type": "function",
+      "name": "get_user_profile",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        525,
+        556
+      ],
+      "summary": "MCP tool that returns the user's profile from Microsoft Graph via OBO, falling back to token claims when OBO is unavailable.",
+      "tags": [
+        "api-handler",
+        "service",
+        "graph-api"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:list_files",
+      "type": "function",
+      "name": "list_files",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        560,
+        593
+      ],
+      "summary": "MCP tool that lists OneDrive files for the user via a Graph OBO token, returning an informative error when OBO is not configured.",
+      "tags": [
+        "api-handler",
+        "service",
+        "graph-api"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:delete_s3_object",
+      "type": "function",
+      "name": "delete_s3_object",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        781,
+        830
+      ],
+      "summary": "ABAC-protected MCP tool that deletes an S3 object only when the Phase 2 Cedar check passes (archiver=true and archive/* path), blocked in protected/.",
+      "tags": [
+        "api-handler",
+        "authorization",
+        "abac",
+        "service"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:list_s3_objects",
+      "type": "function",
+      "name": "list_s3_objects",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        699,
+        741
+      ],
+      "summary": "MCP tool that lists objects in an S3 bucket under an optional prefix using server-side AWS credentials.",
+      "tags": [
+        "api-handler",
+        "service",
+        "s3"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:get_s3_object_info",
+      "type": "function",
+      "name": "get_s3_object_info",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        745,
+        777
+      ],
+      "summary": "MCP tool returning metadata for a single S3 object via server-side AWS credentials.",
+      "tags": [
+        "api-handler",
+        "service",
+        "s3"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:get_current_time",
+      "type": "function",
+      "name": "get_current_time",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        871,
+        896
+      ],
+      "summary": "MCP utility tool returning the current time in a requested timezone with resolution of common timezone aliases.",
+      "tags": [
+        "api-handler",
+        "utility",
+        "datetime"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:convert_timezone",
+      "type": "function",
+      "name": "convert_timezone",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        922,
+        968
+      ],
+      "summary": "MCP utility tool that converts a time string from one timezone to another.",
+      "tags": [
+        "api-handler",
+        "utility",
+        "datetime"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:get_time_difference",
+      "type": "function",
+      "name": "get_time_difference",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        972,
+        1020
+      ],
+      "summary": "MCP utility tool that computes the UTC offset difference between two timezones.",
+      "tags": [
+        "api-handler",
+        "utility",
+        "datetime"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:list_articles",
+      "type": "function",
+      "name": "list_articles",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        1047,
+        1083
+      ],
+      "summary": "ServiceNow MCP tool that lists knowledge-base articles after a composite role+department Cedar pre-check, using the OBO or service-account SN client.",
+      "tags": [
+        "api-handler",
+        "servicenow",
+        "authorization",
+        "abac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:list_incidents",
+      "type": "function",
+      "name": "list_incidents",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        1101,
+        1121
+      ],
+      "summary": "ServiceNow MCP tool that lists incidents for a department after a Cedar dept-scoped pre-check.",
+      "tags": [
+        "api-handler",
+        "servicenow",
+        "authorization",
+        "abac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:create_incident",
+      "type": "function",
+      "name": "create_incident",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        1139,
+        1166
+      ],
+      "summary": "ServiceNow MCP tool that creates an incident in the caller's department after a dept-scoped Cedar pre-check.",
+      "tags": [
+        "api-handler",
+        "servicenow",
+        "authorization",
+        "abac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:update_incident",
+      "type": "function",
+      "name": "update_incident",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        1170,
+        1211
+      ],
+      "summary": "ServiceNow MCP tool that updates an existing incident by sys_id after a dept-scoped Cedar pre-check.",
+      "tags": [
+        "api-handler",
+        "servicenow",
+        "authorization",
+        "abac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp_server/server.py:list_knowledge_bases",
+      "type": "function",
+      "name": "list_knowledge_bases",
+      "filePath": "mcp_server/server.py",
+      "lineRange": [
+        1033,
+        1043
+      ],
+      "summary": "ServiceNow MCP tool that lists available knowledge bases for the user via the SN client.",
+      "tags": [
+        "api-handler",
+        "servicenow",
+        "service"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp_server/policy.py",
+      "type": "file",
+      "name": "policy.py",
+      "filePath": "mcp_server/policy.py",
+      "summary": "Policy abstraction layer defining the PolicyEvaluator interface and its TOML and Cedar implementations, where CedarPolicyEvaluator composes TOML role resolution with cedarpy policy decisions and batch evaluation.",
+      "tags": [
+        "authorization",
+        "data-model",
+        "service",
+        "abstraction",
+        "tested"
+      ],
+      "complexity": "complex",
+      "languageNotes": "CedarPolicyEvaluator hot-reloads policies and entities on mtime change and exposes check_access_batch for single-pass multi-tool evaluation."
+    },
+    {
+      "id": "class:mcp_server/policy.py:CedarPolicyEvaluator",
+      "type": "class",
+      "name": "CedarPolicyEvaluator",
+      "filePath": "mcp_server/policy.py",
+      "lineRange": [
+        146,
+        379
+      ],
+      "summary": "Cedar-backed policy evaluator that loads policies/entities, builds the User entity from claims, and authorizes single and batch tool requests via cedarpy with mtime-based hot reload.",
+      "tags": [
+        "authorization",
+        "service",
+        "abac",
+        "rbac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:mcp_server/policy.py:TomlPolicyEvaluator",
+      "type": "class",
+      "name": "TomlPolicyEvaluator",
+      "filePath": "mcp_server/policy.py",
+      "lineRange": [
+        69,
+        143
+      ],
+      "summary": "Policy evaluator that resolves group-to-role mappings from permissions.toml and answers role-availability and access queries from static TOML rules.",
+      "tags": [
+        "authorization",
+        "configuration",
+        "rbac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp_server/policy.py:PolicyEvaluator",
+      "type": "class",
+      "name": "PolicyEvaluator",
+      "filePath": "mcp_server/policy.py",
+      "lineRange": [
+        46,
+        66
+      ],
+      "summary": "Abstract base interface declaring get_available_roles and check_access for pluggable authorization backends.",
+      "tags": [
+        "abstraction",
+        "type-definition",
+        "authorization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:mcp_server/policy.py:AccessRequest",
+      "type": "class",
+      "name": "AccessRequest",
+      "filePath": "mcp_server/policy.py",
+      "lineRange": [
+        25,
+        34
+      ],
+      "summary": "Dataclass capturing the principal, action, resource, and context of an authorization request.",
+      "tags": [
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:mcp_server/policy.py:AccessDecision",
+      "type": "class",
+      "name": "AccessDecision",
+      "filePath": "mcp_server/policy.py",
+      "lineRange": [
+        38,
+        43
+      ],
+      "summary": "Dataclass representing an authorization outcome (allowed flag plus reason).",
+      "tags": [
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp_server/graph_obo.py",
+      "type": "file",
+      "name": "graph_obo.py",
+      "filePath": "mcp_server/graph_obo.py",
+      "summary": "On-Behalf-Of token exchange for Microsoft Graph, providing the GraphOBOExchanger singleton that swaps a user's custom-audience token for a Graph-scoped token using the confidential client credential.",
+      "tags": [
+        "authentication",
+        "obo",
+        "singleton",
+        "graph-api"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Caches per-scope credentials (LRU 128) and exposes module-level init/get accessors for the singleton."
+    },
+    {
+      "id": "class:mcp_server/graph_obo.py:GraphOBOExchanger",
+      "type": "class",
+      "name": "GraphOBOExchanger",
+      "filePath": "mcp_server/graph_obo.py",
+      "lineRange": [
+        23,
+        84
+      ],
+      "summary": "Exchanges a user access token for a Graph-scoped OBO token using MSAL confidential-client credentials, caching credentials by scope.",
+      "tags": [
+        "authentication",
+        "obo",
+        "service",
+        "graph-api"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp_server/servicenow.py",
+      "type": "file",
+      "name": "servicenow.py",
+      "filePath": "mcp_server/servicenow.py",
+      "summary": "ServiceNow Table API client supporting Bearer (OBO) or HTTP Basic (service account) auth, with methods for knowledge bases, articles, and incident CRUD plus a module-level singleton accessor.",
+      "tags": [
+        "service",
+        "servicenow",
+        "api-client",
+        "integration",
+        "tested"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:mcp_server/servicenow.py:ServiceNowClient",
+      "type": "class",
+      "name": "ServiceNowClient",
+      "filePath": "mcp_server/servicenow.py",
+      "lineRange": [
+        51,
+        214
+      ],
+      "summary": "HTTP client for the ServiceNow Table API exposing KB and incident operations, selecting Bearer OBO or service-account Basic auth per request.",
+      "tags": [
+        "service",
+        "servicenow",
+        "api-client",
+        "integration"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp_server/servicenow.py:init_servicenow_client",
+      "type": "function",
+      "name": "init_servicenow_client",
+      "filePath": "mcp_server/servicenow.py",
+      "lineRange": [
+        219,
+        255
+      ],
+      "summary": "Initializes the module-level ServiceNow client singleton from instance URL and service-account credentials.",
+      "tags": [
+        "factory",
+        "singleton",
+        "servicenow",
+        "configuration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp_server/servicenow_obo.py",
+      "type": "file",
+      "name": "servicenow_obo.py",
+      "filePath": "mcp_server/servicenow_obo.py",
+      "summary": "On-Behalf-Of token exchange for ServiceNow, providing the ServiceNowOBOExchanger singleton that swaps a user's token for a ServiceNow-scoped token so SN can apply per-user ACLs.",
+      "tags": [
+        "authentication",
+        "obo",
+        "singleton",
+        "servicenow",
+        "tested"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Dormant until [servicenow].obo_scope is configured; mirrors the GraphOBOExchanger init/get singleton pattern."
+    },
+    {
+      "id": "class:mcp_server/servicenow_obo.py:ServiceNowOBOExchanger",
+      "type": "class",
+      "name": "ServiceNowOBOExchanger",
+      "filePath": "mcp_server/servicenow_obo.py",
+      "lineRange": [
+        28,
+        82
+      ],
+      "summary": "Exchanges a user access token for a ServiceNow-scoped OBO token using MSAL confidential-client credentials, caching the credential.",
+      "tags": [
+        "authentication",
+        "obo",
+        "service",
+        "servicenow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp_server/servicenow_mock.py",
+      "type": "file",
+      "name": "servicenow_mock.py",
+      "filePath": "mcp_server/servicenow_mock.py",
+      "summary": "In-memory ServiceNow mock used when no instance URL is configured, mirroring the real client's KB and incident API surface with seeded data.",
+      "tags": [
+        "service",
+        "servicenow",
+        "mock",
+        "test-double",
+        "tested"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp_server/servicenow_mock.py:ServiceNowMockClient",
+      "type": "class",
+      "name": "ServiceNowMockClient",
+      "filePath": "mcp_server/servicenow_mock.py",
+      "lineRange": [
+        60,
+        156
+      ],
+      "summary": "In-memory stand-in for ServiceNowClient that serves seeded knowledge bases, articles, and incidents for local development and testing.",
+      "tags": [
+        "service",
+        "servicenow",
+        "mock",
+        "test-double"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:cedar/policies/rbac.cedar",
+      "type": "file",
+      "name": "rbac.cedar",
+      "filePath": "cedar/policies/rbac.cedar",
+      "summary": "Cedar RBAC permit policies granting admin all tools (except ABAC-only delete_s3_object), developers a fixed tool set plus ServiceNow reads, and viewers a limited tool set; all authenticated users may list tools.",
+      "tags": [
+        "authorization",
+        "rbac",
+        "policy",
+        "security",
+        "tested"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Role membership is modeled via the Cedar entity hierarchy (User in [Role]); delete_s3_object is intentionally excluded from all RBAC permits."
+    },
+    {
+      "id": "file:cedar/policies/abac.cedar",
+      "type": "file",
+      "name": "abac.cedar",
+      "filePath": "cedar/policies/abac.cedar",
+      "summary": "Cedar ABAC permit policies: archiver=true users may delete S3 objects in archive/* regardless of role, and developer/viewer may use dept-scoped ServiceNow tools only when their department claim matches the target department.",
+      "tags": [
+        "authorization",
+        "abac",
+        "policy",
+        "security",
+        "tested"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Composite role+department checks compare principal.department against context.target_department supplied at the agent layer."
+    },
+    {
+      "id": "file:cedar/policies/guardrails.cedar",
+      "type": "file",
+      "name": "guardrails.cedar",
+      "filePath": "cedar/policies/guardrails.cedar",
+      "summary": "Cedar forbid guardrail that blocks deletion of S3 objects under protected/* for everyone, overriding all permits including admin.",
+      "tags": [
+        "authorization",
+        "policy",
+        "security",
+        "guardrail",
+        "tested"
+      ],
+      "complexity": "simple",
+      "languageNotes": "In Cedar a forbid always overrides any permit, making this a hard safety limit."
+    },
+    {
+      "id": "file:cedar/schema.cedarschema",
+      "type": "schema",
+      "name": "schema.cedarschema",
+      "filePath": "cedar/schema.cedarschema",
+      "summary": "Cedar schema for the AgentAuth namespace defining the Role/User/Tool/S3Folder entities (with provider, email, groups, department, archiver attributes) and the call_tool and list_tools actions with their context.",
+      "tags": [
+        "schema-definition",
+        "authorization",
+        "type-definition",
+        "security"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:cedar/entities.json",
+      "type": "config",
+      "name": "entities.json",
+      "filePath": "cedar/entities.json",
+      "summary": "Static Cedar entity store declaring the three roles (admin, developer, viewer) and 18 Tool entities with sensitivity and required-provider attributes used during policy evaluation.",
+      "tags": [
+        "configuration",
+        "authorization",
+        "data-model",
+        "security"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:pyproject.toml",
+      "type": "config",
+      "name": "pyproject.toml",
+      "filePath": "pyproject.toml",
+      "summary": "Python project configuration (uv) declaring project metadata and pytest options for the identity-aware agent backend.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "python",
+        "testing"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:requirements.txt",
+      "type": "document",
+      "name": "requirements.txt",
+      "filePath": "requirements.txt",
+      "summary": "Pinned Python dependency list for the backend including a2a-sdk, FastMCP, google-adk, LiteLLM, cedarpy, PyJWT, MSAL, and boto3.",
+      "tags": [
+        "documentation",
+        "dependencies",
+        "python",
+        "build-system"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:dev_config.example.toml",
+      "type": "config",
+      "name": "dev_config.example.toml",
+      "filePath": "dev_config.example.toml",
+      "summary": "Template for the gitignored dev_config.toml defining per-server auth-bypass flags (a2a, adk, mcp) and a servicenow section, defaulting all bypass flags to false.",
+      "tags": [
+        "configuration",
+        "development",
+        "security",
+        "template"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:permissions.example.toml",
+      "type": "config",
+      "name": "permissions.example.toml",
+      "filePath": "permissions.example.toml",
+      "summary": "Template for the gitignored permissions.toml defining per-provider group-to-role mappings (entra, cognito, auth0), per-user overrides, and the default role for unknown users.",
+      "tags": [
+        "configuration",
+        "authorization",
+        "security",
+        "template"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": ".env.example",
+      "summary": "Backend environment-variable template declaring Entra/Cognito credentials, access-control group IDs, blocked users, server ports, and AWS settings for S3 and Bedrock.",
+      "tags": [
+        "configuration",
+        "environment",
+        "secrets",
+        "template"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/index.js",
+      "type": "file",
+      "name": "index.js",
+      "filePath": "frontend/src/index.js",
+      "summary": "React entry point that mounts the App component wrapped in AuthProvider into the DOM root and imports global dashboard styles.",
+      "tags": [
+        "entry-point",
+        "bootstrap",
+        "react"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Standard CRA-style root render using ReactDOM createRoot."
+    },
+    {
+      "id": "file:frontend/src/App.js",
+      "type": "file",
+      "name": "App.js",
+      "filePath": "frontend/src/App.js",
+      "summary": "Top-level dashboard shell that lays out the sidebar and main area, gates on authentication via useAuth, and threads audit-entry state through the security and chat panels.",
+      "tags": [
+        "component",
+        "entry-point",
+        "layout",
+        "dashboard"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Uses useCallback to memoize audit-entry append/clear handlers passed to children."
+    },
+    {
+      "id": "file:frontend/src/AuthProvider.js",
+      "type": "file",
+      "name": "AuthProvider.js",
+      "filePath": "frontend/src/AuthProvider.js",
+      "summary": "Unified authentication provider that wraps MSAL (Entra) and AWS Amplify (Cognito) behind a single useAuth() hook exposing provider, login, logout, getAccessToken, and switchProvider.",
+      "tags": [
+        "service",
+        "authentication",
+        "context-provider",
+        "multi-idp"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Lazy MSAL singleton initialization plus Amplify Hub.listen subscription; provider choice persisted in localStorage."
+    },
+    {
+      "id": "file:frontend/src/authConfig.js",
+      "type": "file",
+      "name": "authConfig.js",
+      "filePath": "frontend/src/authConfig.js",
+      "summary": "MSAL configuration for Entra ID plus scope presets (loginRequest and per-tool graphScopes) used to drive consented token acquisition.",
+      "tags": [
+        "config",
+        "authentication",
+        "msal",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/cognitoConfig.js",
+      "type": "file",
+      "name": "cognitoConfig.js",
+      "filePath": "frontend/src/cognitoConfig.js",
+      "summary": "AWS Amplify configuration object for the Cognito user pool, app client, hosted UI domain, and OAuth scopes.",
+      "tags": [
+        "config",
+        "authentication",
+        "cognito"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/components/AuditLog.js",
+      "type": "file",
+      "name": "AuditLog.js",
+      "filePath": "frontend/src/components/AuditLog.js",
+      "summary": "Collapsible request-history table that renders audit entries with denial tiers, expandable rows, and copy-as-JSON export.",
+      "tags": [
+        "component",
+        "audit",
+        "ui",
+        "event-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/src/components/AuthStatus.js",
+      "type": "file",
+      "name": "AuthStatus.js",
+      "filePath": "frontend/src/components/AuthStatus.js",
+      "summary": "Header status widget showing the current account and provider with sign-in buttons and a provider switcher backed by useAuth.",
+      "tags": [
+        "component",
+        "authentication",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/components/ChatInterface.js",
+      "type": "file",
+      "name": "ChatInterface.js",
+      "filePath": "frontend/src/components/ChatInterface.js",
+      "summary": "Chat panel that sends user messages to the A2A gateway via sendA2AMessage, renders responses with denial tagging and latency, and emits audit entries.",
+      "tags": [
+        "component",
+        "chat",
+        "api-handler",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/src/components/ConversationTabs.js",
+      "type": "file",
+      "name": "ConversationTabs.js",
+      "filePath": "frontend/src/components/ConversationTabs.js",
+      "summary": "Multi-tab chat container (max 4 tabs) that lets each tab pick a Graph scope preset before instantiating a scoped ChatInterface.",
+      "tags": [
+        "component",
+        "chat",
+        "tabs",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/src/components/DenialIndicator.js",
+      "type": "file",
+      "name": "DenialIndicator.js",
+      "filePath": "frontend/src/components/DenialIndicator.js",
+      "summary": "Small presentational badge that color-codes a denial tier (agent/tool/scope/resource) for inline display.",
+      "tags": [
+        "component",
+        "ui",
+        "presentational"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/components/LoginPrompt.js",
+      "type": "file",
+      "name": "LoginPrompt.js",
+      "filePath": "frontend/src/components/LoginPrompt.js",
+      "summary": "Unauthenticated sign-in prompt offering provider selection (Entra or Cognito) via the useAuth login flow.",
+      "tags": [
+        "component",
+        "authentication",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/components/RBACTestMatrix.js",
+      "type": "file",
+      "name": "RBACTestMatrix.js",
+      "filePath": "frontend/src/components/RBACTestMatrix.js",
+      "summary": "One-click test grid that runs predefined RBAC/ABAC scenarios for the effective role against the A2A server and marks each pass/fail.",
+      "tags": [
+        "component",
+        "test",
+        "rbac",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:frontend/src/components/SecurityContextPanel.js",
+      "type": "file",
+      "name": "SecurityContextPanel.js",
+      "filePath": "frontend/src/components/SecurityContextPanel.js",
+      "summary": "Sidebar panel that fetches the /me security context (role, groups, scopes, permissions), exposes role and ABAC archiver toggles, and shows a live token-expiry countdown.",
+      "tags": [
+        "component",
+        "security",
+        "api-handler",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:frontend/src/components/TokenInspector.js",
+      "type": "file",
+      "name": "TokenInspector.js",
+      "filePath": "frontend/src/components/TokenInspector.js",
+      "summary": "Read-only JWT inspector that acquires the current access token, decodes its header and payload, and highlights identity-relevant claims.",
+      "tags": [
+        "component",
+        "jwt",
+        "ui",
+        "debugging"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/src/utils/a2aClient.js",
+      "type": "file",
+      "name": "a2aClient.js",
+      "filePath": "frontend/src/utils/a2aClient.js",
+      "summary": "Centralized A2A JSON-RPC client that sends message/send requests with auth headers, extracts response text, classifies denials, and builds audit-log entries.",
+      "tags": [
+        "utility",
+        "api-handler",
+        "client",
+        "serialization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/src/utils/constants.js",
+      "type": "file",
+      "name": "constants.js",
+      "filePath": "frontend/src/utils/constants.js",
+      "summary": "Shared frontend constants holding the A2A server URL and provider display-label map.",
+      "tags": [
+        "utility",
+        "config",
+        "constants"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/utils/denialClassifier.js",
+      "type": "file",
+      "name": "denialClassifier.js",
+      "filePath": "frontend/src/utils/denialClassifier.js",
+      "summary": "Classifies an A2A response into one of four denial tiers (agent, tool, scope, resource) by inspecting HTTP status and response text patterns.",
+      "tags": [
+        "utility",
+        "validation",
+        "classification"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/src/utils/testScenarios.js",
+      "type": "file",
+      "name": "testScenarios.js",
+      "filePath": "frontend/src/utils/testScenarios.js",
+      "summary": "Predefined RBAC/ABAC test scenarios with expected outcomes plus getScenariosForRole, which filters scenarios by role and ABAC attributes for the test matrix.",
+      "tags": [
+        "utility",
+        "test",
+        "data-model",
+        "fixtures"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Large declarative scenario table (~400 lines) with a single filter helper."
+    },
+    {
+      "id": "file:frontend/src/utils/tokenDecoder.js",
+      "type": "file",
+      "name": "tokenDecoder.js",
+      "filePath": "frontend/src/utils/tokenDecoder.js",
+      "summary": "Display-only JWT helper that splits a token and base64url-decodes its header and payload for the TokenInspector.",
+      "tags": [
+        "utility",
+        "jwt",
+        "serialization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:frontend/src/App.css",
+      "type": "file",
+      "name": "App.css",
+      "filePath": "frontend/src/App.css",
+      "summary": "Dark-theme dashboard stylesheet defining the sidebar/main layout, panels, chat, audit log, and denial badge styles for the entire frontend.",
+      "tags": [
+        "stylesheet",
+        "ui",
+        "theme",
+        "dashboard"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:frontend/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "frontend/package.json",
+      "summary": "Frontend npm manifest declaring React 18, MSAL.js, and AWS Amplify dependencies plus the CRA build/start scripts and browserslist targets.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "dependencies",
+        "npm"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:frontend/.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": "frontend/.env.example",
+      "summary": "Template environment file documenting the Entra, Cognito, A2A server URL, and dev-server port variables the React app reads at build time.",
+      "tags": [
+        "configuration",
+        "environment",
+        "authentication",
+        "template"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/App.js:App",
+      "type": "function",
+      "name": "App",
+      "filePath": "frontend/src/App.js",
+      "lineRange": [
+        13,
+        96
+      ],
+      "summary": "Root dashboard component that branches on authentication state and composes the sidebar panels with the conversation/audit main area.",
+      "tags": [
+        "component",
+        "layout",
+        "entry-point"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/AuthProvider.js:useAuth",
+      "type": "function",
+      "name": "useAuth",
+      "filePath": "frontend/src/AuthProvider.js",
+      "lineRange": [
+        31,
+        31
+      ],
+      "summary": "Hook that returns the unified auth context (provider, isAuthenticated, user, getAccessToken, login, logout, switchProvider) for consuming components.",
+      "tags": [
+        "hook",
+        "authentication",
+        "context"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/AuthProvider.js:AuthProvider",
+      "type": "function",
+      "name": "AuthProvider",
+      "filePath": "frontend/src/AuthProvider.js",
+      "lineRange": [
+        104,
+        269
+      ],
+      "summary": "Provider component that manages MSAL and Cognito session state, persists the active provider, and exposes login/logout/getAccessToken/switchProvider through context.",
+      "tags": [
+        "component",
+        "context-provider",
+        "authentication",
+        "multi-idp"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:frontend/src/AuthProvider.js:ensureMsalReady",
+      "type": "function",
+      "name": "ensureMsalReady",
+      "filePath": "frontend/src/AuthProvider.js",
+      "lineRange": [
+        52,
+        64
+      ],
+      "summary": "Lazily initializes the MSAL singleton and restores the active account from cached accounts before token operations.",
+      "tags": [
+        "authentication",
+        "msal",
+        "initialization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/components/AuditLog.js:AuditLog",
+      "type": "function",
+      "name": "AuditLog",
+      "filePath": "frontend/src/components/AuditLog.js",
+      "lineRange": [
+        11,
+        90
+      ],
+      "summary": "Renders the audit-entry history table with collapsible state, expandable rows, denial badges, and a copy-as-JSON action.",
+      "tags": [
+        "component",
+        "audit",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/components/AuthStatus.js:AuthStatus",
+      "type": "function",
+      "name": "AuthStatus",
+      "filePath": "frontend/src/components/AuthStatus.js",
+      "lineRange": [
+        5,
+        40
+      ],
+      "summary": "Header widget rendering current account/provider with login buttons and a provider switcher via useAuth.",
+      "tags": [
+        "component",
+        "authentication",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/components/ChatInterface.js:ChatInterface",
+      "type": "function",
+      "name": "ChatInterface",
+      "filePath": "frontend/src/components/ChatInterface.js",
+      "lineRange": [
+        8,
+        110
+      ],
+      "summary": "Chat panel component that submits messages to the A2A gateway, manages message/loading state, and emits audit entries with denial classification.",
+      "tags": [
+        "component",
+        "chat",
+        "api-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/components/ConversationTabs.js:ConversationTabs",
+      "type": "function",
+      "name": "ConversationTabs",
+      "filePath": "frontend/src/components/ConversationTabs.js",
+      "lineRange": [
+        9,
+        104
+      ],
+      "summary": "Manages up to four chat tabs, each bound to a chosen Graph scope preset, with add/close and scope-picker logic.",
+      "tags": [
+        "component",
+        "chat",
+        "tabs"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/components/DenialIndicator.js:DenialIndicator",
+      "type": "function",
+      "name": "DenialIndicator",
+      "filePath": "frontend/src/components/DenialIndicator.js",
+      "lineRange": [
+        10,
+        20
+      ],
+      "summary": "Presentational badge that renders a color-coded label for a denial tier.",
+      "tags": [
+        "component",
+        "ui",
+        "presentational"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/components/LoginPrompt.js:LoginPrompt",
+      "type": "function",
+      "name": "LoginPrompt",
+      "filePath": "frontend/src/components/LoginPrompt.js",
+      "lineRange": [
+        4,
+        40
+      ],
+      "summary": "Sign-in prompt component offering Entra and Cognito login options through the useAuth login flow.",
+      "tags": [
+        "component",
+        "authentication",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/components/RBACTestMatrix.js:RBACTestMatrix",
+      "type": "function",
+      "name": "RBACTestMatrix",
+      "filePath": "frontend/src/components/RBACTestMatrix.js",
+      "lineRange": [
+        28,
+        161
+      ],
+      "summary": "Test-grid component that runs role-scoped scenarios against the A2A server, tracks per-scenario pass/fail results, and emits audit entries.",
+      "tags": [
+        "component",
+        "test",
+        "rbac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:frontend/src/components/RBACTestMatrix.js:ResultCell",
+      "type": "function",
+      "name": "ResultCell",
+      "filePath": "frontend/src/components/RBACTestMatrix.js",
+      "lineRange": [
+        9,
+        26
+      ],
+      "summary": "Renders a single test-result cell with pass/fail/pending styling for the RBAC test matrix.",
+      "tags": [
+        "component",
+        "ui",
+        "presentational"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/components/SecurityContextPanel.js:SecurityContextPanel",
+      "type": "function",
+      "name": "SecurityContextPanel",
+      "filePath": "frontend/src/components/SecurityContextPanel.js",
+      "lineRange": [
+        14,
+        208
+      ],
+      "summary": "Fetches and displays the user's /me security context with role/archiver toggles, group and scope listings, and a live token-expiry countdown.",
+      "tags": [
+        "component",
+        "security",
+        "api-handler"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:frontend/src/components/TokenInspector.js:TokenInspector",
+      "type": "function",
+      "name": "TokenInspector",
+      "filePath": "frontend/src/components/TokenInspector.js",
+      "lineRange": [
+        7,
+        65
+      ],
+      "summary": "Acquires the current access token, decodes it, and renders header/payload claims with identity fields highlighted.",
+      "tags": [
+        "component",
+        "jwt",
+        "debugging"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/utils/a2aClient.js:sendA2AMessage",
+      "type": "function",
+      "name": "sendA2AMessage",
+      "filePath": "frontend/src/utils/a2aClient.js",
+      "lineRange": [
+        33,
+        78
+      ],
+      "summary": "Sends a JSON-RPC message/send request to the A2A server with auth headers, measures latency, and returns response text plus a classified denial tier.",
+      "tags": [
+        "api-handler",
+        "client",
+        "json-rpc"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/utils/a2aClient.js:buildAuditEntry",
+      "type": "function",
+      "name": "buildAuditEntry",
+      "filePath": "frontend/src/utils/a2aClient.js",
+      "lineRange": [
+        83,
+        94
+      ],
+      "summary": "Constructs a normalized audit-log entry object (timestamp, request, outcome, denial tier) for display in the audit log.",
+      "tags": [
+        "utility",
+        "audit",
+        "factory"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:frontend/src/utils/a2aClient.js:extractResponseText",
+      "type": "function",
+      "name": "extractResponseText",
+      "filePath": "frontend/src/utils/a2aClient.js",
+      "lineRange": [
+        8,
+        27
+      ],
+      "summary": "Extracts and joins text parts from an A2A response payload across the possible message/artifact shapes.",
+      "tags": [
+        "utility",
+        "serialization",
+        "parsing"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/utils/denialClassifier.js:classifyDenial",
+      "type": "function",
+      "name": "classifyDenial",
+      "filePath": "frontend/src/utils/denialClassifier.js",
+      "lineRange": [
+        29,
+        72
+      ],
+      "summary": "Maps HTTP status and response text against known patterns to classify a denial into the agent, tool, scope, or resource tier.",
+      "tags": [
+        "utility",
+        "validation",
+        "classification"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/utils/testScenarios.js:getScenariosForRole",
+      "type": "function",
+      "name": "getScenariosForRole",
+      "filePath": "frontend/src/utils/testScenarios.js",
+      "lineRange": [
+        414,
+        454
+      ],
+      "summary": "Filters the predefined test scenarios down to those allowed for a given role, applying ABAC attribute matching.",
+      "tags": [
+        "utility",
+        "test",
+        "filter"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/src/utils/tokenDecoder.js:decodeToken",
+      "type": "function",
+      "name": "decodeToken",
+      "filePath": "frontend/src/utils/tokenDecoder.js",
+      "lineRange": [
+        5,
+        19
+      ],
+      "summary": "Splits a JWT and base64url-decodes its header and payload into a display object, returning null on malformed input.",
+      "tags": [
+        "utility",
+        "jwt",
+        "serialization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/conftest.py",
+      "type": "file",
+      "name": "conftest.py",
+      "filePath": "tests/conftest.py",
+      "summary": "Pytest fixtures and configuration for the test suite: mints mock Entra and Cognito JWTs, exposes service URLs, gates integration tests on live services, and builds A2A message helpers.",
+      "tags": [
+        "test",
+        "fixtures",
+        "configuration",
+        "authentication"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Uses pytest fixtures plus the pytest_configure / pytest_html_report_title hooks to inject test metadata."
+    },
+    {
+      "id": "function:tests/conftest.py:create_cognito_test_token",
+      "type": "function",
+      "name": "create_cognito_test_token",
+      "filePath": "tests/conftest.py",
+      "lineRange": [
+        66,
+        88
+      ],
+      "summary": "Builds a signed Cognito-style JWT for tests with configurable user id, groups, and email claims.",
+      "tags": [
+        "test",
+        "fixtures",
+        "cognito",
+        "jwt"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:tests/conftest.py:require_services",
+      "type": "function",
+      "name": "require_services",
+      "filePath": "tests/conftest.py",
+      "lineRange": [
+        188,
+        200
+      ],
+      "summary": "Fixture that probes A2A and ADK health endpoints and skips the test when the live services are not running.",
+      "tags": [
+        "test",
+        "fixtures",
+        "integration",
+        "health-check"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:tests/conftest.py:extract_agent_text",
+      "type": "function",
+      "name": "extract_agent_text",
+      "filePath": "tests/conftest.py",
+      "lineRange": [
+        228,
+        245
+      ],
+      "summary": "Parses an A2A JSON-RPC response and extracts the concatenated agent reply text from message parts.",
+      "tags": [
+        "test",
+        "fixtures",
+        "a2a",
+        "parsing"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:tests/conftest.py:pytest_configure",
+      "type": "function",
+      "name": "pytest_configure",
+      "filePath": "tests/conftest.py",
+      "lineRange": [
+        257,
+        271
+      ],
+      "summary": "Pytest hook that records environment metadata into the HTML report and ensures the report output directory exists.",
+      "tags": [
+        "test",
+        "configuration",
+        "reporting",
+        "hook"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tests/test_access_control.py",
+      "type": "file",
+      "name": "test_access_control.py",
+      "filePath": "tests/test_access_control.py",
+      "summary": "Integration tests validating the three independent access-control tiers (agent, tool, resource) against the live A2A gateway, plus Cognito multi-IdP access scenarios.",
+      "tags": [
+        "test",
+        "access-control",
+        "integration",
+        "validation"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Async httpx clients drive the live A2A JSON-RPC endpoint; tests are grouped by access tier into classes."
+    },
+    {
+      "id": "function:tests/test_access_control.py:create_test_token",
+      "type": "function",
+      "name": "create_test_token",
+      "filePath": "tests/test_access_control.py",
+      "lineRange": [
+        22,
+        50
+      ],
+      "summary": "Mints a signed Entra-style test JWT with configurable groups, scopes, and email for access-control assertions.",
+      "tags": [
+        "test",
+        "jwt",
+        "authentication",
+        "helper"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:tests/test_access_control.py:TestAgentLevelAccess",
+      "type": "class",
+      "name": "TestAgentLevelAccess",
+      "filePath": "tests/test_access_control.py",
+      "lineRange": [
+        69,
+        165
+      ],
+      "summary": "Tests the A2A gateway agent tier: unauthenticated, invalid, blocked-user, and no-group requests are denied while valid users and the public agent card are allowed.",
+      "tags": [
+        "test",
+        "access-control",
+        "agent-tier",
+        "authentication"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_access_control.py:TestToolLevelAccess",
+      "type": "class",
+      "name": "TestToolLevelAccess",
+      "filePath": "tests/test_access_control.py",
+      "lineRange": [
+        168,
+        255
+      ],
+      "summary": "Tests the MCP tool tier: viewers and developers are denied send_email and list_files while admins can check permissions, exercising Cedar RBAC.",
+      "tags": [
+        "test",
+        "access-control",
+        "tool-tier",
+        "cedar"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_access_control.py:TestResourceLevelAccess",
+      "type": "class",
+      "name": "TestResourceLevelAccess",
+      "filePath": "tests/test_access_control.py",
+      "lineRange": [
+        258,
+        302
+      ],
+      "summary": "Tests the resource tier: requests missing the Graph files or mail OAuth scopes are denied at the Graph API boundary.",
+      "tags": [
+        "test",
+        "access-control",
+        "resource-tier",
+        "scope"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:tests/test_access_control.py:TestHealthEndpoints",
+      "type": "class",
+      "name": "TestHealthEndpoints",
+      "filePath": "tests/test_access_control.py",
+      "lineRange": [
+        305,
+        327
+      ],
+      "summary": "Verifies the A2A and MCP health endpoints respond without authentication.",
+      "tags": [
+        "test",
+        "health-check",
+        "integration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:tests/test_access_control.py:TestCognitoAccess",
+      "type": "class",
+      "name": "TestCognitoAccess",
+      "filePath": "tests/test_access_control.py",
+      "lineRange": [
+        330,
+        395
+      ],
+      "summary": "Tests multi-IdP behavior for Cognito users: admin S3 tool allowed, viewer S3 list denied, and Graph tools reported as unsupported for non-Entra users.",
+      "tags": [
+        "test",
+        "access-control",
+        "cognito",
+        "multi-idp"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:tests/test_cedar_smoke.py",
+      "type": "file",
+      "name": "test_cedar_smoke.py",
+      "filePath": "tests/test_cedar_smoke.py",
+      "summary": "In-process Cedar policy and CedarPolicyEvaluator unit tests covering RBAC, ABAC path guardrails, file-policy loading, batch evaluation, and ServiceNow department-scoped authorization.",
+      "tags": [
+        "test",
+        "cedar",
+        "rbac",
+        "abac"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Drives cedarpy directly via is_authorized plus the CedarPolicyEvaluator composed over TomlPolicyEvaluator; the largest test module in the suite (31+ cases)."
+    },
+    {
+      "id": "function:tests/test_cedar_smoke.py:_user_entity",
+      "type": "function",
+      "name": "_user_entity",
+      "filePath": "tests/test_cedar_smoke.py",
+      "lineRange": [
+        51,
+        70
+      ],
+      "summary": "Builds a Cedar User entity dict with roles, groups, archiver attribute, and department for policy evaluation in tests.",
+      "tags": [
+        "test",
+        "cedar",
+        "entity",
+        "helper"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:tests/test_cedar_smoke.py:TestCedarSmoke",
+      "type": "class",
+      "name": "TestCedarSmoke",
+      "filePath": "tests/test_cedar_smoke.py",
+      "lineRange": [
+        75,
+        193
+      ],
+      "summary": "Smoke tests for Cedar RBAC permits: admin can call any tool, developer/viewer get their scoped tools, and roleless users are denied.",
+      "tags": [
+        "test",
+        "cedar",
+        "rbac",
+        "smoke"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_cedar_smoke.py:TestCedarABAC",
+      "type": "class",
+      "name": "TestCedarABAC",
+      "filePath": "tests/test_cedar_smoke.py",
+      "lineRange": [
+        196,
+        313
+      ],
+      "summary": "Tests Cedar ABAC delete semantics: archivers may delete only in archive/, non-archivers are denied, and the protected/ forbid guardrail overrides admin.",
+      "tags": [
+        "test",
+        "cedar",
+        "abac",
+        "guardrails"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_cedar_smoke.py:TestCedarFilePolicies",
+      "type": "class",
+      "name": "TestCedarFilePolicies",
+      "filePath": "tests/test_cedar_smoke.py",
+      "lineRange": [
+        318,
+        433
+      ],
+      "summary": "Evaluates the on-disk Cedar policy files end-to-end against representative role/path scenarios to confirm permits, denials, and forbid overrides.",
+      "tags": [
+        "test",
+        "cedar",
+        "policy",
+        "validation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_cedar_smoke.py:TestCedarPolicyEvaluator",
+      "type": "class",
+      "name": "TestCedarPolicyEvaluator",
+      "filePath": "tests/test_cedar_smoke.py",
+      "lineRange": [
+        438,
+        651
+      ],
+      "summary": "Unit tests for CedarPolicyEvaluator: role resolution delegation to TOML, Cognito support, user overrides, assumed-role enforcement, and batch evaluation including ServiceNow tools.",
+      "tags": [
+        "test",
+        "cedar",
+        "policy-evaluator",
+        "rbac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_cedar_smoke.py:TestCedarServiceNowPolicies",
+      "type": "class",
+      "name": "TestCedarServiceNowPolicies",
+      "filePath": "tests/test_cedar_smoke.py",
+      "lineRange": [
+        656,
+        820
+      ],
+      "summary": "Tests Cedar department-scoped ServiceNow authorization: composite role+department ABAC for KB articles and incidents, missing-department denials, and Phase-1 no-context denial.",
+      "tags": [
+        "test",
+        "cedar",
+        "abac",
+        "servicenow"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:tests/test_security_dashboard.py",
+      "type": "file",
+      "name": "test_security_dashboard.py",
+      "filePath": "tests/test_security_dashboard.py",
+      "summary": "End-to-end integration tests for the security dashboard flows: health/discovery, agent-tier denials with reason fields, the /me endpoint, tool-tier RBAC, denial classification, role hierarchy, and full cross-service pipeline.",
+      "tags": [
+        "test",
+        "integration",
+        "access-control",
+        "dashboard"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Largest set of test classes (7) driving all three services live via async httpx; uses _assert_denial / _assert_success helpers for response classification."
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestHealthAndDiscovery",
+      "type": "class",
+      "name": "TestHealthAndDiscovery",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        21,
+        69
+      ],
+      "summary": "Tests A2A/ADK health endpoints and agent-card discovery on both new and legacy paths, asserting complete skill metadata.",
+      "tags": [
+        "test",
+        "health-check",
+        "discovery",
+        "integration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestAgentLevelAccessControl",
+      "type": "class",
+      "name": "TestAgentLevelAccessControl",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        77,
+        158
+      ],
+      "summary": "Tests the agent tier returns 401 with denial fields for missing/garbage tokens, 403 for no-group users, and accepts valid admin/developer/viewer tokens.",
+      "tags": [
+        "test",
+        "access-control",
+        "agent-tier",
+        "denial"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestMeEndpoint",
+      "type": "class",
+      "name": "TestMeEndpoint",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        166,
+        286
+      ],
+      "summary": "Tests the /me security-context endpoint: per-role permission sets, response structure, group-name mapping, and token expiry, exercising the Cedar PDP batch evaluation.",
+      "tags": [
+        "test",
+        "me-endpoint",
+        "access-control",
+        "cedar"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestToolLevelAccessControl",
+      "type": "class",
+      "name": "TestToolLevelAccessControl",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        319,
+        455
+      ],
+      "summary": "Tests MCP tool-tier RBAC through the full pipeline: per-role allow/deny for profile, time, list_files, and send_email tools.",
+      "tags": [
+        "test",
+        "access-control",
+        "tool-tier",
+        "rbac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestDenialClassification",
+      "type": "class",
+      "name": "TestDenialClassification",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        463,
+        535
+      ],
+      "summary": "Verifies denial responses carry the expected fields and tier prefixes on 401/403 and tool denials, and that all denial reasons are documented.",
+      "tags": [
+        "test",
+        "denial-classification",
+        "access-control",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestRoleHierarchy",
+      "type": "class",
+      "name": "TestRoleHierarchy",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        543,
+        583
+      ],
+      "summary": "Tests that multi-group users receive the highest-priority role, admin responses include group claims, and the token issuer is a valid Entra ID issuer.",
+      "tags": [
+        "test",
+        "role-hierarchy",
+        "access-control",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:tests/test_security_dashboard.py:TestCrossServiceIntegration",
+      "type": "class",
+      "name": "TestCrossServiceIntegration",
+      "filePath": "tests/test_security_dashboard.py",
+      "lineRange": [
+        592,
+        658
+      ],
+      "summary": "Full-pipeline tests covering identity and permission queries end-to-end and session reuse across consecutive messages.",
+      "tags": [
+        "test",
+        "integration",
+        "pipeline",
+        "session"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_servicenow_integration.py",
+      "type": "file",
+      "name": "test_servicenow_integration.py",
+      "filePath": "tests/test_servicenow_integration.py",
+      "summary": "Tests the ServiceNow tool integration against the in-memory mock and (optionally) a live instance, covering department-scoped KB/incident access, the OBO token seam, and config-error handling.",
+      "tags": [
+        "test",
+        "servicenow",
+        "abac",
+        "integration"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Mixes mock-backed tests with skip-gated real-instance tests; uses a set_user fixture and a _StubExchanger to exercise the OBO seam without a live IdP."
+    },
+    {
+      "id": "function:tests/test_servicenow_integration.py:permissions_toml",
+      "type": "function",
+      "name": "permissions_toml",
+      "filePath": "tests/test_servicenow_integration.py",
+      "lineRange": [
+        49,
+        68
+      ],
+      "summary": "Fixture that writes a temporary permissions.toml and wires a CedarPolicyEvaluator over a TomlPolicyEvaluator for ServiceNow authorization tests.",
+      "tags": [
+        "test",
+        "fixtures",
+        "cedar",
+        "servicenow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:tests/test_servicenow_integration.py:set_user",
+      "type": "function",
+      "name": "set_user",
+      "filePath": "tests/test_servicenow_integration.py",
+      "lineRange": [
+        72,
+        105
+      ],
+      "summary": "Fixture providing a helper to set the current user's identity context (role, department, provider) for ServiceNow tool calls under test.",
+      "tags": [
+        "test",
+        "fixtures",
+        "context",
+        "servicenow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:tests/test_servicenow_integration.py:TestServiceNowMocked",
+      "type": "class",
+      "name": "TestServiceNowMocked",
+      "filePath": "tests/test_servicenow_integration.py",
+      "lineRange": [
+        120,
+        382
+      ],
+      "summary": "Mock-backed tests for ServiceNow tools: department-scoped KB article and incident access by role, create/update incident payloads, graceful unavailability, and config-error vs 404 distinction.",
+      "tags": [
+        "test",
+        "servicenow",
+        "abac",
+        "mock"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_servicenow_integration.py:TestServiceNowOBOSeam",
+      "type": "class",
+      "name": "TestServiceNowOBOSeam",
+      "filePath": "tests/test_servicenow_integration.py",
+      "lineRange": [
+        392,
+        469
+      ],
+      "summary": "Tests the ServiceNow OBO token seam: OBO token used when Entra+configured, fallback to Basic when the exchanger is absent, skipped for non-Entra users, and threaded through both list_articles calls.",
+      "tags": [
+        "test",
+        "servicenow",
+        "obo",
+        "token-exchange"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:tests/test_servicenow_integration.py:TestServiceNowReal",
+      "type": "class",
+      "name": "TestServiceNowReal",
+      "filePath": "tests/test_servicenow_integration.py",
+      "lineRange": [
+        501,
+        564
+      ],
+      "summary": "Skip-gated tests against a live ServiceNow instance: admin lists knowledge bases and articles, fetches a specific article, and handles auth failure.",
+      "tags": [
+        "test",
+        "servicenow",
+        "integration",
+        "live"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/test_servicenow_obo.py",
+      "type": "file",
+      "name": "test_servicenow_obo.py",
+      "filePath": "tests/test_servicenow_obo.py",
+      "summary": "Unit tests for ServiceNowOBOExchanger: requesting the configured OBO scope, returning None on exchange failure, per-assertion credential caching, and init enable/disable gating on scope and client secret.",
+      "tags": [
+        "test",
+        "servicenow",
+        "obo",
+        "token-exchange"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Uses fake credential stubs (_FakeCredential / _RaisingCredential) and monkeypatching to test the OBO exchanger without contacting Entra."
+    },
+    {
+      "id": "file:tests/test_abac_security.py",
+      "type": "file",
+      "name": "test_abac_security.py",
+      "filePath": "tests/test_abac_security.py",
+      "summary": "Security regression tests ensuring the X-Abac-Attrs header parser strips blocked keys (e.g. department) so clients cannot spoof department-scoped ABAC attributes.",
+      "tags": [
+        "test",
+        "abac",
+        "security",
+        "validation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:tests/test_abac_security.py:TestHeaderBlockedAbacKeys",
+      "type": "class",
+      "name": "TestHeaderBlockedAbacKeys",
+      "filePath": "tests/test_abac_security.py",
+      "lineRange": [
+        16,
+        54
+      ],
+      "summary": "Tests that parse_abac_attrs strips blocked ABAC keys like department while preserving allowed attributes such as archiver, and handles empty/invalid JSON safely.",
+      "tags": [
+        "test",
+        "abac",
+        "security",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tests/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "tests/__init__.py",
+      "summary": "Empty package marker making the tests directory an importable Python package.",
+      "tags": [
+        "test",
+        "package-marker"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "Primary project documentation describing the three-tier identity-aware agent architecture, setup, multi-IdP auth, Cedar authorization, and service operation across 59 sections.",
+      "tags": [
+        "documentation",
+        "entry-point",
+        "overview",
+        "architecture"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:claude.md",
+      "type": "document",
+      "name": "claude.md",
+      "filePath": "claude.md",
+      "summary": "Agent-facing project guide documenting architecture, security model, key code patterns, API endpoints, and conventions for working in this repository.",
+      "tags": [
+        "documentation",
+        "architecture",
+        "conventions",
+        "reference"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:TESTING.md",
+      "type": "document",
+      "name": "TESTING.md",
+      "filePath": "TESTING.md",
+      "summary": "Comprehensive testing guide covering the pytest suite layout, fixtures, environment setup, real-token and live-service test modes, and the Cedar/ServiceNow test matrix.",
+      "tags": [
+        "documentation",
+        "testing",
+        "guide",
+        "development"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:MANUAL_TESTING.md",
+      "type": "document",
+      "name": "MANUAL_TESTING.md",
+      "filePath": "MANUAL_TESTING.md",
+      "summary": "Step-by-step manual testing walkthrough for exercising the access-control tiers and dashboard flows through the running services.",
+      "tags": [
+        "documentation",
+        "testing",
+        "manual",
+        "guide"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:EXECUTIVE_SUMMARY.md",
+      "type": "document",
+      "name": "EXECUTIVE_SUMMARY.md",
+      "filePath": "EXECUTIVE_SUMMARY.md",
+      "summary": "High-level executive overview of the identity-aware agent system, its three-tier security model, and business value across 23 sections.",
+      "tags": [
+        "documentation",
+        "overview",
+        "summary",
+        "architecture"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/mcp-server-reverse-engineered.md",
+      "type": "document",
+      "name": "mcp-server-reverse-engineered.md",
+      "filePath": "docs/mcp-server-reverse-engineered.md",
+      "summary": "Deep reverse-engineering guide for the MCP server: server configuration, the tool inventory, ContextVar auth state, and how Cedar authorization is enforced per tool.",
+      "tags": [
+        "documentation",
+        "mcp",
+        "cedar",
+        "reference"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/servicenow-integration.md",
+      "type": "document",
+      "name": "servicenow-integration.md",
+      "filePath": "docs/servicenow-integration.md",
+      "summary": "Documents the ServiceNow tool integration: department-scoped Cedar ABAC, the Table API client, mock fallback, and tool inventory.",
+      "tags": [
+        "documentation",
+        "servicenow",
+        "abac",
+        "integration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/servicenow-obo-setup.md",
+      "type": "document",
+      "name": "servicenow-obo-setup.md",
+      "filePath": "docs/servicenow-obo-setup.md",
+      "summary": "Setup guide for enabling the dormant ServiceNow OBO hybrid mode: configuring obo_scope and the Entra client secret so ServiceNow enforces per-user ACLs.",
+      "tags": [
+        "documentation",
+        "servicenow",
+        "obo",
+        "setup"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/entra-department-claim-mapping.md",
+      "type": "document",
+      "name": "entra-department-claim-mapping.md",
+      "filePath": "docs/entra-department-claim-mapping.md",
+      "summary": "Explains how to emit the Entra department claim into the access token so the department-scoped ABAC policies receive a trusted department attribute.",
+      "tags": [
+        "documentation",
+        "entra",
+        "abac",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md",
+      "type": "document",
+      "name": "2026-05-19-servicenow-integration-abac-design.md",
+      "filePath": "docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md",
+      "summary": "Design specification for ServiceNow integration with department-scoped Cedar ABAC, covering the policy model, tool surface, and two-phase authorization approach.",
+      "tags": [
+        "documentation",
+        "design-spec",
+        "servicenow",
+        "abac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md",
+      "type": "document",
+      "name": "2026-05-20-servicenow-obo-hybrid-design.md",
+      "filePath": "docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md",
+      "summary": "Design specification for the hybrid ServiceNow OBO model where Cedar stays the fail-fast gate and an Entra OBO token lets ServiceNow apply per-user ACLs.",
+      "tags": [
+        "documentation",
+        "design-spec",
+        "servicenow",
+        "obo"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "file:dev_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "file:dev_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:dev_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "class:a2a_server/server.py:IdPConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "class:a2a_server/server.py:TokenValidator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "class:a2a_server/server.py:IdentityAwareAgentExecutor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "function:a2a_server/server.py:auth_middleware",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "function:a2a_server/server.py:get_me",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "function:a2a_server/server.py:_build_idp_configs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "function:a2a_server/server.py:_extract_user_info",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "function:a2a_server/server.py:_make_task_event",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "function:a2a_server/server.py:_auth_error",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "class:adk_agent/agent.py:IdentityAwareAgent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "function:adk_agent/agent.py:mcp_header_provider",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "function:adk_agent/agent.py:create_session",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "function:adk_agent/agent.py:_parse_chat_request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "function:adk_agent/agent.py:chat",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "function:adk_agent/agent.py:chat_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "function:adk_agent/agent.py:_validate_user_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "function:dev_config.py:is_auth_disabled",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "function:dev_config.py:parse_abac_attrs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "function:dev_config.py:detect_provider",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "function:dev_config.py:is_auth_disabled",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "function:dev_config.py:parse_abac_attrs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "function:dev_config.py:detect_provider",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "class:mcp_server/server.py:UserContextMiddleware",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:require_cedar",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:cedar_check_with_context",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:_cedar_check_department",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:_build_auth",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:_get_effective_graph_token",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:_get_effective_sn_token",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:_run_s3_operation",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:get_user_profile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:list_files",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:delete_s3_object",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:list_s3_objects",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:get_s3_object_info",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:get_current_time",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:convert_timezone",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:get_time_difference",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:list_articles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:list_incidents",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:create_incident",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:update_incident",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "function:mcp_server/server.py:list_knowledge_bases",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "class:mcp_server/policy.py:CedarPolicyEvaluator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "class:mcp_server/policy.py:TomlPolicyEvaluator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "class:mcp_server/policy.py:PolicyEvaluator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "class:mcp_server/policy.py:AccessRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "class:mcp_server/policy.py:AccessDecision",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/graph_obo.py",
+      "target": "class:mcp_server/graph_obo.py:GraphOBOExchanger",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/graph_obo.py",
+      "target": "class:mcp_server/graph_obo.py:GraphOBOExchanger",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp_server/servicenow.py",
+      "target": "class:mcp_server/servicenow.py:ServiceNowClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/servicenow.py",
+      "target": "function:mcp_server/servicenow.py:init_servicenow_client",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/servicenow.py",
+      "target": "class:mcp_server/servicenow.py:ServiceNowClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp_server/servicenow_obo.py",
+      "target": "class:mcp_server/servicenow_obo.py:ServiceNowOBOExchanger",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/servicenow_obo.py",
+      "target": "class:mcp_server/servicenow_obo.py:ServiceNowOBOExchanger",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp_server/servicenow_mock.py",
+      "target": "class:mcp_server/servicenow_mock.py:ServiceNowMockClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/servicenow_mock.py",
+      "target": "class:mcp_server/servicenow_mock.py:ServiceNowMockClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:mcp_server/policy.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:mcp_server/graph_obo.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:mcp_server/servicenow.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:mcp_server/servicenow_obo.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:mcp_server/servicenow_mock.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "file:mcp_server/policy.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/servicenow.py",
+      "target": "file:mcp_server/servicenow_obo.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/servicenow.py",
+      "target": "file:mcp_server/servicenow_mock.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "file:adk_agent/agent.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "file:mcp_server/server.py",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "file:cedar/policies/rbac.cedar",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "file:cedar/policies/abac.cedar",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "file:cedar/policies/guardrails.cedar",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "file:cedar/schema.cedarschema",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "config:cedar/entities.json",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:cedar/schema.cedarschema",
+      "target": "file:cedar/policies/rbac.cedar",
+      "type": "defines_schema",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:cedar/schema.cedarschema",
+      "target": "file:cedar/policies/abac.cedar",
+      "type": "defines_schema",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:cedar/schema.cedarschema",
+      "target": "file:cedar/policies/guardrails.cedar",
+      "type": "defines_schema",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:cedar/schema.cedarschema",
+      "target": "file:mcp_server/policy.py",
+      "type": "defines_schema",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "config:cedar/entities.json",
+      "target": "file:mcp_server/policy.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:a2a_server/server.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:mcp_server/server.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:mcp_server/graph_obo.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:dev_config.example.toml",
+      "target": "file:dev_config.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:permissions.example.toml",
+      "target": "file:mcp_server/policy.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:pyproject.toml",
+      "target": "file:mcp_server/server.py",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:requirements.txt",
+      "target": "file:mcp_server/server.py",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:frontend/src/index.js",
+      "target": "file:frontend/src/App.css",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/index.js",
+      "target": "file:frontend/src/App.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/index.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/AuditLog.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/AuthStatus.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/ConversationTabs.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/LoginPrompt.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/RBACTestMatrix.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/SecurityContextPanel.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "file:frontend/src/components/TokenInspector.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "file:frontend/src/authConfig.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "file:frontend/src/cognitoConfig.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/AuditLog.js",
+      "target": "file:frontend/src/components/DenialIndicator.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/AuthStatus.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/AuthStatus.js",
+      "target": "file:frontend/src/utils/constants.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/ChatInterface.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/ChatInterface.js",
+      "target": "file:frontend/src/components/DenialIndicator.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/ChatInterface.js",
+      "target": "file:frontend/src/utils/a2aClient.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/ConversationTabs.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/ConversationTabs.js",
+      "target": "file:frontend/src/authConfig.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/ConversationTabs.js",
+      "target": "file:frontend/src/components/ChatInterface.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/LoginPrompt.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "file:frontend/src/components/DenialIndicator.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "file:frontend/src/utils/a2aClient.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "file:frontend/src/utils/testScenarios.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/SecurityContextPanel.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/SecurityContextPanel.js",
+      "target": "file:frontend/src/utils/constants.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/TokenInspector.js",
+      "target": "file:frontend/src/AuthProvider.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/components/TokenInspector.js",
+      "target": "file:frontend/src/utils/tokenDecoder.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "file:frontend/src/utils/constants.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "file:frontend/src/utils/denialClassifier.js",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/src/App.js",
+      "target": "function:frontend/src/App.js:App",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "function:frontend/src/AuthProvider.js:useAuth",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "function:frontend/src/AuthProvider.js:AuthProvider",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "function:frontend/src/AuthProvider.js:ensureMsalReady",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "function:frontend/src/AuthProvider.js:useAuth",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/AuthProvider.js",
+      "target": "function:frontend/src/AuthProvider.js:AuthProvider",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/AuditLog.js",
+      "target": "function:frontend/src/components/AuditLog.js:AuditLog",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/AuditLog.js",
+      "target": "function:frontend/src/components/AuditLog.js:AuditLog",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/AuthStatus.js",
+      "target": "function:frontend/src/components/AuthStatus.js:AuthStatus",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/AuthStatus.js",
+      "target": "function:frontend/src/components/AuthStatus.js:AuthStatus",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/ChatInterface.js",
+      "target": "function:frontend/src/components/ChatInterface.js:ChatInterface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/ChatInterface.js",
+      "target": "function:frontend/src/components/ChatInterface.js:ChatInterface",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/ConversationTabs.js",
+      "target": "function:frontend/src/components/ConversationTabs.js:ConversationTabs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/ConversationTabs.js",
+      "target": "function:frontend/src/components/ConversationTabs.js:ConversationTabs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/DenialIndicator.js",
+      "target": "function:frontend/src/components/DenialIndicator.js:DenialIndicator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/DenialIndicator.js",
+      "target": "function:frontend/src/components/DenialIndicator.js:DenialIndicator",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/LoginPrompt.js",
+      "target": "function:frontend/src/components/LoginPrompt.js:LoginPrompt",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/LoginPrompt.js",
+      "target": "function:frontend/src/components/LoginPrompt.js:LoginPrompt",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "function:frontend/src/components/RBACTestMatrix.js:RBACTestMatrix",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "function:frontend/src/components/RBACTestMatrix.js:ResultCell",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "function:frontend/src/components/RBACTestMatrix.js:RBACTestMatrix",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/SecurityContextPanel.js",
+      "target": "function:frontend/src/components/SecurityContextPanel.js:SecurityContextPanel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/SecurityContextPanel.js",
+      "target": "function:frontend/src/components/SecurityContextPanel.js:SecurityContextPanel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/TokenInspector.js",
+      "target": "function:frontend/src/components/TokenInspector.js:TokenInspector",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/components/TokenInspector.js",
+      "target": "function:frontend/src/components/TokenInspector.js:TokenInspector",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "function:frontend/src/utils/a2aClient.js:sendA2AMessage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "function:frontend/src/utils/a2aClient.js:buildAuditEntry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "function:frontend/src/utils/a2aClient.js:extractResponseText",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "function:frontend/src/utils/a2aClient.js:sendA2AMessage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "function:frontend/src/utils/a2aClient.js:buildAuditEntry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/utils/denialClassifier.js",
+      "target": "function:frontend/src/utils/denialClassifier.js:classifyDenial",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/utils/denialClassifier.js",
+      "target": "function:frontend/src/utils/denialClassifier.js:classifyDenial",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/utils/testScenarios.js",
+      "target": "function:frontend/src/utils/testScenarios.js:getScenariosForRole",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/utils/testScenarios.js",
+      "target": "function:frontend/src/utils/testScenarios.js:getScenariosForRole",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/utils/tokenDecoder.js",
+      "target": "function:frontend/src/utils/tokenDecoder.js:decodeToken",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/src/utils/tokenDecoder.js",
+      "target": "function:frontend/src/utils/tokenDecoder.js:decodeToken",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/utils/a2aClient.js",
+      "target": "function:frontend/src/utils/denialClassifier.js:classifyDenial",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/ChatInterface.js",
+      "target": "function:frontend/src/utils/a2aClient.js:sendA2AMessage",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "function:frontend/src/utils/a2aClient.js:sendA2AMessage",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/RBACTestMatrix.js",
+      "target": "function:frontend/src/utils/testScenarios.js:getScenariosForRole",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/src/components/TokenInspector.js",
+      "target": "function:frontend/src/utils/tokenDecoder.js:decodeToken",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "config:frontend/package.json",
+      "target": "file:frontend/src/index.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:frontend/.env.example",
+      "target": "file:frontend/src/authConfig.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:frontend/.env.example",
+      "target": "file:frontend/src/cognitoConfig.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:frontend/.env.example",
+      "target": "file:frontend/src/utils/constants.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:create_cognito_test_token",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:require_services",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:extract_agent_text",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:pytest_configure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:create_cognito_test_token",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:require_services",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "function:tests/conftest.py:extract_agent_text",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:tests/conftest.py",
+      "target": "file:tests/test_access_control.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "file:tests/conftest.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "function:tests/test_access_control.py:create_test_token",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "class:tests/test_access_control.py:TestAgentLevelAccess",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "class:tests/test_access_control.py:TestToolLevelAccess",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "class:tests/test_access_control.py:TestResourceLevelAccess",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "class:tests/test_access_control.py:TestHealthEndpoints",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_access_control.py",
+      "target": "class:tests/test_access_control.py:TestCognitoAccess",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "file:tests/test_access_control.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:tests/test_access_control.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:tests/test_cedar_smoke.py",
+      "target": "function:tests/test_cedar_smoke.py:_user_entity",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_cedar_smoke.py",
+      "target": "class:tests/test_cedar_smoke.py:TestCedarSmoke",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_cedar_smoke.py",
+      "target": "class:tests/test_cedar_smoke.py:TestCedarABAC",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_cedar_smoke.py",
+      "target": "class:tests/test_cedar_smoke.py:TestCedarFilePolicies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_cedar_smoke.py",
+      "target": "class:tests/test_cedar_smoke.py:TestCedarPolicyEvaluator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_cedar_smoke.py",
+      "target": "class:tests/test_cedar_smoke.py:TestCedarServiceNowPolicies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/policy.py",
+      "target": "file:tests/test_cedar_smoke.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestHealthAndDiscovery",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestAgentLevelAccessControl",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestMeEndpoint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestToolLevelAccessControl",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestDenialClassification",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestRoleHierarchy",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_security_dashboard.py",
+      "target": "class:tests/test_security_dashboard.py:TestCrossServiceIntegration",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:a2a_server/server.py",
+      "target": "file:tests/test_security_dashboard.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:tests/test_servicenow_integration.py",
+      "target": "function:tests/test_servicenow_integration.py:permissions_toml",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_servicenow_integration.py",
+      "target": "function:tests/test_servicenow_integration.py:set_user",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_servicenow_integration.py",
+      "target": "class:tests/test_servicenow_integration.py:TestServiceNowMocked",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_servicenow_integration.py",
+      "target": "class:tests/test_servicenow_integration.py:TestServiceNowOBOSeam",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:tests/test_servicenow_integration.py",
+      "target": "class:tests/test_servicenow_integration.py:TestServiceNowReal",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:mcp_server/servicenow.py",
+      "target": "file:tests/test_servicenow_integration.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp_server/servicenow_obo.py",
+      "target": "file:tests/test_servicenow_obo.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:tests/test_abac_security.py",
+      "target": "file:dev_config.py",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:tests/test_abac_security.py",
+      "target": "class:tests/test_abac_security.py:TestHeaderBlockedAbacKeys",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:dev_config.py",
+      "target": "file:tests/test_abac_security.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:a2a_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:mcp_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:adk_agent/agent.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:claude.md",
+      "target": "file:mcp_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:claude.md",
+      "target": "file:a2a_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:claude.md",
+      "target": "file:adk_agent/agent.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:claude.md",
+      "target": "file:mcp_server/policy.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:claude.md",
+      "target": "file:dev_config.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:TESTING.md",
+      "target": "file:tests/conftest.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:TESTING.md",
+      "target": "file:tests/test_cedar_smoke.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:TESTING.md",
+      "target": "file:tests/test_access_control.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:TESTING.md",
+      "target": "file:tests/test_security_dashboard.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:TESTING.md",
+      "target": "file:tests/test_servicenow_integration.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/mcp-server-reverse-engineered.md",
+      "target": "file:mcp_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/mcp-server-reverse-engineered.md",
+      "target": "file:mcp_server/policy.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/mcp-server-reverse-engineered.md",
+      "target": "file:mcp_server/graph_obo.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/servicenow-integration.md",
+      "target": "file:mcp_server/servicenow.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/servicenow-integration.md",
+      "target": "file:mcp_server/servicenow_mock.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/servicenow-integration.md",
+      "target": "file:mcp_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/servicenow-obo-setup.md",
+      "target": "file:mcp_server/servicenow_obo.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/entra-department-claim-mapping.md",
+      "target": "file:a2a_server/server.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md",
+      "target": "file:mcp_server/servicenow.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md",
+      "target": "file:mcp_server/policy.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md",
+      "target": "file:mcp_server/servicenow_obo.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md",
+      "target": "file:mcp_server/servicenow.py",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:adk_agent/agent.py",
+      "target": "file:tests/test_security_dashboard.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:tests/test_security_dashboard.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp_server/server.py",
+      "target": "file:tests/test_servicenow_integration.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp_server/servicenow_mock.py",
+      "target": "file:tests/test_servicenow_integration.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp_server/servicenow_obo.py",
+      "target": "file:tests/test_servicenow_integration.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:cedar/policies/rbac.cedar",
+      "target": "file:tests/test_cedar_smoke.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:cedar/policies/abac.cedar",
+      "target": "file:tests/test_cedar_smoke.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:cedar/policies/guardrails.cedar",
+      "target": "file:tests/test_cedar_smoke.py",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:frontend",
+      "name": "Frontend / UI Layer",
+      "description": "React 18 dashboard that authenticates users via MSAL (Entra) and Amplify (Cognito), drives the A2A gateway, and visualizes per-tier denials, the security context, audit log, and RBAC test matrix.",
+      "nodeIds": [
+        "file:frontend/src/index.js",
+        "file:frontend/src/App.js",
+        "file:frontend/src/AuthProvider.js",
+        "file:frontend/src/authConfig.js",
+        "file:frontend/src/cognitoConfig.js",
+        "file:frontend/src/components/AuditLog.js",
+        "file:frontend/src/components/AuthStatus.js",
+        "file:frontend/src/components/ChatInterface.js",
+        "file:frontend/src/components/ConversationTabs.js",
+        "file:frontend/src/components/DenialIndicator.js",
+        "file:frontend/src/components/LoginPrompt.js",
+        "file:frontend/src/components/RBACTestMatrix.js",
+        "file:frontend/src/components/SecurityContextPanel.js",
+        "file:frontend/src/components/TokenInspector.js",
+        "file:frontend/src/utils/a2aClient.js",
+        "file:frontend/src/utils/constants.js",
+        "file:frontend/src/utils/denialClassifier.js",
+        "file:frontend/src/utils/testScenarios.js",
+        "file:frontend/src/utils/tokenDecoder.js",
+        "file:frontend/src/App.css",
+        "config:frontend/package.json",
+        "config:frontend/.env.example"
+      ]
+    },
+    {
+      "id": "layer:a2a-gateway",
+      "name": "A2A Gateway",
+      "description": "Tier 1 FastAPI gateway speaking the A2A protocol: validates multi-IdP JWTs, enforces agent-level group ACLs, propagates identity via ContextVars, and serves the /me security-context endpoint backed by the Cedar PDP.",
+      "nodeIds": [
+        "file:a2a_server/server.py"
+      ]
+    },
+    {
+      "id": "layer:adk-agent",
+      "name": "ADK Agent",
+      "description": "Google ADK agent service that manages per-user sessions, injects identity headers into MCP tool calls, and runs buffered/streaming chat against Claude Haiku via LiteLLM with rate-limit retry.",
+      "nodeIds": [
+        "file:adk_agent/agent.py"
+      ]
+    },
+    {
+      "id": "layer:mcp-tools",
+      "name": "MCP Tools & Resource Integration",
+      "description": "Tier 2 FastMCP server exposing 18 Cedar-guarded tools (Graph, S3, time, ServiceNow) with the policy evaluator, OBO token exchangers for Graph and ServiceNow, the ServiceNow Table API client, and its in-memory mock.",
+      "nodeIds": [
+        "file:mcp_server/server.py",
+        "file:mcp_server/policy.py",
+        "file:mcp_server/graph_obo.py",
+        "file:mcp_server/servicenow.py",
+        "file:mcp_server/servicenow_obo.py",
+        "file:mcp_server/servicenow_mock.py"
+      ]
+    },
+    {
+      "id": "layer:authorization",
+      "name": "Authorization (Cedar)",
+      "description": "Cross-cutting Cedar policy layer: the entity schema, static role/tool entities, and the RBAC, department-scoped ABAC, and forbid-guardrail policy files that the MCP and A2A tiers evaluate for every access decision.",
+      "nodeIds": [
+        "file:cedar/schema.cedarschema",
+        "file:cedar/policies/rbac.cedar",
+        "file:cedar/policies/abac.cedar",
+        "file:cedar/policies/guardrails.cedar",
+        "config:cedar/entities.json"
+      ]
+    },
+    {
+      "id": "layer:config",
+      "name": "Shared Configuration",
+      "description": "Shared backend config module (auth-bypass flags, provider detection, ABAC header parsing, path constants) plus the environment, permissions, and project-manifest templates that configure every service tier.",
+      "nodeIds": [
+        "file:dev_config.py",
+        "config:pyproject.toml",
+        "config:dev_config.example.toml",
+        "config:permissions.example.toml",
+        "config:.env.example"
+      ]
+    },
+    {
+      "id": "layer:tests",
+      "name": "Tests",
+      "description": "Pytest suite validating the three access-control tiers end to end: live-service access control, in-process Cedar RBAC/ABAC smoke tests, security-dashboard flows, ServiceNow integration and OBO seam, and ABAC header spoofing regressions.",
+      "nodeIds": [
+        "file:tests/conftest.py",
+        "file:tests/test_access_control.py",
+        "file:tests/test_cedar_smoke.py",
+        "file:tests/test_security_dashboard.py",
+        "file:tests/test_servicenow_integration.py",
+        "file:tests/test_servicenow_obo.py",
+        "file:tests/test_abac_security.py",
+        "file:tests/__init__.py"
+      ]
+    },
+    {
+      "id": "layer:documentation",
+      "name": "Documentation",
+      "description": "Project documentation and design specs: the README, agent guide, executive summary, testing guides, dependency manifest, and the ServiceNow/Entra integration and OBO-hybrid design docs.",
+      "nodeIds": [
+        "document:README.md",
+        "document:claude.md",
+        "document:TESTING.md",
+        "document:MANUAL_TESTING.md",
+        "document:EXECUTIVE_SUMMARY.md",
+        "document:requirements.txt",
+        "document:docs/mcp-server-reverse-engineered.md",
+        "document:docs/servicenow-integration.md",
+        "document:docs/servicenow-obo-setup.md",
+        "document:docs/entra-department-claim-mapping.md",
+        "document:docs/superpowers/specs/2026-05-19-servicenow-integration-abac-design.md",
+        "document:docs/superpowers/specs/2026-05-20-servicenow-obo-hybrid-design.md"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Project Overview",
+      "description": "Start with the README to understand what this project is: a secure, multi-tier AI agent system where a user's identity propagates from the browser all the way down to resource APIs, with access control enforced independently at three layers. The EXECUTIVE_SUMMARY frames the business value and the defense-in-depth security model. Read these first so the request path in the following steps has context.",
+      "nodeIds": [
+        "document:README.md",
+        "document:EXECUTIVE_SUMMARY.md"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "Frontend Boot & Multi-IdP Auth",
+      "description": "The React app boots from index.js, which mounts App.js wrapped in the unified AuthProvider. AuthProvider is the highest fan-in module in the codebase (9 dependents) because every component reads identity through its useAuth() hook. It hides two very different identity providers \u00e2\u20ac\u201d MSAL for Entra ID and AWS Amplify for Cognito \u00e2\u20ac\u201d behind one interface, so the rest of the UI never branches on provider. This is where the user's journey begins: a token is acquired here and carried through every later tier.",
+      "nodeIds": [
+        "file:frontend/src/index.js",
+        "file:frontend/src/App.js",
+        "file:frontend/src/AuthProvider.js",
+        "file:frontend/src/authConfig.js"
+      ],
+      "languageLesson": "React Context + a custom useAuth() hook is the idiomatic way to expose cross-cutting state (here, the authenticated session) without prop-drilling. AuthProvider returns the same shape regardless of whether MSAL or Amplify is active, an adapter pattern that keeps multi-IdP complexity out of the components."
+    },
+    {
+      "order": 3,
+      "title": "Frontend to Gateway Client",
+      "description": "Building on the token from Step 2, a2aClient.js is the single choke point through which the UI talks to the backend. It sends A2A JSON-RPC message/send requests with the Bearer token plus the X-Assume-Role and X-Abac-Attrs headers, then runs every response through denialClassifier.js. The classifier is the heart of the demo: it sorts failures into four tiers (agent, tool, scope, resource) so the dashboard can show exactly which security layer rejected a request.",
+      "nodeIds": [
+        "file:frontend/src/utils/a2aClient.js",
+        "file:frontend/src/utils/denialClassifier.js",
+        "file:frontend/src/components/ChatInterface.js"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Tier 1 \u00e2\u20ac\u201d A2A Gateway",
+      "description": "This is the BFS root and the first security tier. The A2A gateway (FastAPI) validates the incoming JWT against the correct IdP's JWKS, enforces agent-level group ACLs and a user blocklist, then propagates the identity downstream via ContextVars. It also serves the /me endpoint that the SecurityContextPanel in the UI reads to show role, groups, scopes and permissions. A request that fails here never reaches the agent \u00e2\u20ac\u201d this is the 'agent' denial tier.",
+      "nodeIds": [
+        "file:a2a_server/server.py"
+      ],
+      "languageLesson": "Python's contextvars provide async-safe, per-request state without threading globals \u00e2\u20ac\u201d each await chain sees its own copy. The gateway stashes the validated claims and access token in ContextVars so deeply nested async handlers can read identity without passing it through every function signature."
+    },
+    {
+      "order": 5,
+      "title": "The ADK Agent & Identity Header Injection",
+      "description": "Once the gateway admits a request, the Google ADK agent takes over: it manages a per-user session, runs the conversation against Claude Haiku via LiteLLM, and decides which tools to call. The pivotal piece is mcp_header_provider, which re-injects the user's Authorization, X-Assume-Role, and X-Abac-Attrs headers onto every outbound MCP tool call. This is how identity survives the hop from the agent into the tool tier rather than being lost at the LLM boundary.",
+      "nodeIds": [
+        "file:adk_agent/agent.py"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "Tier 2 \u00e2\u20ac\u201d MCP Tool Server",
+      "description": "The FastMCP server exposes all 18 identity-aware tools (Graph, S3, time, ServiceNow) and is the second security tier. Tied with policy.py for the highest backend fan-in, it is where the request finally meets a guardable action. Its UserContextMiddleware rebuilds the per-user ContextVars from the injected headers, and every @mcp.tool() is wrapped with require_cedar(\"tool_name\") so no tool runs before authorization. A rejection here surfaces as the 'tool' denial tier in the UI.",
+      "nodeIds": [
+        "file:mcp_server/server.py"
+      ],
+      "languageLesson": "Because the MCP server runs in stateless HTTP mode (stateless_http=True), there is no server-side session to hang state on. The code uses ContextVars rebuilt per request by middleware instead of ctx.get_state(), keeping every tool call self-contained and horizontally scalable."
+    },
+    {
+      "order": 7,
+      "title": "The Cedar Authorization Engine",
+      "description": "policy.py is the brain behind Tier 2: CedarPolicyEvaluator composes TOML group-to-role resolution with cedarpy policy decisions and exposes batch evaluation for the /me endpoint. It loads the Cedar schema and the three policy files, evaluating them in a two-phase model \u00e2\u20ac\u201d an RBAC pre-check (can this role call this tool at all?) followed by an ABAC runtime check (can this specific user do this specific operation?). This engine is consulted by both the MCP tier and the A2A gateway's /me endpoint.",
+      "nodeIds": [
+        "file:mcp_server/policy.py"
+      ],
+      "languageLesson": "This is policy-as-data: authorization rules live in declarative Cedar files, not in Python if-statements. The PolicyEvaluator interface lets a TOML evaluator and a Cedar evaluator be swapped behind one contract, so the enforcement code never hard-codes a single policy engine."
+    },
+    {
+      "order": 8,
+      "title": "Cedar Policies, Schema & Entities",
+      "description": "Here are the actual authorization rules the engine from Step 7 evaluates. The schema declares the entity types (User, Role, Tool, S3Folder) and their attributes (provider, groups, department, archiver); entities.json supplies the three concrete roles and 18 tool definitions. The three policy files layer RBAC permits (role to tools), ABAC permits (archiver may delete in archive/, department-scoped ServiceNow access), and a forbid guardrail that blocks deletion under protected/ \u00e2\u20ac\u201d a forbid that overrides even admin permits.",
+      "nodeIds": [
+        "file:cedar/schema.cedarschema",
+        "config:cedar/entities.json",
+        "file:cedar/policies/rbac.cedar",
+        "file:cedar/policies/abac.cedar",
+        "file:cedar/policies/guardrails.cedar"
+      ],
+      "languageLesson": "Cedar evaluates all matching policies and applies a deny-overrides (forbid-wins) resolution: a single forbid beats any number of permits. This is why guardrails.cedar can block delete in protected/* for everyone, including admins, regardless of what the RBAC permits allow."
+    },
+    {
+      "order": 9,
+      "title": "Tier 3 \u00e2\u20ac\u201d Resource Access & OBO Token Exchange",
+      "description": "After Cedar permits a tool, the deepest BFS layer reaches the actual resource APIs \u00e2\u20ac\u201d and the third security tier. graph_obo.py performs an On-Behalf-Of exchange, swapping the user's custom-audience token for a Graph-scoped one so Microsoft Graph enforces its own OAuth scopes. The ServiceNow client mirrors this: with OBO enabled it sends the user's exchanged token so ServiceNow applies per-user ACLs; otherwise it falls back to a service account, and an in-memory mock stands in when no instance is configured. A failure here is the 'resource' denial tier.",
+      "nodeIds": [
+        "file:mcp_server/graph_obo.py",
+        "file:mcp_server/servicenow.py",
+        "file:mcp_server/servicenow_obo.py",
+        "file:mcp_server/servicenow_mock.py"
+      ]
+    },
+    {
+      "order": 10,
+      "title": "Shared Configuration",
+      "description": "Underpinning all three tiers, dev_config.py is the shared config module (6 dependents across the backend): it loads dev_config.toml, exposes the per-server auth-bypass flag for local testing, detects the IdP from token claims, and crucially strips spoofable keys like department from the X-Abac-Attrs header so clients cannot forge ABAC attributes. The accompanying templates document the environment variables, the group-to-role permission map, and the auth-bypass switches every service reads.",
+      "nodeIds": [
+        "file:dev_config.py",
+        "config:.env.example",
+        "config:permissions.example.toml",
+        "config:dev_config.example.toml"
+      ]
+    },
+    {
+      "order": 11,
+      "title": "Validating the Three-Tier Model",
+      "description": "Finally, the test suite proves the security model from Steps 4-9 actually holds. test_cedar_smoke.py runs the Cedar RBAC/ABAC policies in-process (including department-scoped ServiceNow and the protected/ guardrail), test_access_control.py exercises all three tiers against the live gateway, and test_abac_security.py is a regression guard ensuring the header parser from Step 10 cannot be tricked into accepting a spoofed department. The TESTING guide ties the suite together and explains the live-service and real-token modes.",
+      "nodeIds": [
+        "file:tests/test_cedar_smoke.py",
+        "file:tests/test_access_control.py",
+        "file:tests/test_abac_security.py",
+        "document:TESTING.md"
+      ]
+    }
+  ]
+}
