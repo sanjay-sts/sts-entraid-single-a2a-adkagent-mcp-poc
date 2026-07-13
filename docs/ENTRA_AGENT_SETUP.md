@@ -8,16 +8,18 @@ Prerequisite: `uv run python pki/generate_certs.py` (Task 1).
 Login: `az login --tenant <ENTRA_TENANT_ID>`
 
 > **Shell notes for Windows users:** The commands below are written for Git
-> Bash (they use `for` loops and `$(...)` command substitution, which Git
-> Bash's `bash.exe` handles natively via the Azure CLI's own shell wrapper).
-> If you are running in native PowerShell instead, `$(...)` does **not**
-> mean "command substitution" — that's `$(...)` only in POSIX shells;
-> PowerShell needs the same syntax but interprets it correctly for
-> subexpressions, so simple cases work, but **`for AGENT in ...; do ... done`
-> is not valid PowerShell** and neither is capturing `az` output with
-> `VAR=$(az ...)`. Anywhere you see a `for` loop or a `VAR=$(...)` capture,
-> either run the commands in Git Bash, or translate to PowerShell as noted
-> inline (`foreach` and `$VAR = az ...`).
+> Bash (a real POSIX shell, so `bash.exe` runs them natively — no wrapper
+> involved). Native PowerShell can run most of these commands too; its own
+> `$(...)` subexpression syntax does the same job as bash's command
+> substitution, so that part isn't the problem. The two things that do
+> **not** translate are: (1) bash's `for VAR in a b c; do ... done` loop,
+> which has no PowerShell equivalent (use `foreach ($VAR in "a","b","c")
+> { ... }` instead), and (2) bash's `VAR=$(cmd)` assignment form — no `$`
+> on the variable name, no spaces around `=` — which PowerShell doesn't
+> parse; PowerShell instead writes `$VAR = cmd` (plain assignment, no
+> `$(...)` needed to capture a whole command's output). Anywhere you see a
+> `for` loop or a `VAR=$(...)` capture below, either run it in Git Bash, or
+> use the PowerShell version given alongside it.
 
 ## 1. Create the app registrations
 
@@ -47,24 +49,81 @@ az ad sp create --id <appId>
 
 ## 2. Upload the certificate to each app
 
+> **Warning — the `--append` trap.** `az ad app credential reset --cert`
+> clears **all** existing credentials on the app **by default, even with
+> `--append`**, unless the existing credential is the same type you're
+> adding. Microsoft's own docs for this command say plainly: *"By default,
+> this command clears all passwords and keys."* `--append` only preserves
+> credentials of the type you're resetting (cert-to-cert); it does **not**
+> protect an existing client secret when you reset with `--cert`. **Never
+> run `az ad app credential reset` against the gateway app** — see §2b.
+
 The private key stays local; only the public cert is uploaded. Entra
 verifies client assertions against this exact cert.
+
+### 2a. New agent apps (orchestrator, peer, event-trigger)
+
+These three apps have no existing credentials, so `credential reset
+--append` is safe — there's nothing for it to destroy:
 
 ```bash
 az ad app credential reset --id <orchestrator-appId>   --cert "@pki/certs/orchestrator.crt"   --append
 az ad app credential reset --id <peer-appId>           --cert "@pki/certs/peer.crt"           --append
 az ad app credential reset --id <event-trigger-appId>  --cert "@pki/certs/event-trigger.crt"  --append
-az ad app credential reset --id <ENTRA_CLIENT_ID>      --cert "@pki/certs/gateway.crt"        --append
 ```
 
-> **`--append` is critical.** Without it, `az ad app credential reset`
-> *replaces* all existing credentials on the app. The gateway app
-> (`ENTRA_CLIENT_ID`) already has a client secret used for user-token OBO
-> exchange with Graph API (`ENTRA_CLIENT_SECRET`) — omitting `--append` on
-> that last command would silently delete it and break existing Graph
-> functionality (`get_user_profile`, `list_files`, `send_email`). Always use
-> `--append` for the gateway; it's safe (and harmless) to use it for the new
-> agent apps too.
+### 2b. Gateway app — do NOT use `credential reset`
+
+The gateway app (`ENTRA_CLIENT_ID`) already has a client secret
+(`ENTRA_CLIENT_SECRET`) that the running system uses for user-token OBO
+exchange with Graph API (`get_user_profile`, `list_files`, `send_email`
+depend on it). `az ad app credential reset --cert`, even with `--append`,
+deletes that secret (see warning above). Use one of the two non-destructive
+methods below instead.
+
+**Recommended: Azure Portal.** *App registrations → (the gateway app) →
+Certificates & secrets → Certificates tab → Upload certificate* → select
+`pki/certs/gateway.crt` → Add. This tab only ever writes `keyCredentials`;
+there is no control on it that can touch the existing password credential.
+This is the safest option — use it unless you have a reason to script this
+step.
+
+**Alternative: `az rest`.** This PATCHes the application's `keyCredentials`
+property directly, which Microsoft Graph treats independently of
+`passwordCredentials` — a PATCH to `keyCredentials` cannot touch the
+password. But a PATCH *replaces* whatever array you send for that
+property, so you must read the app's current `keyCredentials`, append the
+new cert to it in your own script, and send the merged array back —
+sending only the new cert would silently drop any other certs already on
+the app (today there are none, but don't build the habit of skipping this
+read-append-write). The array/JSON handling is simplest in PowerShell,
+regardless of which shell you used for the rest of this guide:
+
+```powershell
+$objectId = az ad app show --id <ENTRA_CLIENT_ID> --query id -o tsv
+
+$lines = Get-Content pki/certs/gateway.crt
+$certB64 = -join $lines[1..($lines.Count - 2)]   # strip BEGIN/END CERTIFICATE lines
+
+$existing = az ad app show --id <ENTRA_CLIENT_ID> --query keyCredentials -o json | ConvertFrom-Json
+if ($null -eq $existing) { $existing = @() }      # Windows PowerShell 5.1 turns "[]" into $null
+
+$newCred = [PSCustomObject]@{ type = "AsymmetricX509Cert"; usage = "Verify"; key = $certB64; displayName = "gateway-cert" }
+$body = @{ keyCredentials = @($existing) + $newCred } | ConvertTo-Json -Depth 6
+
+az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/$objectId" --body $body
+```
+
+**Verify the secret survived — do this after either method:**
+
+```bash
+az ad app credential list --id <ENTRA_CLIENT_ID>          # password credential: should still be listed, unchanged
+az ad app credential list --id <ENTRA_CLIENT_ID> --cert    # should now include the new gateway cert
+```
+
+If the first command comes back empty, the secret was deleted — reissue
+`ENTRA_CLIENT_SECRET` (*Certificates & secrets → Client secrets → New
+client secret*) and update `.env` before proceeding.
 
 ## 3. Expose each callee as an API, with an app role
 
@@ -98,6 +157,13 @@ with `uuidgen` / `[guid]::NewGuid()`):
 az ad app update --id <callee-appId> --app-roles @approles.json
 ```
 
+> **Note:** both `--identifier-uris` and `--app-roles` *replace* the app's
+> entire array for that property — they don't add to it. Not an issue the
+> first time you run these (the apps have no existing URIs or roles), but
+> if you ever re-run either command later to add a second URI or role,
+> include the existing values in what you pass or they will be silently
+> dropped.
+
 ## 4. Emit the `idtyp` claim
 
 `idtyp: "app"` is the canonical marker distinguishing a machine token from a
@@ -115,9 +181,7 @@ Save as `optionalclaims.json`:
 Apply to **every** app (callers and callees):
 
 ```bash
-az rest --method PATCH \
-  --url "https://graph.microsoft.com/v1.0/applications/<objectId>" \
-  --body @optionalclaims.json
+az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/<objectId>" --body @optionalclaims.json
 ```
 
 (`<objectId>` is the app's `id`, not `appId`: `az ad app show --id <appId> --query id -o tsv`)
@@ -128,16 +192,19 @@ az rest --method PATCH \
 
 ## 5. Assign `Agent.Invoke` to the callers
 
-Who may call whom:
+Who may call whom — **5 caller→callee pairs** (note orchestrator has two
+separate callees; each is its own row and its own assignment):
 
-| Caller | Callee |
-|---|---|
-| orchestrator | peer, gateway |
-| gateway | peer |
-| peer | gateway |
-| event-trigger | orchestrator |
+| # | Caller | Callee |
+|---|---|---|
+| 1 | orchestrator | peer |
+| 2 | orchestrator | gateway |
+| 3 | gateway | peer |
+| 4 | peer | gateway |
+| 5 | event-trigger | orchestrator |
 
-For each pair, assign the callee's `Agent.Invoke` role to the caller's SP:
+For each of the 5 rows, assign the callee's `Agent.Invoke` role to the
+caller's SP:
 
 ```bash
 CALLER_SP=$(az ad sp show --id <caller-appId> --query id -o tsv)
@@ -165,7 +232,10 @@ az rest --method POST \
 >   --body "{\`"principalId\`":\`"$CALLER_SP\`",\`"resourceId\`":\`"$CALLEE_SP\`",\`"appRoleId\`":\`"$ROLE_ID\`"}"
 > ```
 >
-> Repeat this block once per row in the table above (4 assignments total).
+> Repeat this block once per row in the table above (5 assignments total,
+> including both orchestrator rows — it's easy to do orchestrator→peer and
+> stop, which leaves gateway-as-subagent unreachable from the
+> orchestrator).
 
 ## 6. Enable per-hop user-token OBO (delegated path)
 
@@ -179,8 +249,7 @@ appId on that scope (*Expose an API → Add a client application*).
 Grant the orchestrator delegated permission to each callee and consent:
 
 ```bash
-az ad app permission add --id <orchestrator-appId> \
-  --api <callee-appId> --api-permissions <scope-guid>=Scope
+az ad app permission add --id <orchestrator-appId> --api <callee-appId> --api-permissions <scope-guid>=Scope
 az ad app permission admin-consent --id <orchestrator-appId>
 ```
 
