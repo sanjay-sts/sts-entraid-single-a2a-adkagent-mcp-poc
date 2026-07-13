@@ -45,3 +45,6 @@ reports/
 
 # Manual test results
 test_results/
+
+# Agent PKI — private keys and generated certs, never commit
+pki/certs/
