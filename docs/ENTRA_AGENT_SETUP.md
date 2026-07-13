@@ -186,9 +186,12 @@ az rest --method PATCH --url "https://graph.microsoft.com/v1.0/applications/<obj
 
 (`<objectId>` is the app's `id`, not `appId`: `az ad app show --id <appId> --query id -o tsv`)
 
-> The code falls back to a heuristic (`roles` present, `scp`/`preferred_username`
-> absent) if `idtyp` is missing, but configure it — the heuristic is a safety
-> net, not the contract.
+> The code has no fallback if `idtyp` is missing — it fails closed and
+> rejects the token as not-an-agent-token. A prior heuristic (`roles`
+> present, `scp`/`preferred_username` absent) was removed because a
+> delegated user token for an app-roles-only API can satisfy it too,
+> letting a human token be misclassified as a machine token. Configuring
+> `idtyp` on every app registration in this step is not optional.
 
 ## 5. Assign `Agent.Invoke` to the callers
 
