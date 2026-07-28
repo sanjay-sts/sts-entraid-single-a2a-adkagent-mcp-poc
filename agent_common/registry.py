@@ -9,7 +9,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-# App role a caller must hold to invoke an agent.
+# App role a caller must hold to invoke an agent. Refreshed by reload() so it
+# tracks the environment the same way the agent identities do.
 REQUIRED_ROLE = os.getenv("AGENT_REQUIRED_ROLE", "Agent.Invoke")
 
 # Each agent's client id comes from its own env var. The gateway reuses the
@@ -58,7 +59,8 @@ def reload() -> None:
     Agents whose client id is unset are simply not registered — the system
     runs with whatever subset is configured, and callers get a clean KeyError.
     """
-    global _agents
+    global _agents, REQUIRED_ROLE
+    REQUIRED_ROLE = os.getenv("AGENT_REQUIRED_ROLE", "Agent.Invoke")
     cert_dir = Path(os.getenv("AGENT_CERT_DIR", "pki/certs"))
 
     _agents = {}

@@ -13,6 +13,7 @@ Two flows, both certificate-backed (no client secrets):
 Both cache credentials per (agent, callee); azure-identity caches the tokens
 themselves and refreshes them before expiry.
 """
+import asyncio
 import hashlib
 import logging
 import os
@@ -86,6 +87,8 @@ class DelegatedTokenExchanger:
         # can be true LRU rather than insertion-order FIFO.
         self._credentials: OrderedDict[str, OnBehalfOfCredential] = OrderedDict()
         self._max_cache = 128
+        # In-flight close tasks for evicted credentials — see _close_evicted.
+        self._closing: set[asyncio.Task] = set()
 
     def _certificate(self) -> bytes:
         """Cert + private key, PEM, as azure-identity expects for OBO."""
@@ -93,13 +96,41 @@ class DelegatedTokenExchanger:
             self._cert_bytes = _combined_pem(self._identity)
         return self._cert_bytes
 
+    def _close_evicted(self, credential) -> None:
+        """Close an evicted credential without blocking the sync cache path.
+
+        Each OnBehalfOfCredential holds a live HTTP transport, so dropping one
+        on the floor leaks a connection every eviction. This method is called
+        from a sync context, so the close is scheduled rather than awaited; the
+        task reference is kept until done because a fire-and-forget task can be
+        garbage-collected mid-flight. When no loop is running (unit tests
+        driving `_get_credential` directly), there is no transport to leak
+        either — the stand-in never opened one — so doing nothing is correct.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _close_quietly():
+            try:
+                await credential.close()
+            except Exception:
+                pass  # eviction is bookkeeping; a close failure must not surface
+
+        task = loop.create_task(_close_quietly())
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
     def _get_credential(self, user_token: str, callee: str) -> OnBehalfOfCredential:
         digest = hashlib.sha256(f"{user_token}|{callee}".encode()).hexdigest()
         if digest in self._credentials:
             self._credentials.move_to_end(digest)
         else:
             if len(self._credentials) >= self._max_cache:
-                self._credentials.popitem(last=False)  # evict least-recently-used
+                # Evict least-recently-used — and close it, not just drop it.
+                _, evicted = self._credentials.popitem(last=False)
+                self._close_evicted(evicted)
             self._credentials[digest] = OnBehalfOfCredential(
                 tenant_id=self._tenant_id,
                 client_id=self._identity.client_id,

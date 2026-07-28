@@ -136,7 +136,13 @@ async def _authenticate(request: Request) -> Principal:
 
 
 def _payload_for(callee: str, task: str) -> tuple[str, dict]:
-    """Where a subagent lives and what it expects to be sent."""
+    """Where a subagent lives and what it expects to be sent.
+
+    The peer leg always runs `status`, regardless of `task`. The peer's action
+    vocabulary is its own API, not the dispatch task's, and `status` is the one
+    action that proves the identity chain without side effects. `task` shapes
+    only the gateway leg, which forwards it as the message text.
+    """
     if callee == "peer":
         return f"{PEER_URL}/invoke", {"action": "status", "params": {}}
 

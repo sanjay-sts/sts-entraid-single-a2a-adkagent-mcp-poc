@@ -29,6 +29,7 @@ from agent_common.principal import (
     derive_principal,
     is_app_token,
     verify_agent_claims,
+    verify_delegated_user,
 )
 
 # Context variables for passing auth data to agent executor
@@ -713,14 +714,17 @@ async def auth_middleware(request: Request, call_next):
                     return _auth_error(request, 401, "auth_failed",
                                        "Delegated user token is invalid", "validation_failed")
 
-                # An app-only token here would make a machine call look
-                # delegated, inventing a human who is not party to the request.
-                if is_app_token(delegated_claims):
-                    logger.warning("X-Delegated-User-Token carried an app-only token")
-                    return _auth_error(
-                        request, 403, "access_denied",
-                        "X-Delegated-User-Token must carry a user token, not an app-only token",
-                        "delegated_token_not_a_user")
+                # The two rider-token checks every agent enforces (it is a
+                # user at all; the user is not blocked) — the same shared
+                # implementation the orchestrator and peer call, so the three
+                # services cannot drift apart.
+                try:
+                    verify_delegated_user(delegated_claims, BLOCKED_USERS)
+                except AgentAuthError as e:
+                    logger.warning("Delegated user token refused (%s): %s",
+                                   e.denial_reason, e.message)
+                    return _auth_error(request, 403, "access_denied",
+                                       e.message, e.denial_reason)
 
                 denial = authorize_human_claims(delegated_claims)
                 if denial is not None:

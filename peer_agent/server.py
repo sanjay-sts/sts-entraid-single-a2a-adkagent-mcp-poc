@@ -143,7 +143,13 @@ async def _call_gateway(principal: Principal) -> dict:
 
     async with httpx.AsyncClient(timeout=GATEWAY_CALL_TIMEOUT) as client:
         response = await client.get(f"{A2A_SERVER_URL}/me", headers=headers)
+
+    try:
         body = response.json() if response.status_code == 200 else None
+    except Exception:
+        # A 200 that is not JSON is a broken gateway; report it as a leg-level
+        # result rather than letting the parse error 500 this whole action.
+        body = None
 
     return {"gateway_status": response.status_code, "gateway_me": body}
 

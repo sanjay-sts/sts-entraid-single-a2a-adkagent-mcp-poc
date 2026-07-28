@@ -31,12 +31,24 @@ def _write(path: Path, data: bytes) -> None:
 
 
 def _write_private_key(path: Path, data: bytes) -> None:
-    """Write a private key and restrict it to owner-only (0o600).
+    """Write a private key, owner-only (0o600) from the first byte.
 
-    Windows ignores POSIX modes harmlessly; Linux/CI gets real protection.
+    The mode is applied at open rather than chmod'd afterwards — chmod-after-
+    write leaves a window where the umask default applies to key material.
+    O_BINARY keeps the PEM bytes exact on Windows, where the CRT would
+    otherwise translate newlines. Windows ignores the POSIX mode harmlessly;
+    Linux/CI gets real protection.
     """
-    _write(path, data)
+    fd = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    # O_CREAT's mode does not apply to a pre-existing file (--force overwrite).
     os.chmod(path, 0o600)
+    print(f"wrote {path}")
 
 
 def _private_key_pem(key: rsa.RSAPrivateKey) -> bytes:

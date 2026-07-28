@@ -423,3 +423,50 @@ def test_obo_credential_cache_evicts_least_recently_used(monkeypatch, tmp_path):
 
     assert digest("token-b") not in exchanger._credentials
     assert list(exchanger._credentials.keys()) == [digest(t) for t in ("token-c", "token-a", "token-d")]
+
+
+async def test_evicted_obo_credential_is_closed(monkeypatch, tmp_path):
+    """Eviction must CLOSE the credential, not just drop it — each one holds a
+    live HTTP transport, so a dropped credential is a leaked connection every
+    time the cache turns over. Driven from an async context because the close
+    is scheduled on the running loop; the LRU test above covers the no-loop
+    path, where there is no transport to leak either."""
+    import asyncio
+
+    import agent_common.tokens as tokens_mod
+
+    closed = []
+
+    class DummyCredential:
+        def __init__(self, **kwargs):
+            self.assertion = kwargs.get("user_assertion")
+
+        async def close(self):
+            closed.append(self.assertion)
+
+    monkeypatch.setattr(tokens_mod, "OnBehalfOfCredential", DummyCredential)
+
+    (tmp_path / "peer.crt").write_text("cert")
+    (tmp_path / "peer.key").write_text("key")
+    identity = registry.AgentIdentity(
+        name="peer",
+        client_id="peer-id",
+        cert_path=tmp_path / "peer.crt",
+        key_path=tmp_path / "peer.key",
+    )
+
+    exchanger = tokens_mod.DelegatedTokenExchanger(identity, tenant_id="tid")
+    exchanger._max_cache = 2
+
+    exchanger._get_credential("token-a", "callee")
+    exchanger._get_credential("token-b", "callee")
+    exchanger._get_credential("token-c", "callee")  # evicts "a"
+
+    # The close is a scheduled task, not awaited inline — one yield lets the
+    # task run, a second lets its done-callback (which drops the reference)
+    # fire, since callbacks are queued for the next loop iteration.
+    await asyncio.sleep(0)
+    assert closed == ["token-a"]
+
+    await asyncio.sleep(0)
+    assert not exchanger._closing, "finished close task must not be retained"

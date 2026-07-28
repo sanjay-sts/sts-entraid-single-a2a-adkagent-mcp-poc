@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import httpx
+from azure.core.exceptions import ClientAuthenticationError
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -101,6 +102,11 @@ def main() -> None:
             f"ERROR: could not reach the orchestrator at {ORCHESTRATOR_URL}: {e}",
             file=sys.stderr,
         )
+        sys.exit(EXIT_CANNOT_RUN)
+    except ClientAuthenticationError as e:
+        # Entra refused to mint our token (bad cert, missing app registration,
+        # revoked credential). One line, not a stack trace — this is a cron log.
+        print(f"ERROR: could not obtain an agent token from Entra: {e}", file=sys.stderr)
         sys.exit(EXIT_CANNOT_RUN)
 
     print(json.dumps(body, indent=2))
