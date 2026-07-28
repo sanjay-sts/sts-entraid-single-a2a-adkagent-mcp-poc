@@ -269,3 +269,107 @@ def pytest_configure(config):
 
     # Ensure reports directory exists
     os.makedirs("reports", exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Multi-agent fixtures (real Entra app registrations — see docs/ENTRA_AGENT_SETUP.md)
+#
+# Every one of these skips rather than fails when its prerequisite is absent,
+# and the skip message names exactly what is missing. An integration suite that
+# fails when it is merely unconfigured trains people to ignore it.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def agents_configured():
+    """Skip unless every agent app registration and its cert are present."""
+    from pathlib import Path
+
+    required = [
+        "ENTRA_TENANT_ID",
+        "ENTRA_CLIENT_ID",
+        "AGENT_ORCHESTRATOR_CLIENT_ID",
+        "AGENT_PEER_CLIENT_ID",
+        "AGENT_EVENT_TRIGGER_CLIENT_ID",
+    ]
+    missing = [v for v in required if not os.getenv(v, "").strip()]
+    if missing:
+        pytest.skip(f"agent identities not configured: {', '.join(missing)}")
+
+    cert_dir = Path(os.getenv("AGENT_CERT_DIR", "pki/certs"))
+    for name in ["gateway", "orchestrator", "peer", "event-trigger"]:
+        if not (cert_dir / f"{name}.key").exists():
+            pytest.skip(f"missing {name} key — run: uv run python pki/generate_certs.py")
+
+    from agent_common import registry
+    registry.reload()
+
+
+@pytest.fixture(scope="session")
+def orchestrator_url():
+    return os.getenv("ORCHESTRATOR_URL", "http://localhost:10004")
+
+
+@pytest.fixture(scope="session")
+def peer_url():
+    return os.getenv("PEER_URL", "http://localhost:10005")
+
+
+@pytest.fixture(scope="session")
+def gateway_url():
+    return os.getenv("A2A_URL", "http://localhost:10000")
+
+
+@pytest.fixture(scope="session")
+def require_agent_services(orchestrator_url, peer_url, gateway_url):
+    """Skip unless every service the fan-out touches is running.
+
+    The gateway is included even though no test calls it directly: the
+    orchestrator fans out to it, and without it that leg comes back as a
+    transport failure that reads like an authorization bug.
+    """
+    import httpx
+
+    services = [
+        ("Orchestrator", orchestrator_url),
+        ("Peer agent", peer_url),
+        ("Gateway", gateway_url),
+    ]
+    for label, url in services:
+        try:
+            resp = httpx.get(f"{url}/health", timeout=5.0)
+            if resp.status_code != 200:
+                pytest.skip(f"{label} at {url} returned {resp.status_code}")
+        except Exception:
+            pytest.skip(f"{label} not running at {url}")
+
+
+@pytest.fixture(scope="session")
+def delegated_user_token():
+    """A real *user* token, for exercising the delegated (OBO) path.
+
+    Audienced to the gateway, because that is what a browser sign-in produces
+    and therefore what the first delegated hop actually receives.
+
+    Expiry is checked here rather than left to Entra: an hour-old token
+    produces an `invalid_grant` from the OBO endpoint, which reads like a
+    misconfigured app registration and sends people to the wrong place.
+    """
+    import jwt
+
+    token = os.getenv("TEST_ADMIN_TOKEN", "").strip()
+    if not token:
+        pytest.skip(
+            "TEST_ADMIN_TOKEN not set — needed for the delegated path. "
+            "Sign in to the frontend and copy the access token."
+        )
+
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception as e:
+        pytest.skip(f"TEST_ADMIN_TOKEN is not a JWT: {e}")
+
+    import time
+    if claims.get("exp", 0) <= time.time():
+        pytest.skip("TEST_ADMIN_TOKEN has expired — sign in again and re-copy it")
+
+    return token

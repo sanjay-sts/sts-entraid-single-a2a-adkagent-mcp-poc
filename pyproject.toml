@@ -29,6 +29,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "slow: marks tests that go through the LLM pipeline (10-30s each)",
+    "integration: hits the real Entra tenant and running services (skips if unconfigured)",
 ]
 addopts = "--html=reports/test_report.html --self-contained-html -v"
 timeout = 120
