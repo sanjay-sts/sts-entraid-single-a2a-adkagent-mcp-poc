@@ -149,6 +149,37 @@ def verify_agent_claims(
         )
 
 
+def verify_delegated_user(claims: dict, blocked_users: list[str]) -> None:
+    """Check a rider user token's claims. Raises AgentAuthError on failure.
+
+    Called by every agent that accepts `X-Delegated-User-Token`, so the two
+    checks below cannot drift apart between services. Signature/issuer/audience
+    are verified separately, before this runs.
+
+    Two things are wrong with trusting a merely-authentic rider token:
+
+      1. It might not be a user at all. An app-only token in the user slot
+         would make a machine call look delegated, inventing a human who is
+         not party to the request — and it is a token the caller can mint for
+         itself, unlike a real user's.
+      2. Authenticity is not authorization. A token issued an hour ago says
+         nothing about whether that person is still allowed in, so an agent
+         holding a stale assertion must not become a way around a blocklist.
+
+    Deliberately does NOT check group membership: that is the gateway's ACL,
+    resolved from configuration a subagent does not have. A subagent's own
+    authorization comes from its caller's app role, not from the human.
+    """
+    if is_app_token(claims):
+        raise AgentAuthError(
+            "delegated_token_not_a_user",
+            "X-Delegated-User-Token must carry a user token, not an app-only token",
+        )
+
+    if claims.get("sub", "") in blocked_users:
+        raise AgentAuthError("blocked_user", "This account has been blocked")
+
+
 @dataclass(frozen=True)
 class Principal:
     """Who is making this request, and on whose behalf.
