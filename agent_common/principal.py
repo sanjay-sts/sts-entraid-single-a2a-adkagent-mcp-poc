@@ -65,6 +65,29 @@ def is_app_token(claims: dict) -> bool:
     return claims.get("idtyp") == "app"
 
 
+def _audience_matches(actual, expected: str) -> bool:
+    """True when `actual` names the same application as `expected`.
+
+    Entra mints `aud` as either the App ID URI (`api://<app-id>`) or the bare
+    app id, depending on the resource app registration's
+    `accessTokenAcceptedVersion`. Both forms name the same application, and
+    which one you get is a property of the tenant rather than of the caller —
+    so accepting only one would deny every legitimate agent call in a tenant
+    configured the other way, a failure that surfaces only against a real
+    tenant. The JWT validators on both sides already accept both forms; this
+    keeps the claim check consistent with them.
+
+    Audience *narrowing* is unaffected: different agents have different app
+    ids, so a token minted for the peer still does not match the gateway.
+
+    Fails closed on anything unexpected — an empty audience, or the list form
+    the JWT spec permits and Entra does not emit.
+    """
+    if not isinstance(actual, str) or not actual or not expected:
+        return False
+    return actual.removeprefix("api://") == expected.removeprefix("api://")
+
+
 def verify_agent_claims(
     claims: dict,
     expected_audience: str,
@@ -105,7 +128,7 @@ def verify_agent_claims(
         )
 
     audience = claims.get("aud", "")
-    if audience != expected_audience:
+    if not _audience_matches(audience, expected_audience):
         raise AgentAuthError(
             "wrong_audience",
             f"Token audience '{audience}' was not minted for '{expected_audience}'",
