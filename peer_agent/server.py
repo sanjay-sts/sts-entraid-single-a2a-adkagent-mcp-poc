@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request, Response
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_common import registry
+from agent_common.config import load_blocked_users
 from agent_common.jwt_validator import EntraJWTValidator, TokenVerificationError
 from agent_common.outbound import build_agent_headers
 from agent_common.principal import (
@@ -51,11 +52,10 @@ PEER_AGENT_PORT = int(os.getenv("PEER_AGENT_PORT", 10005))
 A2A_SERVER_URL = os.getenv("A2A_SERVER_URL", "http://localhost:10000")
 GATEWAY_CALL_TIMEOUT = 15.0
 
-# Same blocklist the gateway reads. Duplicated deliberately: a subagent that
-# trusted the gateway to have checked would be trusting a hop it cannot see.
-BLOCKED_USERS = [
-    u.strip() for u in os.getenv("BLOCKED_USERS", "").split(",") if u.strip()
-]
+# Same blocklist the gateway reads. The *check* is duplicated deliberately: a
+# subagent that trusted the gateway to have checked would be trusting a hop it
+# cannot see. Only the parsing is shared.
+BLOCKED_USERS = load_blocked_users()
 
 app = FastAPI(title="Peer Agent")
 

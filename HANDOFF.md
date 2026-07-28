@@ -10,6 +10,8 @@ Everything below reflects the code as of branch `docs/system-handoff` (forked fr
 
 A four-tier AI agent stack that carries a **human user's identity** from browser sign-in all the way down to the resource APIs the agent's tools call. The point of the project is the identity plumbing and the access control, not the agent's capabilities — the tools themselves (Graph profile, OneDrive listing, S3 browsing, timezone math) are deliberately mundane. They exist to be *denied* at different tiers so the denial can be observed.
 
+It now also carries **agent** identity. Every inter-agent call presents the caller's own certificate-backed Entra token, and whether a human is behind that call is derived from whether a delegated user token rides alongside — never from anything the caller says about itself (§5.5). A chain with no human in it is a first-class case, not a degraded one: `event_trigger.py` starts one, and the agents' own app roles decide what it may do.
+
 Two identity providers are supported side by side: **Microsoft Entra ID** and **AWS Cognito**. The provider is detected per-token from the `iss` claim; nothing else in the stack is provider-aware except a handful of claim-name lookups.
 
 Access control is enforced at three independent points, so a bypass at one tier is still caught by the next:
@@ -53,7 +55,28 @@ Access control is enforced at three independent points, so a bypass at one tier 
                                           MS Graph API      AWS S3
 ```
 
-Every hop is plain HTTP on localhost. There is no service mesh, no mTLS, no gateway in front. All four processes are started by hand (§10).
+Alongside that human path there is now an **agent tier**, which reaches the same gateway from the side:
+
+```
+┌──────────────────┐  Bearer <own app token>   ┌──────────────────┐
+│ event_trigger.py │ ────────────────────────▶ │ Orchestrator     │
+│ CLI, no human    │  and NO user token        │ :10004, no LLM   │
+└──────────────────┘                           └───┬──────────┬───┘
+                                                   │          │
+                    fresh token minted per callee  │          │  (see §5.5)
+                    + user token OBO-exchanged     │          │
+                      per callee, when there is    │          │
+                      a human upstream             ▼          ▼
+                                     ┌──────────────────┐  ┌──────────────────┐
+                                     │ Peer Agent       │  │ A2A Gateway      │
+                                     │ :10005, no LLM   │─▶│ :10000  (as an   │
+                                     └──────────────────┘  │  agent caller)   │
+                                                           └──────────────────┘
+```
+
+Neither new service uses an LLM: they exist to exercise the identity contract, not to be clever. Each authenticates with an **x509 certificate**, never a client secret, and each independently verifies its caller's signature, audience, `azp` and app role — no hop trusts a hop it cannot see.
+
+Every hop is plain HTTP on localhost. There is no service mesh, no mTLS, no gateway in front. That is the largest open gap in the agent tier (§13 #19): bearer tokens on a plaintext hop can be harvested by anything that squats a port and replayed at the real callee. Closing it is Phase 2. All six processes are started by hand (§10).
 
 **Versions:** Python ≥3.10; `fastmcp>=3.0.0`, `google-adk>=1.25.0`, `a2a-sdk[http-server]>=0.3.20`, `litellm>=1.30.0`, `PyJWT>=2.8.0`, `azure-identity>=1.19.0`. Frontend: React 18, `@azure/msal-browser` ^3.6, `aws-amplify` ^6.16.
 
@@ -70,6 +93,18 @@ mcp_server/server.py     845 lines  FastMCP: auth, middleware, 10 tools
 mcp_server/graph_obo.py  113 lines  Entra On-Behalf-Of token exchange (singleton)
 mcp_server/policy.py     134 lines  PolicyEvaluator ABC + TomlPolicyEvaluator
 dev_config.py             56 lines  Shared auth-bypass config loader
+
+Agent tier (added by the multi-agent workstream):
+agent_common/principal.py    262 lines  Pure claim validation + principal derivation. No I/O
+agent_common/jwt_validator.py 136 lines  Entra JWKS signature/issuer/audience/expiry verification
+agent_common/registry.py     101 lines  Agent identities and the call graph (who may call whom)
+agent_common/tokens.py       129 lines  Cert-backed app tokens + per-hop OBO exchange
+agent_common/outbound.py      55 lines  Builds the two headers for one outbound hop
+agent_common/config.py        23 lines  Shared parsing of BLOCKED_USERS
+orchestrator_agent/server.py 262 lines  Fan-out to peer + gateway (:10004, no LLM)
+peer_agent/server.py         214 lines  Minimal subagent, callee and caller both (:10005, no LLM)
+event_trigger.py             125 lines  M2M entry point. CLI, no human, no user token
+pki/generate_certs.py        158 lines  Mini-CA + per-agent key pairs (pki/certs/ is gitignored)
 
 frontend/src/
   AuthProvider.js              Unified useAuth() over MSAL + Amplify
@@ -94,9 +129,20 @@ frontend/src/
     tokenDecoder.js            base64url JWT decode
 
 tests/
-  conftest.py                  271 lines  Mock-token fixtures, Cognito helpers
-  test_access_control.py       399 lines  Three-tier ACL tests
+  conftest.py                  375 lines  Mock-token fixtures, Cognito helpers, agent fixtures
+  test_access_control.py       399 lines  Three-tier ACL tests (needs the servers running)
   test_security_dashboard.py   658 lines  Dashboard/E2E tests (needs real tokens)
+  test_pki.py                  149 lines  Certificate generation
+  test_agent_identity.py       215 lines  Claim validation + principal derivation
+  test_agent_registry.py       425 lines  Registry, call graph, JWT signature verification
+  test_agent_policy.py         178 lines  Agent role resolution
+  test_gateway_agent_auth.py   316 lines  Gateway's agent-caller path
+  test_mcp_machine_principal.py 466 lines  MCP machine principals + Graph refusal
+  test_peer_agent.py           414 lines  Peer agent
+  test_orchestrator.py         401 lines  Orchestrator fan-out
+  test_event_trigger.py        191 lines  M2M entry point
+  test_multi_agent_integration.py 269 lines  Real tenant + running services. Marked `integration`;
+                                             skips until the Entra setup is done — see §13 #21
 
 Config templates (all real files are gitignored):
   .env.example                 Backend env vars
@@ -105,7 +151,9 @@ Config templates (all real files are gitignored):
   dev_config.example.toml      Per-server auth bypass
 
 Docs:
-  README.md (914)  TESTING.md (720)  MANUAL_TESTING.md (287)  CLAUDE.md  claude.md (stale duplicate)
+  README.md  TESTING.md  MANUAL_TESTING.md  CLAUDE.md  HANDOFF.md (this file)
+  docs/ENTRA_AGENT_SETUP.md    One-time tenant setup for the agent tier (needs tenant admin)
+  docs/superpowers/plans/      The multi-agent phase plans
   scratchpad/      Design notes from prior workstreams (multi-IdP, role switching, frontend testing)
   test_results/    Recorded manual test runs
 ```
@@ -212,6 +260,28 @@ Two things worth internalizing:
 
 - **The MCP server is stateless** (`stateless_http=True`, `server.py:844`). `ctx.get_state()` is unavailable; ContextVars set by the middleware are the *only* way tool functions see the caller. Anything a tool needs must be set there first.
 - **`mcp_header_provider` is synchronous** and is called on every MCP request. It cannot await, so anything it needs (a fresh token, a role) must already be sitting in session state.
+
+### 5.5 How identity propagates between *agents*
+
+The agent tier does not extend the chain above; it uses a different contract, and the difference is the point. Two headers, and what they mean is fixed:
+
+```
+Authorization: Bearer <caller's own app token>     always — "who is calling"
+X-Delegated-User-Token: <user token>               only when a human is upstream
+```
+
+**Principal type is derived from which of these are present, never declared.** There is no `principal_type` field on the wire and no header a caller can set to claim one. `derive_principal()` returns `machine` when the second header is absent and `delegated` when it is present and valid. A caller cannot assert that a human is behind it without producing that human's token, verified against Entra's JWKS by the callee itself.
+
+| Principal | When | Authorized by | Graph tools |
+|---|---|---|---|
+| `delegated` | a human is upstream | the human's role (groups → `[group_rules]`) | allowed |
+| `machine` | event-triggered, no human | the agent's role (app id → `[agent_rules]`) | `no_delegated_user` |
+
+Both tokens are re-minted for each callee — `build_agent_headers()` (`agent_common/outbound.py`) is shared by every caller so the rule cannot drift between services. The user token is **exchanged, not forwarded**: forwarding the inbound one would hand the callee a token minted for *us*, which it could then replay anywhere we can be called. The exchange keeps the human in `sub` and puts the agent in the actor position — delegation, not impersonation.
+
+Order matters in every `_authenticate()`: **signature first, claims second**. A claim read from an unverified token is an attacker-supplied string, so `azp`, `roles` and `aud` mean nothing until `EntraJWTValidator` has checked the signature against the tenant's JWKS. `agent_common/principal.py` carries this warning at the top of the module because every function in it operates on claims taken at face value.
+
+A failed exchange is a **failure**, not a fallback. The orchestrator deliberately does not catch it: proceeding without the user token would silently downgrade that leg to machine privileges — a different principal than the caller asked for, with a `200` and nothing in the response to say so.
 
 ---
 
@@ -334,7 +404,11 @@ All real config files are gitignored; every one has a committed `.example` templ
 
 **`frontend/.env`**: `REACT_APP_ENTRA_CLIENT_ID`, `REACT_APP_ENTRA_TENANT_ID`, `REACT_APP_A2A_SERVER_URL`, and optional `REACT_APP_COGNITO_*`.
 
-**`permissions.toml`**: group→role mapping for the MCP tier (§6.2). Hot-reloaded.
+**`.env`** (agent tier). One client id per agent: `AGENT_ORCHESTRATOR_CLIENT_ID`, `AGENT_PEER_CLIENT_ID`, `AGENT_EVENT_TRIGGER_CLIENT_ID` — the gateway reuses `ENTRA_CLIENT_ID`. Ports: `ORCHESTRATOR_PORT=10004`, `PEER_AGENT_PORT=10005`. Also `AGENT_CERT_DIR` (default `pki/certs`) and `AGENT_REQUIRED_ROLE` (default `Agent.Invoke`). An agent whose client id is unset is simply not registered, and callers get a `KeyError` naming the variable — a partially configured environment fails closed rather than authorizing an empty string.
+
+**`pki/certs/`** — gitignored, and must stay that way: it holds private keys. Regenerate with `uv run python pki/generate_certs.py`. The certificate uploaded to each Entra app registration must be the one here; Entra matches the client assertion by thumbprint (`x5t`).
+
+**`permissions.toml`**: group→role mapping for the MCP tier (§6.2), plus `[agent_rules.<provider>]` mapping app id→role for machine principals. Hot-reloaded.
 
 **`dev_config.toml`**: per-server auth bypass, loaded by the shared `dev_config.py`.
 
@@ -356,7 +430,7 @@ When a section is bypassed, that server injects mock claims and the sentinel tok
 
 ## 10. Running it
 
-Four terminals:
+Four terminals for the human path:
 
 ```bash
 uv run python mcp_server/server.py     # :10002
@@ -365,14 +439,33 @@ uv run python a2a_server/server.py     # :10000
 cd frontend && npm start               # :10003
 ```
 
-Health checks: `GET :10000/health`, `GET :10001/health`, and `GET :10000/.well-known/agent-card.json` for A2A discovery (all unauthenticated).
+Two more for the agent tier, which is optional — the human path runs without them:
+
+```bash
+uv run python peer_agent/server.py           # :10005
+uv run python orchestrator_agent/server.py   # :10004
+```
+
+Both need the Entra setup (`docs/ENTRA_AGENT_SETUP.md`) and certificates (`uv run python pki/generate_certs.py`). Without them the processes still start and serve `/health`; the failure appears on the first call that needs a token.
+
+Fire a machine-principal chain:
+
+```bash
+uv run python event_trigger.py --task status
+```
+
+Exit codes matter here — it simulates an unattended caller that can see nothing else. `0` dispatched and the chain resolved a machine principal; `1` could not run; `2` the orchestrator refused; `3` it worked but a human turned up in a chain that is supposed to have none.
+
+Health checks: `GET :10000/health`, `:10001/health`, `:10004/health`, `:10005/health`, and `GET :10000/.well-known/agent-card.json` for A2A discovery (all unauthenticated).
 
 Tests:
 
 ```bash
-uv run pytest tests/test_access_control.py -v      # mock tokens, always runs
-uv run pytest tests/ -v                            # dashboard tests need real TEST_*_TOKENs
+uv run pytest tests/ -m "not integration" -v   # the whole unit suite
+uv run pytest tests/ -m integration -v         # real tenant + all services; skips otherwise
 ```
+
+`tests/test_access_control.py` and `test_security_dashboard.py` need the servers running and real `TEST_*_TOKEN`s; they fail with connection errors otherwise, which is expected on a bare checkout.
 
 Logs (all under `logs/`, created on startup): `a2a_server.log` (DEBUG), `adk_agent.log` (DEBUG), `mcp_server.log` (INFO).
 
@@ -396,9 +489,17 @@ Agent-tier denials (`_auth_error`, `:524`) return `{error, message, denial_level
 | 401 | `missing_token`, `invalid_format`, `token_expired`, `validation_failed` |
 | 403 | `blocked_user`, `no_group_membership`, `no_group_configuration` |
 
+On the agent path the gateway adds: `not_an_agent_token`, `wrong_audience`, `unknown_agent`, `agent_not_authorized`, `delegated_token_not_a_user` (403 each).
+
 **ADK agent :10001** — `POST /session`, `POST /chat` (buffered), `POST /chat/stream` (SSE), `GET /health`. All except `/health` require Bearer.
 
 **MCP server :10002** — `POST /mcp`, streamable HTTP, stateless. Tool errors are `ToolError` strings prefixed `[ROLE_SELECTION]` or `[TOOL_DENIAL]`.
+
+**Orchestrator :10004** — `POST /dispatch` (Bearer + optional `X-Delegated-User-Token`), `GET /health`. Returns `{principal_type, acting_agent, on_behalf_of, subagents}`. Each entry in `subagents` is `{ok, status, response, error}` — `ok` is explicit precisely so a refused leg is not shape-indistinguishable from a successful one. Membership in `subagents` proves nothing; both keys are always present.
+
+**Peer agent :10005** — `POST /invoke` (same headers), `GET /health`. Actions are `status`, `echo`, `call_gateway`. Returns `{agent, action, principal_type, acting_agent, on_behalf_of, result}`.
+
+Both use the same denial shape as the gateway, so the frontend's classifier works unchanged. Both return `401` for `missing_token` and `validation_failed`, `403` for everything else, and `400` for a malformed body — parsed only *after* authentication, so an unauthenticated request never reaches a parser.
 
 ---
 
@@ -406,12 +507,14 @@ Agent-tier denials (`_auth_error`, `:524`) return `{error, message, denial_level
 
 These are not bugs; they are load-bearing premises. Anything that violates one of them will be rejected somewhere in the chain, and knowing where saves a lot of debugging.
 
-1. **Every principal is a human end user.** The gateway requires a group claim (`no_group_membership`, `:626`), the MCP policy store resolves roles only from group claims or an email override, and email extraction assumes a user-shaped claim set (`preferred_username`, `upn`, `cognito:username`). A token that carries none of these has no path to a role.
-2. **Every token is a delegated (user) token.** The OBO exchange in `graph_obo.py` needs a user assertion by definition. There is no app-only credential path to Graph.
-3. **One agent, one gateway, one hop.** The A2A executor's only downstream is the local ADK agent (`ADK_SERVER_URL`, hardcoded to localhost). The agent card is static and advertises this server's own skills. Nothing in the code discovers, calls, or authenticates *to* another agent.
-4. **The caller's token is the tool's token.** The token that arrives at the gateway is forwarded verbatim to the ADK agent and again to the MCP server; each tier re-validates the *same* JWT. There is no token exchange, downscoping, or re-minting between tiers — the sole exception is the Graph OBO swap at the very last hop.
+1. **A principal is a human *or* an agent.** `is_app_token()` (`agent_common/principal.py`) decides which, and it decides on one claim: `idtyp == "app"`. There is no fallback heuristic, deliberately — the obvious one ("no `preferred_username`/`upn`, therefore a machine") misclassifies a genuine human token from a tenant that does not emit those optional claims, and misclassifying a human as a machine is a privilege decision made on a formatting accident. So it **fails closed**: absent `idtyp`, every token is treated as a human's, and agent calls are refused until the optional claim is configured (`docs/ENTRA_AGENT_SETUP.md` §4). If agent calls are being denied for no visible reason, check that claim first.
+
+   Humans are authorized by group membership; agents by app role (`Agent.Invoke`) plus audience plus a registered `azp`. `permissions.toml` maps groups→roles under `[group_rules]` and app-ids→roles under `[agent_rules]`.
+2. **A token may be delegated or app-only.** Graph tools require a delegated user (`_require_delegated_user()`); a machine principal gets a clean `no_delegated_user` naming the calling agent, rather than falling through to read the *application's* mailbox. The OBO exchange still needs a user assertion by definition — that has not changed, it is now a checked precondition instead of an assumption.
+3. **The gateway is one of several agents.** An orchestrator (`:10004`) fans out to the gateway and a peer agent (`:10005`); `event_trigger.py` starts a chain with no human in it at all. Who may call whom is declared in `agent_common/registry.py` and independently enforced by Entra app-role assignments — the registry is the local allow-list that backs up the tenant's, not a substitute for it.
+4. **Tokens are audience-narrowed per hop — except on the original path.** Each agent mints a fresh app token for its callee and OBO-exchanges any inbound user token *for that callee*, so a token captured at hop N is useless at hop N+1. The old verbatim-forwarding behaviour survives on gateway→ADK→MCP, which is a known gap rather than a design choice: the MCP server has no app registration of its own and shares the gateway's, so the narrowing stops one hop short (§13 #22).
 5. **Sessions are keyed by user.** `user_sessions` (`a2a_server/server.py:274`) and ADK's `InMemorySessionService` are both keyed on `user_id` = the token's `sub`. Two concurrent principals with the same `sub` would share a session.
-6. **Role is chosen by the caller, validated by the server.** `X-Assume-Role` is a request, not an assertion; the MCP middleware is what decides whether it's honored.
+6. **Role is chosen by the caller, validated by the server — for agents too.** `X-Assume-Role` is a request, not an assertion. The gateway forwards it without validating it; `UserContextMiddleware` in the MCP server is the only thing that decides whether it is honored, for machine callers as well as human ones. Machine role resolution deliberately ignores group claims: an app registration controls its own optional claims, so an agent that could be promoted by a `groups` claim could grant itself any role in the tenant.
 
 ---
 
@@ -434,9 +537,14 @@ These are not bugs; they are load-bearing premises. Anything that violates one o
 | 13 | `AWS_BEARER_TOKEN_BEDROCK` expires every 12h | `.env` | Presents as an opaque agent error |
 | 14 | CORS origin list hardcodes `:10003` alongside the env-var port | `server.py:499` | Changing `FRONTEND_PORT` alone leaves a stale entry |
 | 15 | `policy.check_access()` defined but never called | `mcp_server/policy.py:120` | The ABAC entry point is dead code today |
-| 16 | `claude.md` (lowercase) is a stale duplicate of `CLAUDE.md` | repo root | Two files, one is out of date |
+| 16 | ~~`claude.md` is a stale duplicate of `CLAUDE.md`~~ — **not true; fixed** | repo root | There was only ever one file: on disk `CLAUDE.md`, but git had recorded the path in lowercase, and `core.ignorecase=true` hid the mismatch locally. It was not a duplicate and nothing was out of date — but a clone onto a case-sensitive filesystem would have produced `claude.md`, which Claude Code does not load as project instructions. The tracked path is now `CLAUDE.md`. Do not "clean up the duplicate"; there isn't one |
 | 17 | `_detect_provider` fallback differs between servers (`"unknown"` vs `"default"`) | both | Cosmetic, but a shared-code refactor must reconcile it |
 | 18 | Frontend still classifies a `[SCOPE_DENIAL]` marker no server emits | `denialClassifier.js:41` | Dead branch; the "scope" tier is now only reachable via the Graph-403 path |
+| 19 | Agent hops run over plain HTTP — no mTLS | orchestrator, peer agent | A rogue that squats a callee's port can harvest bearer tokens and replay them to the real callee. Closed in Phase 2 (mTLS + `azp`↔peer-cert binding). This is the single largest gap in the agent tier today |
+| 20 | Two JWT validators exist | `a2a_server/server.py` `TokenValidator` (multi-IdP) and `agent_common/jwt_validator.py` `EntraJWTValidator` (Entra-only) | Duplicated JWKS logic. The gateway's is multi-IdP and predates the agent work; converging them is a follow-up. Note they differ in behaviour, not just code: the agent validator has a JWKS TTL, the gateway's does not |
+| 21 | `agent_common` has no integration coverage that has actually run | `tests/test_multi_agent_integration.py` | The tests exist and skip cleanly, but nothing has yet proven Entra accepts a certificate assertion from these app registrations. Until an operator completes `docs/ENTRA_AGENT_SETUP.md`, every agent-identity claim in this document is unverified against a real tenant |
+| 22 | The MCP server shares the gateway's app registration | `mcp_server/server.py`, `adk_agent/agent.py` | Per-hop audience narrowing stops one hop short: the token the MCP server validates was minted for the gateway. A confused-deputy gap that predates the agent work and is not closed by Phase 1 |
+| 23 | A cross-hop replay is refused as `401 validation_failed`, not `403 wrong_audience` | `agent_common/jwt_validator.py` before `principal.verify_agent_claims` | Both checks exist; the signature validator reaches the audience first, so the claim-level `wrong_audience` branch never sees a live token. It is not dead — it holds if the validator is ever swapped — but do not write tests or runbooks expecting that status |
 
 ---
 
@@ -451,12 +559,17 @@ If you need to change behavior, these are the intended seams — in rough order 
 - **Changing what identity reaches the tools** → the choke point is `UserContextMiddleware._resolve_context` (`:227`) and the four ContextVars it sets. Nothing downstream reads the raw token except the Graph tools.
 - **Changing what the gateway forwards** → `IdentityAwareAgentExecutor._ensure_session` (`:372`) and `.execute` (`:313`) build the two JSON bodies sent to the ADK agent. Both are hand-rolled dicts; there's no schema.
 - **Changing what the agent sends to MCP** → `mcp_header_provider` (`agent.py:99`). Sync, called per request, reads session state only.
+- **A new agent** → add it to `_CLIENT_ID_ENV` and `_CALL_GRAPH` in `agent_common/registry.py`, register the app and assign `Agent.Invoke` per `docs/ENTRA_AGENT_SETUP.md`, and give it a key pair. The registry is the *local* allow-list; Entra's app-role assignment is the enforcement point, and the two must be changed together or calls fail with `unknown_agent` (registry ahead) or `403` from the token endpoint (Entra behind).
+- **Changing what one agent sends to another** → `build_agent_headers()` (`agent_common/outbound.py`). Deliberately the only place the two-header contract is constructed, because "exchange the user token, never forward it" is exactly the rule that drifts when each service writes its own version. Adding a caller means calling this, not copying it.
+- **Changing how a caller is authorized** → `verify_agent_claims()` (`agent_common/principal.py`), pure and tenant-free, so a new rule is unit-testable without a tenant. Note that it operates on already-verified claims: the signature check is `EntraJWTValidator` and must stay in front of it.
 
 ---
 
 ## 15. Branch and history context
 
-Current branch `docs/system-handoff`, cut from `main` @ `fc041d6` ("Merge pull request #1 from sanjay-sts/obo-graph-api"). `main` is clean.
+Current branch `multi-agent-authnz`. It adds the agent tier described in §2, §5.5 and §11 — Phase 1 of a three-phase plan (`docs/superpowers/plans/2026-07-13-multi-agent-authnz-phase1.md`). Phase 2 is mTLS and the `azp`↔peer-cert binding that makes these bearer tokens sender-constrained; Phase 3 is an adversarial harness that runs an attack matrix with mTLS on and off. Two attacks in that matrix — port squatting and replaying a harvested token to the real callee — **succeed** until Phase 2 lands. That is the demonstration, not an oversight.
+
+This document was originally written on `docs/system-handoff`, cut from `main` @ `fc041d6` ("Merge pull request #1 from sanjay-sts/obo-graph-api").
 
 Other branches in the repo, which indicate where prior work went and what may return:
 

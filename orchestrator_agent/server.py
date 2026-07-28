@@ -29,6 +29,7 @@ from fastapi import FastAPI, Request, Response
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_common import registry
+from agent_common.config import load_blocked_users
 from agent_common.jwt_validator import EntraJWTValidator, TokenVerificationError
 from agent_common.outbound import build_agent_headers
 from agent_common.principal import (
@@ -58,12 +59,10 @@ ORCHESTRATOR_PORT = int(os.getenv("ORCHESTRATOR_PORT", 10004))
 PEER_URL = f"http://localhost:{os.getenv('PEER_AGENT_PORT', 10005)}"
 GATEWAY_URL = f"http://localhost:{os.getenv('A2A_SERVER_PORT', 10000)}"
 
-# Same blocklist the gateway and the peer read. Duplicated deliberately: an
-# agent that trusted an upstream hop to have checked would be trusting a hop it
-# cannot see. (Three copies now — see the note in the Task 8 ledger entry.)
-BLOCKED_USERS = [
-    u.strip() for u in os.getenv("BLOCKED_USERS", "").split(",") if u.strip()
-]
+# Same blocklist the gateway and the peer read. The *check* is duplicated
+# deliberately: an agent that trusted an upstream hop to have checked would be
+# trusting a hop it cannot see. Only the parsing is shared.
+BLOCKED_USERS = load_blocked_users()
 
 SUBAGENTS = ["peer", "gateway"]
 CALL_TIMEOUT = 30.0

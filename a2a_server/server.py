@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
 
 from agent_common import registry
+from agent_common.config import load_blocked_users
 from agent_common.principal import (
     AgentAuthError,
     Principal,
@@ -89,8 +90,10 @@ A2A_SERVER_PORT = int(os.getenv("A2A_SERVER_PORT", 10000))
 ADK_SERVER_URL = f"http://localhost:{os.getenv('ADK_SERVER_PORT', 10001)}"
 FRONTEND_PORT = os.getenv("FRONTEND_PORT", 10003)
 
-# Access control configuration
-BLOCKED_USERS = [u.strip() for u in os.getenv("BLOCKED_USERS", "").split(",") if u.strip()]
+# Access control configuration. The peer agent and orchestrator each read the
+# same list and check it themselves — see agent_common/config.py for why the
+# check is duplicated but the parsing is not.
+BLOCKED_USERS = load_blocked_users()
 ALLOWED_GROUPS = [
     os.getenv("ADMIN_GROUP_ID"),
     os.getenv("DEVELOPER_GROUP_ID"),
