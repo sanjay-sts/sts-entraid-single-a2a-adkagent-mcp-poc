@@ -8,11 +8,18 @@ One implementation, shared by every agent, so no service can accidentally skip i
 """
 import logging
 import os
+import time
 
 import httpx
 import jwt
 
 logger = logging.getLogger("agent_common.jwt")
+
+# How long a fetched JWKS document is trusted before it is refetched, absent
+# a key-not-found event (which always forces an immediate refetch — see
+# `_keys_for`). Keeps a compromised/rotated-out key from being honored
+# indefinitely just because it happened to still resolve by kid.
+DEFAULT_JWKS_TTL_SECONDS = 600
 
 
 class TokenVerificationError(Exception):
@@ -22,9 +29,17 @@ class TokenVerificationError(Exception):
 class EntraJWTValidator:
     """Verifies Entra-issued JWTs against the tenant's JWKS."""
 
-    def __init__(self, tenant_id: str | None = None):
+    def __init__(
+        self,
+        tenant_id: str | None = None,
+        jwks_ttl_seconds: float = DEFAULT_JWKS_TTL_SECONDS,
+        clock=time.monotonic,
+    ):
         self._tenant_id = tenant_id or os.getenv("ENTRA_TENANT_ID", "")
         self._jwks_cache: dict[str, dict] = {}
+        self._jwks_fetched_at: dict[str, float] = {}
+        self._jwks_ttl_seconds = jwks_ttl_seconds
+        self._clock = clock
 
     @property
     def _jwks_uris(self) -> list[str]:
@@ -41,15 +56,22 @@ class EntraJWTValidator:
         ]
 
     async def _get_jwks(self, uri: str) -> dict:
-        if uri not in self._jwks_cache:
+        fetched_at = self._jwks_fetched_at.get(uri)
+        expired = (
+            fetched_at is None
+            or (self._clock() - fetched_at) >= self._jwks_ttl_seconds
+        )
+        if uri not in self._jwks_cache or expired:
             async with httpx.AsyncClient() as client:
                 response = await client.get(uri, timeout=10.0)
                 response.raise_for_status()
                 self._jwks_cache[uri] = response.json()
+                self._jwks_fetched_at[uri] = self._clock()
         return self._jwks_cache[uri]
 
     def clear_cache(self) -> None:
         self._jwks_cache = {}
+        self._jwks_fetched_at = {}
 
     async def _keys_for(self, kid: str) -> list:
         keys = []

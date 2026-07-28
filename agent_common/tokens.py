@@ -16,12 +16,25 @@ themselves and refreshes them before expiry.
 import hashlib
 import logging
 import os
+from collections import OrderedDict
 
 from azure.identity.aio import CertificateCredential, OnBehalfOfCredential
 
 from agent_common.registry import AgentIdentity, get_agent
 
 logger = logging.getLogger("agent_common.tokens")
+
+
+def _combined_pem(identity: AgentIdentity) -> bytes:
+    """Cert + private key, single PEM, as azure-identity's certificate-backed
+    credentials (CertificateCredential, OnBehalfOfCredential) expect.
+
+    azure-identity does not accept a public-cert-only path for these flows —
+    it needs the private key alongside the certificate in one PEM blob. The
+    private key signs the client assertion; it never leaves this process,
+    only the public cert lives in Entra.
+    """
+    return identity.key_path.read_bytes() + b"\n" + identity.cert_path.read_bytes()
 
 
 class AgentTokenProvider:
@@ -38,9 +51,7 @@ class AgentTokenProvider:
             self._credential = CertificateCredential(
                 tenant_id=self._tenant_id,
                 client_id=self._identity.client_id,
-                certificate_path=str(self._identity.cert_path),
-                # The private key signs the client assertion. It never leaves
-                # this process; only the public cert lives in Entra.
+                certificate_data=_combined_pem(self._identity),
                 password=None,
             )
         return self._credential
@@ -71,25 +82,24 @@ class DelegatedTokenExchanger:
         self._tenant_id = tenant_id or os.getenv("ENTRA_TENANT_ID", "")
         self._cert_bytes: bytes | None = None
         # An OnBehalfOfCredential is bound to one user assertion, so it must be
-        # cached per (assertion, callee), not globally.
-        self._credentials: dict[str, OnBehalfOfCredential] = {}
+        # cached per (assertion, callee), not globally. OrderedDict so eviction
+        # can be true LRU rather than insertion-order FIFO.
+        self._credentials: OrderedDict[str, OnBehalfOfCredential] = OrderedDict()
         self._max_cache = 128
 
     def _certificate(self) -> bytes:
         """Cert + private key, PEM, as azure-identity expects for OBO."""
         if self._cert_bytes is None:
-            self._cert_bytes = (
-                self._identity.key_path.read_bytes()
-                + b"\n"
-                + self._identity.cert_path.read_bytes()
-            )
+            self._cert_bytes = _combined_pem(self._identity)
         return self._cert_bytes
 
     def _get_credential(self, user_token: str, callee: str) -> OnBehalfOfCredential:
         digest = hashlib.sha256(f"{user_token}|{callee}".encode()).hexdigest()
-        if digest not in self._credentials:
+        if digest in self._credentials:
+            self._credentials.move_to_end(digest)
+        else:
             if len(self._credentials) >= self._max_cache:
-                del self._credentials[next(iter(self._credentials))]
+                self._credentials.popitem(last=False)  # evict least-recently-used
             self._credentials[digest] = OnBehalfOfCredential(
                 tenant_id=self._tenant_id,
                 client_id=self._identity.client_id,
