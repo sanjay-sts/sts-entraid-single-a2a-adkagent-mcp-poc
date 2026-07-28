@@ -123,6 +123,42 @@ What an enterprise CA buys (documented, not built): policy-controlled issuance, 
 - Each: public cert uploaded; app role `Agent.Invoke` defined and assigned to the agents permitted to call it; API exposure + pre-authorization wired so per-hop OBO consent works. Admin consent once.
 - **Requires tenant admin** in the test tenant.
 
+### 7.1 Decision — app registrations, not Entra Agent ID
+
+**Decided 2026-07-28. Revisit at Phase 3.**
+
+Entra Agent ID (GA 1 May 2026) is the obvious alternative and we are deliberately not using it
+yet. Recording why, because the reference in §12 otherwise reads like a commitment.
+
+Agent ID replaces the flat one-registration-per-agent model with a three-tier hierarchy —
+**Agent Blueprint** (template: behaviour, credentials, policy) → **Blueprint Principal**
+(per-tenant identity; grants cascade to instances) → **Agent Identity** (the running instance,
+with its own object id and audit log). Underneath they are still service principals, carrying an
+`Agent` subtype, on the same OAuth flows. Certificate credentials are supported; Microsoft
+explicitly discourages client secrets for production agent identities, which matches the
+no-secrets stance already taken here.
+
+What adopting it would change:
+
+| Area | Effect |
+|---|---|
+| `agent_common/tokens.py` | **Rewrite.** Agent ID uses a two-stage exchange — the blueprint acquires an intermediate token, the agent identity presents it to obtain the resource token. Our single client-credentials call becomes two hops. |
+| `docs/ENTRA_AGENT_SETUP.md` | **Rewrite.** Blueprints and instances instead of four flat registrations. |
+| `principal.py`, `jwt_validator.py` | **Unchanged.** Tokens still carry `idtyp`/`azp`/`roles`, still verified against the same tenant JWKS. |
+| Three-layer trust model (§3) | **Unchanged.** Audience narrowing, per-hop OBO and the mTLS binding check are orthogonal to how the identity was provisioned. |
+| mTLS rationale (§3, §4) | **Unchanged.** Agent ID does not put Entra into the request path, so the agent→agent segment is still unwitnessed and still needs layer 1. |
+
+**Why not now.** The security contract under test is identical either way, so adopting it buys
+nothing for the thing this testbed exists to prove, while adding a moving part that is not under
+test. Microsoft keeps existing app registrations working and has stated that agents created
+before the rollout migrate later, so this is not a closing door.
+
+**What it genuinely buys, and what we therefore lack:** per-agent audit logs and blueprint-level
+grant cascade are real governance features the flat model does not have. **Revisit trigger:** if
+the POC's purpose shifts from proving auth mechanics to demonstrating enterprise agent
+governance. Phase 3 is the natural point — the mechanics will be settled and the adversarial
+harness (§8) can prove nothing regressed across the swap.
+
 ## 8. Test matrix — the point of the exercise
 
 mTLS is **toggleable** (dev_config-style) so the difference between layers is *observable*, in keeping with this project's habit of making denials visible.
@@ -165,7 +201,9 @@ The build is large; each phase is independently testable and leaves the system w
 
 - [RFC 8693 — OAuth 2.0 Token Exchange](https://www.descope.com/learn/post/oauth-token-exchange) (delegation vs. impersonation; nested `act` claims)
 - [RFC 8705 — OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens](https://datatracker.ietf.org/doc/html/rfc8705)
-- [Microsoft Entra Agent ID](https://learn.microsoft.com/en-us/entra/agent-id/what-is-microsoft-entra-agent-id) — GA April 2026; agent identities authenticate via federated/cert credentials, supporting app-only and delegated tokens
+- [Microsoft Entra Agent ID](https://learn.microsoft.com/en-us/entra/agent-id/what-is-microsoft-entra-agent-id) — **GA 1 May 2026.** Agent identities authenticate via federated/cert credentials, supporting app-only and delegated tokens. **Background only — not adopted; see §7.1 for the decision and its revisit trigger.**
+- [Agent OAuth protocols — Entra Agent ID](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols) — the two-stage blueprint→instance token exchange referenced in §7.1
+- [Auth0 for AI Agents](https://auth0.com/ai) — the closest commercial analogue to this design: per-agent scoped M2M identities, MCP servers as first-class identities ("Auth for MCP" GA 6 May 2026)
 - [Entra client-credentials flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow) — `idtyp=app`, app `roles`
 - [SPIFFE/SPIRE for agent identity](https://www.hashicorp.com/en/blog/spiffe-securing-the-identity-of-agentic-ai-and-non-human-actors) — the production-grade endgame; X.509 SVIDs, ephemeral and rotatable
 - [A2A protocol auth gaps](https://dev.to/kanywst/a2a-protocol-auth-taken-apart-why-the-spec-is-thin-and-where-that-leaves-holes-22ii) — the spec advertises auth schemes but does not mandate agent-card verification
