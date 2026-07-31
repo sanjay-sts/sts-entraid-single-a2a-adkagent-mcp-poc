@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Tour — Read the Code in the Order That Makes It Click</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li class="active"><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="code-tour-read-the-code-in-the-order-that-makes-it-click">Code Tour — Read the Code in the Order That Makes It Click</h1>
+<p>The acts teach the system by <em>running</em> it. This teaches it by <em>reading</em> it — in the order that
+builds understanding fastest, so you can explain any part to someone else. Eleven files, bottom
+up: pure logic first, then the services that use it.</p>
+<p>For each file: <strong>what it is → what to notice → which of the six load-bearing rules it embodies
+→ a one-minute "how I'd explain this file" script.</strong> The six rules are in
+<a href="08-orchestration-security.html"><code>08-orchestration-security.md</code></a> §8.4 and in <code>CLAUDE.md</code>.</p>
+<p>Read them in this order:</p>
+<div class="codehilite"><pre><span></span><code>agent_common/principal.py      →  the pure contract, no I/O — START HERE
+agent_common/jwt_validator.py  →  why signature comes first
+agent_common/registry.py       →  who the agents are, who may call whom
+agent_common/tokens.py         →  mint (who I am) vs exchange (who I act for)
+agent_common/outbound.py       →  the two-header wire contract, in one place
+peer_agent/server.py           →  the smallest COMPLETE agent — read top to bottom
+orchestrator_agent/server.py   →  fan-out, and partial-failure honesty
+a2a_server/server.py           →  the gateway&#39;s human/machine fork (the big one)
+mcp_server/server.py + policy.py → role resolution for both principal types
+mcp_server/graph_obo.py        →  the resource-tier exchange
+event_trigger.py               →  the machine entry point, and why absence is the point
+</code></pre></div>
+
+<hr />
+<h2 id="1-agent_commonprincipalpy-the-pure-contract">1. <code>agent_common/principal.py</code> — the pure contract</h2>
+<p><strong>What it is:</strong> every security decision as a <em>pure function of claims</em> — no network, no I/O. This
+is why the contract is unit-testable without a tenant, and why it's the right place to start:
+read this and you know the rules before you meet a single HTTP handler.</p>
+<p><strong>What to notice:</strong>
+- The module docstring's SECURITY WARNING: every function trusts its claims completely.
+  Signature verification is the caller's job. These functions on an <em>unverified</em> token are
+  "attacker-supplied strings dressed up as JSON."
+- <code>is_app_token</code> (<code>:45</code>) — the whole machine-vs-human decision, one claim, fail-closed.
+- <code>verify_agent_claims</code> (<code>:91</code>) — the four checks a callee runs on an agent token (is-app,
+  audience, known caller, has the role), and the up-front validation of its <em>own</em> arguments
+  (empty <code>expected_audience</code> would "match" a token with no <code>aud</code>).
+- <code>verify_delegated_user</code> (<code>:152</code>) — the two rider-token checks (is a user, not blocked).
+- <code>Principal</code> (<code>:184</code>) — frozen <em>and</em> deep-immutable via <code>__post_init__</code>, so a downstream tier
+  can't escalate by mutating <code>agent_roles</code> or <code>user_claims</code> in place.
+- <code>derive_principal</code> (<code>:223</code>) — delegated iff a valid user token rode along; a dangling
+  (present-but-unvalidated) user token is discarded, not trusted.</p>
+<p><strong>Rules it embodies:</strong> #1 (its warning is the reason signature comes first), #2 (<code>is_app_token</code>
+fails closed), #3 (nothing here reads groups for a machine).</p>
+<p><strong>One-minute explanation:</strong> <em>"This file is the rulebook with the crypto deliberately left out.
+Every function decides something — is this a machine, is this caller allowed, is this rider a
+real user — purely from claims, and it says loudly that claims mean nothing until someone else
+has checked the signature. It's pure so it can be tested exhaustively without a tenant, and
+everything else in the system is these rules wired to HTTP."</em></p>
+<hr />
+<h2 id="2-agent_commonjwt_validatorpy-why-signature-comes-first">2. <code>agent_common/jwt_validator.py</code> — why signature comes first</h2>
+<p><strong>What it is:</strong> the piece that makes <code>principal.py</code> safe to trust — signature, issuer, audience,
+expiry against Entra's JWKS.</p>
+<p><strong>What to notice:</strong>
+- The docstring: "Without this, <code>verify_agent_claims()</code> is decoration."
+- <code>validate</code> (<code>:89</code>) pins <code>algorithms=["RS256"]</code>, passes both audience forms
+  (<code>api://&lt;id&gt;</code> and bare), and both issuer forms (v2.0 and v1.0). <code>alg=none</code> and HS256-confusion
+  die here.
+- <code>_get_jwks</code> with a TTL, plus a force-refetch on key-not-found (<code>:76-107</code>) — key rotation
+  without either trusting stale keys forever or refetching every call.</p>
+<p><strong>Rules it embodies:</strong> #1, literally.</p>
+<p><strong>One-minute explanation:</strong> <em>"This is the bouncer that checks the ID is real before anyone reads
+what's printed on it. It verifies the signature against Microsoft's published keys first; only
+then are the claims worth reading. Pin the algorithm, check audience and issuer and expiry, and
+handle key rotation. If this file is wrong, nothing else matters."</em></p>
+<hr />
+<h2 id="3-agent_commonregistrypy-whos-who-and-who-may-call-whom">3. <code>agent_common/registry.py</code> — who's who, and who may call whom</h2>
+<p><strong>What it is:</strong> the agent identities (each from its own env var + cert paths) and the call graph.</p>
+<p><strong>What to notice:</strong>
+- <code>AgentIdentity.audience</code> / <code>.scope</code> — <code>api://&lt;client_id&gt;</code> and <code>.../.default</code>, the exact
+  strings Entra setup §3 produces.
+- <code>_CALL_GRAPH</code> (<code>:25</code>) — the whole authorization topology in one dict, reviewable at a glance.
+- <code>allowed_callers_for</code> (<code>:89</code>) drops unregistered callers, so a half-configured env fails closed
+  rather than authorizing an empty string.
+- <code>reload()</code> rebuilds from the environment; unset agents simply aren't registered.</p>
+<p><strong>Rules it embodies:</strong> supports #2/#3 by being the out-of-band source of "who is allowed" that a
+token can't influence.</p>
+<p><strong>One-minute explanation:</strong> <em>"This is the org chart: which agents exist and which is allowed to
+call which. It's a local mirror of the app-role grants in Entra — Entra enforces, this backs it
+up — and it fails closed, so a missing config line means 'refuse,' never 'allow anyone.'"</em></p>
+<hr />
+<h2 id="4-agent_commontokenspy-mint-vs-exchange">4. <code>agent_common/tokens.py</code> — mint vs exchange</h2>
+<p><strong>What it is:</strong> the two credential flows, both certificate-backed, no client secrets.</p>
+<p><strong>What to notice:</strong>
+- <code>AgentTokenProvider</code> — client-credentials, "here is who I am," one credential per agent,
+  audience-narrowed per callee via the scope.
+- <code>DelegatedTokenExchanger</code> — on-behalf-of, "here is who I act for," cached per
+  (user-token, callee) because an OBO credential is bound to one user assertion. The LRU
+  (<code>OrderedDict</code>, <code>_close_evicted</code>) closes evicted credentials so their HTTP transports don't
+  leak.
+- <code>_combined_pem</code> — cert + private key in one PEM, as azure-identity wants; the key never leaves
+  the process.</p>
+<p><strong>Rules it embodies:</strong> #4 (these are the calls that must <em>fail</em>, not fall back, when they can't
+mint/exchange).</p>
+<p><strong>One-minute explanation:</strong> <em>"Two ways to get a token, both signed with the agent's certificate.
+One says 'I am this agent' (for machine calls); the other says 'I'm acting for this human'
+(exchanging their token, narrowed to the next hop). The private key signs but never leaves
+memory; only the public cert is in Entra."</em></p>
+<hr />
+<h2 id="5-agent_commonoutboundpy-the-wire-contract-in-one-place">5. <code>agent_common/outbound.py</code> — the wire contract in one place</h2>
+<p><strong>What it is:</strong> <code>build_agent_headers</code> — the single function that builds the two outbound headers,
+so the "exchange, never forward" rule can't drift across callers.</p>
+<p><strong>What to notice:</strong>
+- It's tiny on purpose. <code>Authorization</code> = a freshly minted agent token for the callee;
+  <code>X-Delegated-User-Token</code> = the user token <em>exchanged</em> for the callee — and only when a human is
+  genuinely upstream.
+- The docstring spells out the replay argument: forwarding the inbound token would hand the
+  callee a token minted for <em>us</em>, replayable anywhere we can be called.
+- Delegation is derived from what we <em>hold</em> (<code>principal.user_token</code>), not from what the principal
+  claims — a dangling user token yields a machine-only call, not a header we can't honestly fill.</p>
+<p><strong>Rules it embodies:</strong> #5 (this <em>is</em> the rule — "build headers with <code>build_agent_headers()</code>").</p>
+<p><strong>One-minute explanation:</strong> <em>"Every agent-to-agent call goes through this one function so the
+header contract is written exactly once. Mint a fresh token for the callee; if a human is
+upstream, exchange their token for one scoped to just that callee — never forward what we
+received. It's small because the whole point is that nobody re-implements it and gets it subtly
+wrong."</em></p>
+<hr />
+<h2 id="6-peer_agentserverpy-the-smallest-complete-agent">6. <code>peer_agent/server.py</code> — the smallest complete agent</h2>
+<p><strong>What it is:</strong> a full agent — callee <em>and</em> caller — with no LLM. Read it top to bottom; it's the
+template every other agent follows.</p>
+<p><strong>What to notice:</strong>
+- <code>_authenticate</code> (<code>:95</code>) — the canonical inbound sequence: Bearer present → validate signature →
+  <code>verify_agent_claims</code> → optional rider → <code>verify_delegated_user</code> → <code>derive_principal</code>. Signature
+  first, every time.
+- Body is parsed <em>after</em> authentication (<code>:164</code>) — an unauthenticated request never reaches a
+  parser.
+- <code>_call_gateway</code> (<code>:134</code>) uses <code>build_agent_headers</code> for its own outbound call — the peer is a
+  caller too.
+- <code>BLOCKED_USERS</code> is read and checked here independently (<code>:58</code>) — it doesn't trust the gateway to
+  have checked.</p>
+<p><strong>Rules it embodies:</strong> #1, #5, #6 — all visible in one readable file.</p>
+<p><strong>One-minute explanation:</strong> <em>"This is what an agent looks like with nothing extra. Someone calls
+it: check the signature, then the claims, then any rider user token, then work out the principal —
+and only then read the body. It also calls the gateway itself, using the shared header builder. If
+you understand this file, you understand every agent; the others just add fan-out or an LLM."</em></p>
+<hr />
+<h2 id="7-orchestrator_agentserverpy-fan-out-and-partial-failure-honesty">7. <code>orchestrator_agent/server.py</code> — fan-out and partial-failure honesty</h2>
+<p><strong>What it is:</strong> the same agent shape as the peer, plus fan-out to two subagents, minting fresh
+credentials for each.</p>
+<p><strong>What to notice:</strong>
+- Same <code>_authenticate</code> as the peer (the shape is deliberately identical).
+- <code>_dispatch_to</code> (<code>:158</code>) mints per-callee headers and, crucially, does <strong>not</strong> catch a
+  minting/exchange failure — a hop whose user token couldn't be obtained must <em>fail</em>, not proceed
+  as a machine (rule #4, in a comment).
+- The result wraps each leg as <code>{ok, status, response, error}</code> with <code>ok</code> explicit, so a refused
+  leg is never shape-indistinguishable from a success.
+- <code>dispatch</code> (<code>:196</code>) authenticates before parsing the body, like the peer.</p>
+<p><strong>Rules it embodies:</strong> #4 (no silent downgrade), #6.</p>
+<p><strong>One-minute explanation:</strong> <em>"The orchestrator is the peer plus fan-out: one inbound principal
+becomes N outbound calls, each with its own freshly minted, narrowed credentials. Two things make
+it honest — it refuses to downgrade a delegated call to machine if an exchange fails, and it labels
+each leg's success explicitly so you can always tell a refusal from a success."</em></p>
+<hr />
+<h2 id="8-a2a_serverserverpy-the-gateways-humanmachine-fork-the-big-one">8. <code>a2a_server/server.py</code> — the gateway's human/machine fork (the big one)</h2>
+<p><strong>What it is:</strong> the gateway, and the one place both kinds of caller enter. The most complex file;
+read it after the small agents so the shape is familiar.</p>
+<p><strong>What to notice:</strong>
+- <code>auth_middleware</code> (<code>:639</code>) — the fork. <code>is_app_token(claims)</code> splits machine callers (authorized
+  by app role via <code>authorize_agent_caller</code>) from human callers (authorized by group via
+  <code>authorize_human_claims</code>).
+- <code>authorize_human_claims</code> (<code>:591</code>) is called from <em>both</em> the direct-human path and the
+  delegated-rider path — so an agent with <code>Agent.Invoke</code> can't become a way around the gateway's
+  blocklist and group rules.
+- The comment at <code>:682-685</code>: <code>call_next</code> is deliberately <em>outside</em> the try/except, so an
+  application error downstream isn't mislabeled as a 401 auth failure.
+- Every branch sets the full set of ContextVars (including <code>current_principal</code>).</p>
+<p><strong>Rules it embodies:</strong> #1, #2 (the <code>is_app_token</code> fork), #6.</p>
+<p><strong>One-minute explanation:</strong> <em>"This is the front door for everyone — humans and agents. It looks at
+one claim to decide which you are, then authorizes you the right way: humans by group membership,
+agents by app role. The clever bit is that a human riding inside an agent's call gets sent through
+the exact same human ACL as a human at the front door, so going through an agent buys you no
+shortcut."</em></p>
+<hr />
+<h2 id="9-mcp_serverserverpy-mcp_serverpolicypy-role-resolution-for-both">9. <code>mcp_server/server.py</code> + <code>mcp_server/policy.py</code> — role resolution for both</h2>
+<p><strong>What it is:</strong> the tool gate (Gate 2). The server wires up the verifiers and middleware; the
+policy resolves roles.</p>
+<p><strong>What to notice in <code>server.py</code>:</strong>
+- <code>_AgentTokenVerifier</code> (<code>:135</code>) + verifier ordering in <code>_build_auth</code> (<code>:160</code>) — the <code>idtyp=app</code>
+  verifier ordered last that keeps the human scope check honest (Act 03).
+- <code>_resolve_machine_context</code> — a machine's role from its app id, X-Assume-Role finally <em>enforced</em>
+  here (the gateway forwards it unchecked; this is the enforcement point), and all six ContextVars
+  set so a stale one can't leak.
+- <code>_require_delegated_user</code> / <code>_get_graph_token</code> — Graph tools refuse a machine (<code>no_delegated_user</code>).</p>
+<p><strong>What to notice in <code>policy.py</code>:</strong>
+- <code>get_agent_roles</code> — separate from <code>get_available_roles</code> on purpose: an app id must never be
+  usable as a group claim. Fails closed, no <code>unknown_users</code> fallback for agents, case-insensitive
+  GUID match.
+- <code>check_access</code> — identical RBAC for both principal types; only <em>where the role came from</em>
+  differs.</p>
+<p><strong>Rules it embodies:</strong> #2, #3 (both, sharply).</p>
+<p><strong>One-minute explanation:</strong> <em>"This is where 'which role, and can that role use this tool' is
+decided — and it's re-decided here from scratch, trusting the token's signature, not the agent that
+called. Humans get their role from groups, machines from their app id, and a machine can't smuggle
+in a group claim to promote itself. Same tool-permission check for both; only the source of the
+role differs."</em></p>
+<hr />
+<h2 id="10-mcp_servergraph_obopy-the-resource-tier-exchange">10. <code>mcp_server/graph_obo.py</code> — the resource-tier exchange</h2>
+<p><strong>What it is:</strong> the OBO exchange for Microsoft Graph (Gate 3's Entra side).</p>
+<p><strong>What to notice:</strong>
+- <code>GraphOBOExchanger</code> (<code>:23</code>) — a singleton; <code>get_graph_token</code> (<code>:54</code>) exchanges the user's
+  custom-audience token for a Graph-scoped one, cached (128).
+- It only runs for a <em>user</em> token — the MCP server refuses to call it for a machine principal
+  before the request is even built.</p>
+<p><strong>Rules it embodies:</strong> supports the delegation model — the human's token, exchanged again for
+Graph.</p>
+<p><strong>One-minute explanation:</strong> <em>"The last exchange in the chain: turn the user's token into one Graph
+will accept, so the tool reads </em>that user's<em> mailbox and drive — and never runs at all for a
+machine, which has no user to be."</em></p>
+<hr />
+<h2 id="11-event_triggerpy-the-machine-entry-point">11. <code>event_trigger.py</code> — the machine entry point</h2>
+<p><strong>What it is:</strong> the CLI that starts a machine chain. Read it last — by now the absence it's built
+around is obvious.</p>
+<p><strong>What to notice:</strong>
+- The header docstring: "The absence of <code>X-Delegated-User-Token</code> is the entire point of this
+  script." Nothing declares "I am a machine"; the missing header <em>is</em> the machine-ness.
+- <code>fire</code> (<code>:50</code>) mints an agent token, sends it with no user token, closes the credential even on
+  the failure path.
+- <code>main</code> maps the response to exit codes, including exit 3 — a human leaked into a machine-only
+  chain (a correctness alarm).</p>
+<p><strong>Rules it embodies:</strong> #4 in spirit (it verifies the chain stayed machine and fails loudly if not).</p>
+<p><strong>One-minute explanation:</strong> <em>"This is a cron job's-eye view: authenticate as an agent with a
+certificate, call the orchestrator with no user token, and let the derived-principal rule do the
+rest. It even checks the answer came back 'machine' and screams via an exit code if a human somehow
+appeared — because a machine chain that silently went delegated would be a real bug."</em></p>
+<hr />
+<h2 id="the-five-minute-whiteboard-version">The five-minute whiteboard version</h2>
+<p>Draw six boxes: frontend → gateway → agent → MCP → Graph/S3, with the orchestrator and peer hanging
+off the gateway. Then say:</p>
+<ol>
+<li><strong>One rule.</strong> Every box re-verifies who's asking. No box trusts the box before it.</li>
+<li><strong>Three gates.</strong> Gateway (may you enter), MCP (may your role use this tool), resource (may your
+   token touch this data) — three owners, three copies of the rules, so breaking one doesn't break
+   the others.</li>
+<li><strong>Two callers, derived not declared.</strong> A human (delegated) or an agent on its own (machine) —
+   worked out from which tokens are present, never from a field the caller sets.</li>
+<li><strong>Agents have real identities.</strong> Each authenticates with a certificate, is allowed to call only
+   the agents on a fixed graph, and hands the next hop a token minted for <em>just</em> that hop — so a
+   stolen token is useless one step over.</li>
+<li><strong>Fail closed, signature first.</strong> Ambiguity is refusal; claims are meaningless until the
+   signature verifies.</li>
+</ol>
+<p>Then the honest coda: <strong>what's not done.</strong> No mTLS yet (plain HTTP between agents — audience
+narrowing is what holds the line until Phase 2), MCP shares the gateway's app registration (narrowing
+stops one hop short), no rate limiting. Being able to say what <em>isn't</em> solved is what separates
+explaining the system from selling it.</p>
+<p>That's the whole thing. Anyone who can draw those six boxes and say those six points understands
+this system.</p>
+</article>
+<footer class="pager"><a class="prev" href="09-cognito.html">&larr; Act 09 — Cognito</a><span></span></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

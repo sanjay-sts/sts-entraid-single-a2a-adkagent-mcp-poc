@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 09 — The Second IdP: Cognito</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li class="active"><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-09-the-second-idp-cognito">Act 09 — The Second IdP: Cognito</h1>
+<p><strong>Needs:</strong> a configured AWS Cognito user pool (the <code>COGNITO_*</code> env vars in <code>.env</code>, and
+<code>REACT_APP_COGNITO_*</code> in <code>frontend/.env</code>). Optional — do it only after Acts 00–08, and only if
+you care about the multi-IdP story.</p>
+<p><strong>Goal of this act:</strong> prove that the <em>entire</em> identity model you just learned isn't
+Entra-specific. A completely different identity provider — AWS Cognito, with different token
+shapes and a different group mechanism — flows through the same gates, resolves to the same
+three roles, and hits the same tool permissions. The only things that change are provider-shaped
+details, and they're isolated to exactly the places you'd expect.</p>
+<hr />
+<h2 id="91-sign-in-with-cognito-and-watch-the-same-gates-apply">9.1 — Sign in with Cognito and watch the same gates apply</h2>
+<p><strong>Frontend:</strong> the login prompt offers a provider choice. Pick <strong>Cognito</strong> and sign in with a
+Cognito user who's a member of one of the platform groups (<code>platform-admins</code>,
+<code>platform-developers</code>, <code>platform-viewers</code>).</p>
+<p>Open the <strong>Security Context</strong> panel. The <strong>Provider</strong> badge now reads <code>COGNITO</code> instead of
+<code>ENTRA ID</code>. Everything else in the panel behaves identically: a Role dropdown, groups, a token
+expiry countdown, a permissions map. The RBAC Test Matrix works the same way, with the same
+per-role pass/fail counts — because the role model is provider-independent.</p>
+<p><strong>What's the same, and why:</strong> roles, tool permissions, the three gates, the denial tiers. Once a
+Cognito user is mapped to <code>admin</code>/<code>developer</code>/<code>viewer</code>, every downstream decision is identical to
+Entra — Gate 2 and Gate 3 never even know which IdP you used.</p>
+<p><strong>What's different, and where it's isolated:</strong></p>
+<ul>
+<li><strong>Provider detection</strong> — the system figures out Cognito vs Entra from the token's <code>iss</code>
+  (issuer) claim. Cognito's issuer is <code>cognito-idp.&lt;region&gt;.amazonaws.com/&lt;pool&gt;</code>.</li>
+<li><strong>The audience claim</strong> — Cognito access tokens use <code>client_id</code>, not the standard <code>aud</code>. The
+  MCP verifier omits the audience check for Cognito and validates <code>client_id</code> in the middleware
+  instead (there's a comment in <code>_build_auth</code> saying exactly this).</li>
+<li><strong>The groups claim</strong> — Cognito puts groups in <code>cognito:groups</code>, not <code>groups</code>. And the
+  group→role mapping is a <em>separate table</em>: <code>[group_rules.cognito]</code> in <code>permissions.toml</code>, keyed
+  by group <em>name</em> (<code>platform-admins</code>), versus <code>[group_rules.entra]</code> keyed by group <em>GUID</em>.</li>
+</ul>
+<p><strong>Test a denial to confirm the gates are identical:</strong> switch the Cognito user's role to VIEWER
+and ask to list files → the same <strong>amber TOOL badge</strong> you saw in Act 02.2. Same gate, same code,
+different IdP.</p>
+<p><strong>Read the code:</strong>
+- Provider detection: <code>_detect_provider</code> (gateway, <code>a2a_server/server.py</code>) and the equivalent in
+  the MCP middleware, both keying off <code>iss</code>.
+- Cognito verifier and the <code>client_id</code>-not-<code>aud</code> note: <code>_build_auth</code>,
+  <code>mcp_server/server.py:203-212</code>.
+- Per-provider group rules: <code>permissions.toml</code> <code>[group_rules.cognito]</code> vs <code>[group_rules.entra]</code>,
+  consumed by <code>TomlPolicyEvaluator</code>.</p>
+<hr />
+<h2 id="92-graph-tools-refuse-a-non-entra-user-correctly">9.2 — Graph tools refuse a non-Entra user (correctly)</h2>
+<p><strong>Goal:</strong> confirm the one place a Cognito user legitimately hits a wall. <strong>What it proves:</strong> the
+system knows a Cognito identity has no Microsoft Graph token to offer, and says so cleanly
+instead of failing obscurely.</p>
+<p>As a Cognito user, ask for your Microsoft profile or to list OneDrive files. The Graph tools
+return:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;provider_not_supported&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Why:</strong> Graph OBO exchanges a <em>Microsoft</em> user token for a Graph token. A Cognito user doesn't
+have one — there's no Microsoft identity to exchange. So the Graph tools check the provider and
+return <code>provider_not_supported</code> rather than attempting an exchange that can't work.</p>
+<p><strong>What still works:</strong> the <strong>S3 tools</strong>. They use server-side AWS credentials, not the user's
+token, so they're identity-provider-agnostic — a Cognito viewer can call <code>get_s3_object_info</code>
+exactly like an Entra viewer. This is a nice illustration of the resource gate (Gate 3) being
+about <em>the resource's</em> auth model, not the user's IdP: Graph needs the user's Microsoft token, S3
+needs the server's AWS creds, and the same Cognito user gets different answers accordingly.</p>
+<p><strong>Read the code:</strong> <code>_require_entra_provider</code> (<code>mcp_server/server.py</code>) returns the
+<code>provider_not_supported</code> dict for non-Entra users; it's called by the Graph tools and <em>not</em> by
+the S3 tools.</p>
+<hr />
+<h2 id="architecture-decision-multi-idp-by-issuer-detection-and-per-provider-rule-tables">Architecture decision — multi-IdP by issuer detection and per-provider rule tables</h2>
+<p><strong>What was chosen:</strong> detect the provider from the token's <code>iss</code> claim, then route to
+provider-specific handling only where the providers genuinely differ (audience claim, groups
+claim name, group→role table), keeping everything downstream provider-agnostic.</p>
+<p><strong>The alternative:</strong> a separate code path per IdP end to end, or forcing all IdPs into one
+normalized token shape at the edge.</p>
+<p><strong>Why issuer detection + narrow branching:</strong> the providers really <em>are</em> different in a few
+specific claims (Cognito's <code>client_id</code>, <code>cognito:groups</code>, group names vs GUIDs), and pretending
+they're not would mean either lossy normalization or bugs. But they're the <em>same</em> everywhere
+that matters for authorization — once you have a role, the IdP is irrelevant. So the design
+branches only at the three points of real difference and converges immediately after. The
+<code>iss</code>-based detection is robust because <code>iss</code> is a signed claim (you're past signature
+verification before you trust it) and it's the one field guaranteed to identify the issuer.</p>
+<p><strong>The trade-off:</strong> two group-rule tables to keep in sync conceptually (<code>[group_rules.entra]</code> and
+<code>[group_rules.cognito]</code>), and a few <code>if provider == "cognito"</code> branches that must each be correct.
+In exchange, adding a <em>third</em> IdP is a bounded change — a new issuer pattern, a new group-claim
+name, a new rule table — not a rewrite, and the entire authorization core is untouched.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-09">Checkpoint — Act 09</h3>
+<p><strong>You have now proven:</strong> a completely different IdP (Cognito) flows through the same three
+gates to the same roles and tool permissions; Graph tools refuse a non-Entra user with
+<code>provider_not_supported</code> while S3 tools still work; and the provider differences are isolated
+to issuer detection, the audience claim, and the groups mechanism.</p>
+<p><strong>You now understand:</strong> how the system stays IdP-agnostic below the role layer, and why the
+few provider-specific branches live exactly where they do.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"Swap Entra for Cognito and everything past 'which role are
+you' is identical — the IdP only matters for how we read your groups and whether you have a
+Microsoft token for Graph."</em></p>
+</blockquote>
+<hr />
+<p><strong>That's the walkthrough.</strong> You've tested the human path, the machine chain, and the delegated
+chain; probed the MCP server directly; attacked every guarantee; synthesized the trust model;
+and proven it's not tied to one IdP. For teaching it to someone else, go to
+<a href="CODE-TOUR.html"><code>CODE-TOUR.md</code></a> — the code in the order that makes the architecture click.</p>
+</article>
+<footer class="pager"><a class="prev" href="08-orchestration-security.html">&larr; Act 08 — Orchestration security</a><a class="next" href="CODE-TOUR.html">Code tour &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 02 — Denials, One at Every Gate</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li class="active"><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-02-denials-one-at-every-gate">Act 02 — Denials, One at Every Gate</h1>
+<p><strong>Needs:</strong> the same four services and login as Act 01.</p>
+<p><strong>Goal of this act:</strong> deliberately trigger a refusal at each gate, so you see defense in
+depth <em>working</em> — not as a diagram, but as red/amber/purple badges in the UI and specific
+<code>denial_reason</code> strings in the responses. A system you've only seen say "yes" is a system you
+haven't really tested.</p>
+<p>The frontend classifies every response into one of <strong>four denial tiers</strong>. Keep this table
+open while you work — it's the map for the whole act:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Badge colour</th>
+<th>Fired by</th>
+<th>You'll trigger it in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AGENT</strong></td>
+<td>red <code>#f85149</code></td>
+<td>Gate 1, the gateway</td>
+<td>2.1</td>
+</tr>
+<tr>
+<td><strong>TOOL</strong></td>
+<td>amber <code>#e3b341</code></td>
+<td>Gate 2, the MCP role check</td>
+<td>2.2</td>
+</tr>
+<tr>
+<td><strong>SCOPE</strong></td>
+<td>yellow <code>#d29922</code></td>
+<td>MCP scope check (rarely hit today — see 2.3)</td>
+<td>2.3</td>
+</tr>
+<tr>
+<td><strong>RESOURCE</strong></td>
+<td>purple <code>#a371f7</code></td>
+<td>Gate 3, Graph / S3</td>
+<td>2.3</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Read the code (keep it handy):</strong> the four-tier logic is one short file,
+<code>frontend/src/utils/denialClassifier.js</code> — worth reading top to bottom now. HTTP 401/403 →
+<code>agent</code>; <code>[TOOL_DENIAL]</code> in the text → <code>tool</code>; <code>[SCOPE_DENIAL]</code> → <code>scope</code>; Graph/S3 error
+patterns → <code>resource</code>. The badge colours are in <code>frontend/src/components/DenialIndicator.js</code>.</p>
+<hr />
+<h2 id="21-gate-1-agent-red-block-yourself">2.1 — Gate 1 (AGENT, red): block yourself</h2>
+<p><strong>Goal:</strong> get refused at the front door. <strong>What it proves:</strong> the gateway denies a known-bad
+principal before the request touches the agent or any tool.</p>
+<p><strong>Backend / config:</strong> find your own object id (the <code>oid</code> claim — the <code>/me</code> call in Act 1.3
+showed it). Add it to <code>BLOCKED_USERS</code> in <code>.env</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="nv">BLOCKED_USERS</span><span class="o">=</span>&lt;your-oid&gt;
+</code></pre></div>
+
+<p>Restart the gateway (Terminal 3). Now send any chat message, or just re-run the <code>/me</code> call
+from Act 1.3.</p>
+<p><strong>Expected output</strong> — HTTP 403, and in the body:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="s2">&quot;access_denied&quot;</span><span class="p">,</span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="s2">&quot;Your account has been blocked&quot;</span><span class="p">,</span><span class="nt">&quot;denial_reason&quot;</span><span class="p">:</span><span class="s2">&quot;blocked_user&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p>In the frontend, the message comes back tagged with a <strong>red AGENT badge</strong>; hover it and the
+tooltip shows the reason <code>blocked_user</code>.</p>
+<p><strong>Now undo it:</strong> remove your oid from <code>BLOCKED_USERS</code>, restart the gateway. (Leave it blocked
+and every later act fails at the door.)</p>
+<p><strong>The sibling denial — <code>no_group_membership</code>:</strong> if you sign in as the <em>no-group</em> test user
+(a real account in none of the three security groups), you get a different red AGENT denial:
+<code>403 / no_group_membership</code>. Same gate, different reason — one is "you're on the deny list,"
+the other is "you're not on any allow list."</p>
+<p><strong>Read the code:</strong> <code>authorize_human_claims</code> (<code>a2a_server/server.py:591-628</code>) — the blocklist
+check returns <code>blocked_user</code>, the group check returns <code>no_group_membership</code> (or
+<code>no_group_configuration</code> if no groups are configured at all). Called from <code>auth_middleware</code>
+at <code>:747</code>.</p>
+<hr />
+<h2 id="22-gate-2-tool-amber-a-viewer-reaches-for-a-tool-it-cant-have">2.2 — Gate 2 (TOOL, amber): a viewer reaches for a tool it can't have</h2>
+<p><strong>Goal:</strong> pass the front door, then get refused at the tool. <strong>What it proves:</strong> the gates
+are independent — getting <em>in</em> (Gate 1) is not getting to <em>do things</em> (Gate 2).</p>
+<p><strong>Frontend:</strong> in the <strong>Security Context</strong> panel, change the <strong>Role</strong> dropdown to <code>VIEWER</code>.
+(You can do this as the admin user — admin is allowed to step <em>down</em>.) Then send:</p>
+<blockquote>
+<p><strong>List my OneDrive files</strong></p>
+</blockquote>
+<p><strong>Expected output:</strong> an <strong>amber TOOL badge</strong>. <code>list_files</code> is allowed only for <code>admin</code> and
+<code>developer</code>; a viewer's request is refused at the MCP role check. The underlying error text
+carries <code>[TOOL_DENIAL] ... Role 'viewer' cannot use ...</code>, which the classifier maps to the
+<code>tool</code> tier.</p>
+<p><strong>Now do it systematically — the RBAC Test Matrix.</strong> This is the single best tool in the app
+for seeing the whole role model at once. Open the <strong>RBAC Test Matrix</strong> panel. The sub-line
+reads <code>Testing as: VIEWER</code>. Hit <strong>Run All</strong> and wait — there are 18 scenarios and a 2-second
+gap between each, so a full run takes about <strong>40 seconds</strong>. Each row shows Tool, Scope,
+Expected, Result (PASS/FAIL + latency), and a per-row <code>Run</code> button.</p>
+<p>Run it once per role and confirm the counts:</p>
+<table>
+<thead>
+<tr>
+<th>Role selected</th>
+<th>ALLOW</th>
+<th>TOOL denial</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ADMIN</strong></td>
+<td>18</td>
+<td>0</td>
+<td>admin can use every tool</td>
+</tr>
+<tr>
+<td><strong>DEVELOPER</strong></td>
+<td>8</td>
+<td>10</td>
+<td>dev loses email, delete, time tools, admin-only tools</td>
+</tr>
+<tr>
+<td><strong>VIEWER</strong></td>
+<td>2</td>
+<td>16</td>
+<td>viewer keeps only <code>get_user_profile</code> and <code>get_s3_object_info</code></td>
+</tr>
+</tbody>
+</table>
+<p>The results reset every time you change the role — that's deliberate, so you're never looking
+at stale PASS/FAILs from a different role.</p>
+<p><strong>Read the code:</strong> the scenario definitions and expected outcomes are
+<code>frontend/src/utils/testScenarios.js</code> (<code>getScenariosForRole</code>); the matrix UI is
+<code>frontend/src/components/RBACTestMatrix.js</code>. The server-side decision is
+<code>require_role(...)</code> on each <code>@mcp.tool()</code> in <code>mcp_server/server.py</code>, enforced by
+<code>TomlPolicyEvaluator.check_access</code> in <code>mcp_server/policy.py</code>.</p>
+<hr />
+<h2 id="23-gate-3-resource-purple-and-the-scope-tier">2.3 — Gate 3 (RESOURCE, purple) and the SCOPE tier</h2>
+<p><strong>Goal:</strong> get refused by the <em>resource itself</em>, past both earlier gates. <strong>What it proves:</strong>
+even a permitted role, calling a permitted tool, is still subject to what the token is
+actually scoped for and what the backend permits.</p>
+<p><strong>The honest situation with SCOPE today:</strong> the frontend has a distinct <strong>SCOPE</strong> tier (yellow), and
+the MCP server <em>can</em> emit <code>[SCOPE_DENIAL]</code>, but in the current build the Graph OBO path is
+enabled (<code>GRAPH_OBO_ENABLED = true</code> in <code>testScenarios.js</code>), so the matrix no longer <em>predicts</em>
+scope/resource denials — that prediction branch is effectively dead. You'll see scope and
+resource denials <strong>live</strong>, not in the matrix's Expected column.</p>
+<p><strong>Trigger a RESOURCE denial (purple)</strong> the reliable way — S3 with something the backend can't
+serve. As admin, send:</p>
+<blockquote>
+<p><strong>List objects in bucket does-not-exist-12345</strong></p>
+</blockquote>
+<p>The S3 tool runs (role allows it, tool allows it), but boto3 returns an error, which the
+classifier's S3 branch tags as a <strong>purple RESOURCE badge</strong> (<code>aws_error</code>). A Graph resource
+denial (e.g. a token genuinely missing a Graph scope, or Graph returning 403) lands in the
+same tier via the <code>GRAPH_DENIAL_PATTERNS</code> branch.</p>
+<p><strong>Read the code:</strong> the S3 and Graph resource branches are
+<code>frontend/src/utils/denialClassifier.js:56-64</code>. The S3 error wrapping is
+<code>_run_s3_operation</code> in <code>mcp_server/server.py</code>; the Graph path is <code>_get_effective_graph_token</code>
+and <code>graph_obo.py</code>.</p>
+<hr />
+<h2 id="24-the-time-based-denial-let-a-token-expire">2.4 — The time-based denial: let a token expire</h2>
+<p><strong>Goal:</strong> watch an <em>expired</em> token get refused. <strong>What it proves:</strong> authenticity has a
+lifetime; the gateway re-checks <code>exp</code> on every request, so a token that was fine a minute ago
+isn't automatically fine now.</p>
+<p><strong>Frontend:</strong> watch the <strong>Token Expiry</strong> countdown in the Security Context panel. Under 5
+minutes it turns to an <code>expiry-warning</code> style; at zero it shows <code>EXPIRED</code>. Once it's expired,
+send a message <em>without</em> refreshing the token.</p>
+<p><strong>Expected output:</strong> HTTP 401 with <code>denial_reason: token_expired</code> — a <strong>red AGENT badge</strong>,
+because expiry is a Gate 1 concern.</p>
+<p><strong>Read the code:</strong> the gateway catches <code>jwt.ExpiredSignatureError</code> explicitly in
+<code>auth_middleware</code> (<code>a2a_server/server.py:767-770</code>) and maps it to <code>token_expired</code>.</p>
+<hr />
+<h2 id="25-how-the-frontend-knows-which-tier-a-denial-belongs-to">2.5 — How the frontend knows which tier a denial belongs to</h2>
+<p>You've now triggered AGENT, TOOL, and RESOURCE (and seen where SCOPE would live). Read
+<code>denialClassifier.js</code> once more with the four badges fresh in mind — it's the whole
+classification in ~70 lines, and it's a clean example of the system's philosophy showing up
+in the UI: the badge isn't decoration, it's <em>which layer said no</em>, which is exactly the thing
+this testbed exists to make visible.</p>
+<p>For the exhaustive per-badge, per-role checklist (every scenario, expected colour, expected
+text), use <a href="../../MANUAL_TESTING.md"><code>../../MANUAL_TESTING.md</code></a> §5 and §6 — this act is the
+"understand it" version; that's the "tick every box" version.</p>
+<hr />
+<h2 id="architecture-decision-why-denials-are-tiered-and-why-each-tier-lives-where-it-does">Architecture decision — why denials are tiered, and why each tier lives where it does</h2>
+<p><strong>What was chosen:</strong> four denial tiers, each emitted by the layer that owns that decision,
+and surfaced to the user as a distinct badge with the layer's own reason string.</p>
+<p><strong>The alternative:</strong> a single generic "403 Forbidden / Access Denied." Simpler to produce,
+and arguably all a <em>user</em> needs.</p>
+<p><strong>Why tiered:</strong> the audience for this system is someone reasoning about <em>security</em>, and "why
+was I denied" has a different answer and a different fix at each layer. <code>blocked_user</code> (fix:
+the blocklist), <code>Role 'viewer' cannot use list_files</code> (fix: assume a higher role or change
+the permission map), <code>insufficient_scope</code> (fix: consent to a scope), <code>s3_access_denied</code> (fix:
+the IAM policy) — collapsing those into one message would throw away exactly the information
+that tells you which of four very different things to go change.</p>
+<p><strong>Why each tier lives where it does:</strong> the layer that has the information makes the call. The
+gateway is the only place that knows the blocklist and group rules, so AGENT denials are its.
+The MCP server is the only place that knows the role→tool map, so TOOL denials are its. The
+resource is the only place that truly knows if a scope suffices, so RESOURCE denials come
+from Graph/S3. Putting a check where its data lives is what keeps the gates independent — no
+layer has to trust another layer's summary of a decision it couldn't make itself.</p>
+<p><strong>The trade-off:</strong> more machinery — four reason vocabularies, a classifier, badge styling —
+and a denial can <em>look</em> different depending on whether the LLM paraphrased a tool error
+(hence the regex fallbacks in the classifier). That fragility is the price of routing a
+refusal through an LLM that likes to reword things.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-02">Checkpoint — Act 02</h3>
+<p><strong>You have now proven:</strong> each gate refuses independently — AGENT (blocked/no-group), TOOL
+(role can't use tool), RESOURCE (data layer says no), and expiry as a Gate-1 concern — and
+you can name the <code>denial_reason</code> for each.</p>
+<p><strong>You now understand:</strong> the four-tier model, why the badge tells you <em>which layer</em> said no,
+and where in the code each tier is decided.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"A refusal is tagged by which of the three services made
+it, because the fix is completely different depending on which gate you hit."</em></p>
+</blockquote>
+<p>Next: <a href="03-mcp-security.html">Act 03 — MCP security up close</a>. Stop going through the frontend and
+attack the MCP server directly.</p>
+</article>
+<footer class="pager"><a class="prev" href="01-golden-thread.html">&larr; Act 01 — Golden thread</a><a class="next" href="03-mcp-security.html">Act 03 — MCP security &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

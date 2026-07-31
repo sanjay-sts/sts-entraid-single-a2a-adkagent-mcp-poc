@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 04 — Agent-Tier Entra Setup (one-time, tenant admin)</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li class="active"><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-04-agent-tier-entra-setup-one-time-tenant-admin">Act 04 — Agent-Tier Entra Setup (one-time, tenant admin)</h1>
+<p><strong>Needs:</strong> tenant-admin rights on your Entra directory, the Azure CLI (<code>az</code>), and the four
+human-path services already working (Acts 01–03).</p>
+<p><strong>Goal of this act:</strong> give the agents their own cryptographic identities, so that in Acts
+05–07 they can prove who they are to each other the same way a human proves who they are. By
+the end you'll have three new app registrations, certificates uploaded, the <code>idtyp</code> claim
+configured, the <code>Agent.Invoke</code> role defined and assigned along the call graph, and the peer
+and orchestrator services running.</p>
+<blockquote>
+<p><strong>This act wraps <a href="../ENTRA_AGENT_SETUP.md"><code>../ENTRA_AGENT_SETUP.md</code></a>; it does not replace
+it.</strong> That guide has the exact <code>az</code> commands. This act tells you, for each of its sections,
+<em>what</em> you're creating, <em>why</em> it exists, and a <strong>verification checkpoint</strong> to run before
+moving on — so you never build three sections on top of a mistake in the first.</p>
+</blockquote>
+<p>Do the sections in order. Run the guide's commands for each <code>§</code>, then the checkpoint here.</p>
+<hr />
+<h2 id="before-you-start-what-youre-about-to-build">Before you start — what you're about to build</h2>
+<p>Four app registrations will be in play:</p>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>App registration</th>
+<th>Identity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>gateway</td>
+<td><strong>reuses</strong> the existing <code>ENTRA_CLIENT_ID</code> app</td>
+<td>cert added to the existing app</td>
+</tr>
+<tr>
+<td>orchestrator</td>
+<td><strong>new</strong> <code>agent-orchestrator</code></td>
+<td><code>AGENT_ORCHESTRATOR_CLIENT_ID</code></td>
+</tr>
+<tr>
+<td>peer</td>
+<td><strong>new</strong> <code>agent-peer</code></td>
+<td><code>AGENT_PEER_CLIENT_ID</code></td>
+</tr>
+<tr>
+<td>event-trigger</td>
+<td><strong>new</strong> <code>agent-event-trigger</code></td>
+<td><code>AGENT_EVENT_TRIGGER_CLIENT_ID</code></td>
+</tr>
+</tbody>
+</table>
+<p>And a call graph — who is allowed to call whom — that you'll encode in Entra as role
+assignments and that the code mirrors in <code>agent_common/registry.py</code> (<code>_CALL_GRAPH</code>):</p>
+<div class="codehilite"><pre><span></span><code>event-trigger → orchestrator
+orchestrator  → peer, gateway
+peer          → gateway
+gateway       → peer
+</code></pre></div>
+
+<p><strong>Do this first (Task 1 in the guide):</strong> generate the certificates locally, before touching
+Entra, because §2 uploads them:</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>pki/generate_certs.py
+</code></pre></div>
+
+<p>This writes a mini-CA and one key pair per agent into <code>pki/certs/</code> (gitignored). It <strong>refuses
+to overwrite</strong> existing certs without <code>--force</code> — because regenerating would invalidate any
+cert already uploaded to Entra, forcing you to re-upload all of them. If you see that refusal,
+it's protecting you.</p>
+<p><strong>Checkpoint:</strong> <code>pki/certs/</code> contains <code>ca.crt</code>, <code>ca.key</code>, and <code>{gateway,orchestrator,peer,event-trigger}.{crt,key}</code>.</p>
+<p><strong>Read the code:</strong> <code>pki/generate_certs.py</code> — <code>_make_ca</code> and <code>_make_agent_cert</code>. Note the
+localhost SAN and client+server EKU: the same certs are reused for mTLS in Phase 2.</p>
+<hr />
+<h2 id="1-create-the-app-registrations">§1 — Create the app registrations</h2>
+<p><strong>What:</strong> three new app registrations (<code>AzureADMyOrg</code>), a service principal for each, and
+their appIds recorded into your <code>.env</code> as <code>AGENT_ORCHESTRATOR_CLIENT_ID</code>,
+<code>AGENT_PEER_CLIENT_ID</code>, <code>AGENT_EVENT_TRIGGER_CLIENT_ID</code>.</p>
+<p><strong>Why:</strong> an app registration <em>is</em> an agent's identity in Entra — the thing Entra will mint
+tokens for and check the certificate against. Three new agents, three new registrations. The
+gateway already has one (it's a real app), so it's reused.</p>
+<p><strong>Checkpoint:</strong></p>
+<div class="codehilite"><pre><span></span><code>az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>list<span class="w"> </span>--display-name<span class="w"> </span>agent-<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;[].{name:displayName, appId:appId}&quot;</span><span class="w"> </span>-o<span class="w"> </span>table
+</code></pre></div>
+
+<p>You should see all three <code>agent-*</code> apps with appIds matching your <code>.env</code>.</p>
+<hr />
+<h2 id="2-upload-the-certificate-to-each-app">§2 — Upload the certificate to each app</h2>
+<p><strong>What:</strong> the public cert (<code>pki/certs/&lt;name&gt;.crt</code>) goes onto each app registration. The
+private key never leaves your machine — it signs the client assertion; Entra checks it against
+the uploaded public cert.</p>
+<p><strong>Why:</strong> this is what lets an agent authenticate with a certificate instead of a client
+secret. Certificate assertions can't be leaked-and-replayed the way a shared secret can, and
+they line up with Phase 2's mTLS.</p>
+<blockquote>
+<h3 id="the-one-footgun-in-this-whole-act-read-before-touching-the-gateway-app">The one footgun in this whole act — read before touching the gateway app</h3>
+<p>For the three <strong>new</strong> agent apps, <code>az ad app credential reset --cert @... --append</code> is safe
+(§2a). For the <strong>gateway</strong> app (§2b), <strong>do NOT</strong> use <code>az ad app credential reset</code> — even
+with <code>--append</code>, it destroys the app's existing <code>ENTRA_CLIENT_SECRET</code>, which is the secret
+the Graph OBO tools depend on. On a live tenant that silently breaks Graph for every human
+user. Upload the gateway cert via the <strong>Portal</strong> (Certificates &amp; secrets → Certificates tab
+→ Upload <code>pki/certs/gateway.crt</code>) or the <code>az rest</code> PATCH the guide gives (read-append-write
+of <code>keyCredentials</code>).</p>
+</blockquote>
+<p><strong>Checkpoint:</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># each agent app has one keyCredential (the cert):</span>
+az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>credential<span class="w"> </span>list<span class="w"> </span>--id<span class="w"> </span>&lt;AGENT_PEER_CLIENT_ID&gt;<span class="w"> </span>--cert<span class="w"> </span>-o<span class="w"> </span>table
+<span class="c1"># the gateway app STILL has its client secret AND now a cert:</span>
+az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>credential<span class="w"> </span>list<span class="w"> </span>--id<span class="w"> </span>&lt;ENTRA_CLIENT_ID&gt;<span class="w"> </span>-o<span class="w"> </span>table<span class="w">        </span><span class="c1"># secret present?</span>
+az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>credential<span class="w"> </span>list<span class="w"> </span>--id<span class="w"> </span>&lt;ENTRA_CLIENT_ID&gt;<span class="w"> </span>--cert<span class="w"> </span>-o<span class="w"> </span>table<span class="w"> </span><span class="c1"># cert present?</span>
+</code></pre></div>
+
+<p>If the gateway's secret vanished, reissue <code>ENTRA_CLIENT_SECRET</code> before going on — Graph OBO
+will be broken until you do.</p>
+<hr />
+<h2 id="3-expose-each-callee-as-an-api-with-the-agentinvoke-role">§3 — Expose each callee as an API, with the <code>Agent.Invoke</code> role</h2>
+<p><strong>What:</strong> the callees (peer, gateway, orchestrator) get an <code>api://&lt;appId&gt;</code> identifier URI and
+an <code>Agent.Invoke</code> <strong>app role</strong> (<code>allowedMemberTypes: ["Application"]</code>, a fresh GUID each).</p>
+<p><strong>Why:</strong> the identifier URI is the audience a caller requests a token <em>for</em> — this is what
+makes per-hop audience narrowing possible (a token minted for <code>api://&lt;peer&gt;</code> names the peer
+and nobody else). The <code>Agent.Invoke</code> app role is the permission a caller must hold to be
+allowed in; it's how a callee distinguishes "an agent that's allowed to call me" from "any
+app in the tenant."</p>
+<p><strong>Checkpoint:</strong></p>
+<div class="codehilite"><pre><span></span><code>az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>show<span class="w"> </span>--id<span class="w"> </span>&lt;AGENT_PEER_CLIENT_ID&gt;<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;{uris:identifierUris, roles:appRoles[].value}&quot;</span>
+</code></pre></div>
+
+<p>Expect <code>identifierUris</code> = <code>["api://&lt;peer-appId&gt;"]</code> and <code>appRoles</code> containing <code>Agent.Invoke</code>.</p>
+<p><strong>Read the code:</strong> <code>agent_common/registry.py</code> — <code>AgentIdentity.audience</code> (<code>api://&lt;client_id&gt;</code>)
+and <code>.scope</code> (<code>.../.default</code>) are exactly what §3 sets up in Entra.</p>
+<hr />
+<h2 id="4-emit-the-idtyp-claim-on-every-app">§4 — Emit the <code>idtyp</code> claim on every app</h2>
+<p><strong>What:</strong> the <code>idtyp</code> optional claim, added to <strong>every</strong> app registration in play (callers and
+callees).</p>
+<p><strong>Why:</strong> <code>idtyp=app</code> is the <em>only</em> signal that distinguishes a machine token from a human one.
+The code's <code>is_app_token</code> reads this claim and <strong>nothing else</strong>, and it <strong>fails closed</strong>: if
+<code>idtyp</code> is missing, every token is treated as a human's and agent calls are refused. That's
+deliberate — the alternative (guessing "no username claim, therefore a machine") would
+misclassify a real human from a tenant that omits optional claims, and misclassifying a human
+as a machine is a privilege decision made on a formatting accident. So §4 isn't optional: skip
+it and the agent tier simply won't authenticate.</p>
+<p><strong>Checkpoint:</strong></p>
+<div class="codehilite"><pre><span></span><code>az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>show<span class="w"> </span>--id<span class="w"> </span>&lt;AGENT_PEER_CLIENT_ID&gt;<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;optionalClaims.accessToken[].name&quot;</span>
+</code></pre></div>
+
+<p>Expect <code>idtyp</code> in the list. Repeat for each app.</p>
+<p><strong>Read the code:</strong> <code>agent_common/principal.py:45-65</code> — <code>is_app_token</code>, the fail-closed
+decision, in ~20 lines with the reasoning in the docstring.</p>
+<hr />
+<h2 id="5-assign-agentinvoke-to-the-callers-the-call-graph">§5 — Assign <code>Agent.Invoke</code> to the callers (the call graph)</h2>
+<p><strong>What:</strong> five <code>appRoleAssignedTo</code> grants, one per caller→callee edge:
+orchestrator→peer, orchestrator→gateway, gateway→peer, peer→gateway, event-trigger→orchestrator.</p>
+<p><strong>Why:</strong> this is the call graph, enforced by Entra. Holding <code>Agent.Invoke</code> on a callee is what
+gets a caller past that callee's role check. The code keeps a local mirror of this graph in
+<code>registry.py</code> (<code>_CALL_GRAPH</code> + <code>allowed_callers_for</code>) as a second, independent check — Entra
+is the enforcement point, the registry is the backup, and they must agree.</p>
+<p><strong>Checkpoint:</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># peer&#39;s service principal should show TWO assignments (orchestrator, gateway):</span>
+az<span class="w"> </span>rest<span class="w"> </span>--method<span class="w"> </span>GET<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--url<span class="w"> </span><span class="s2">&quot;https://graph.microsoft.com/v1.0/servicePrincipals/&lt;peer-sp-id&gt;/appRoleAssignedTo&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--query<span class="w"> </span><span class="s2">&quot;value[].principalDisplayName&quot;</span>
+</code></pre></div>
+
+<p>Confirm the five edges exist. A missing edge surfaces later as a <code>403 unknown_agent</code> (Act 07)
+— which is why you verify now rather than debugging it three acts from here.</p>
+<p><strong>Read the code:</strong> <code>agent_common/registry.py</code> — <code>_CALL_GRAPH</code> and <code>allowed_callers_for</code>. This
+is the exact graph §5 encodes in Entra.</p>
+<hr />
+<h2 id="6-enable-per-hop-user-token-obo-the-delegated-path">§6 — Enable per-hop user-token OBO (the delegated path)</h2>
+<p><strong>What:</strong> expose <code>access_as_user</code> on each callee, pre-authorize the orchestrator's appId as a
+known client, and admin-consent.</p>
+<p><strong>Why:</strong> Act 06's delegated chain works by <em>exchanging</em> a human's token for one narrowed to
+the next hop (OBO). That exchange needs the callee to expose a delegated scope and to trust
+the calling agent. Without §6, Act 06's OBO exchange fails with a consent error.</p>
+<p><strong>Checkpoint:</strong> deferred to Act 06 — it's exercised by the first real OBO exchange. If you want
+to check now: confirm <code>access_as_user</code> appears in each callee's <code>oauth2PermissionScopes</code> and
+the orchestrator is in each callee's <code>preAuthorizedApplications</code>.</p>
+<hr />
+<h2 id="7-verify-the-whole-setup">§7 — Verify the whole setup</h2>
+<p><strong>What:</strong> the guide points you at the targeted integration test:</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/test_agent_identity.py<span class="w"> </span>-v<span class="w"> </span>-m<span class="w"> </span>integration
+</code></pre></div>
+
+<p><strong>Why:</strong> this is the first thing that actually asks Entra to mint a certificate-backed token
+for these registrations. It <strong>skips cleanly</strong> if any <code>AGENT_*_CLIENT_ID</code> is unset, so a pass
+here means the certs, <code>idtyp</code>, and audiences are genuinely wired. (The full 14-test
+integration suite is Act 07.)</p>
+<hr />
+<h2 id="8-generate-certs-done-fill-env-start-the-agent-services">§8 — Generate certs (done), fill env, start the agent services</h2>
+<p>Certs are already generated (top of this act). With the three <code>AGENT_*_CLIENT_ID</code> values in
+<code>.env</code>, start the two agent-tier services in two more terminals:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Terminal 5 — peer agent</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>peer_agent/server.py
+<span class="c1"># Terminal 6 — orchestrator</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>orchestrator_agent/server.py
+</code></pre></div>
+
+<p><strong>Checkpoint — these two DO have health endpoints:</strong></p>
+<div class="codehilite"><pre><span></span><code>curl.exe<span class="w"> </span>http://localhost:10005/health
+curl.exe<span class="w"> </span>http://localhost:10004/health
+</code></pre></div>
+
+<p><strong>Expected output:</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="s2">&quot;healthy&quot;</span><span class="p">,</span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="s2">&quot;peer&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="s2">&quot;healthy&quot;</span><span class="p">,</span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="s2">&quot;orchestrator&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Read the code:</strong> the health handlers are <code>peer_agent/server.py:207-209</code> and
+<code>orchestrator_agent/server.py:255-257</code>. Note both build their token providers <em>lazily</em> — the
+private key is read on first use, not at import, so <code>/health</code> works even before any agent call.</p>
+<hr />
+<h2 id="architecture-decision-certificate-assertions-not-client-secrets">Architecture decision — certificate assertions, not client secrets</h2>
+<p><strong>What was chosen:</strong> every agent authenticates to Entra with an x509 <strong>certificate assertion</strong>
+(<code>CertificateCredential</code> / <code>OnBehalfOfCredential</code>), and a local mini-CA issues the certs.</p>
+<p><strong>The alternatives:</strong> (a) a client secret per agent (a shared string); (b) managed identities;
+(c) a real enterprise CA from day one.</p>
+<p><strong>Why certificates:</strong> a client secret is a bearer credential — anyone who reads it from an
+env var or a log can <em>be</em> that agent. A certificate assertion proves possession of a private
+key that never leaves the process; the only thing in Entra is the public cert. It's also the
+same credential Phase 2 needs for mTLS, so the identities are built once. Managed identities
+would be cleaner in Azure-hosted production but don't exist for a laptop-hosted testbed.</p>
+<p><strong>Why a mini-CA:</strong> it makes the testbed self-contained — no external CA dependency to run the
+demo. And it's a drop-in seam: an enterprise CA (AWS Private CA, Vault PKI, DigiCert) replaces
+<code>generate_certs.py</code> with <strong>no downstream code change</strong>, because Entra checks the assertion
+against the uploaded public cert and doesn't walk a chain.</p>
+<p><strong>The trade-off:</strong> more setup than a secret (this whole act), and cert rotation is a real
+operation (re-generate, re-upload, the <code>--force</code> guard exists precisely because getting this
+wrong is disruptive). You're buying non-repudiable, non-replayable agent identity for the
+price of a one-time provisioning ceremony.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-04">Checkpoint — Act 04</h3>
+<p><strong>You have now built:</strong> three agent app registrations with certs, <code>idtyp</code> on every app,
+<code>Agent.Invoke</code> defined on the callees and assigned along the five call-graph edges, OBO
+enabled, and the peer + orchestrator services healthy.</p>
+<p><strong>You now understand:</strong> why each Entra artifact exists (identity, audience, machine-signal,
+permission, delegation) and how the code mirrors the call graph as an independent check.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"Each agent gets its own certificate-backed Entra app
+registration and an <code>Agent.Invoke</code> grant only along the edges of a fixed call graph, so
+agents prove their identity cryptographically and can only call the agents they're allowed
+to."</em></p>
+</blockquote>
+<p>Next: <a href="05-machine-chain.html">Act 05 — the machine chain</a>. Fire a request with no human anywhere
+in it.</p>
+</article>
+<footer class="pager"><a class="prev" href="03-mcp-security.html">&larr; Act 03 — MCP security</a><a class="next" href="05-machine-chain.html">Act 05 — Machine chain &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

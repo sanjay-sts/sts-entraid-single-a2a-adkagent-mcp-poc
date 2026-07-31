@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 01 — The Golden Thread</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li class="active"><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-01-the-golden-thread">Act 01 — The Golden Thread</h1>
+<p><strong>Needs:</strong> the four human-path services running, and a working Entra login. Setup is in
+<a href="../../TESTING.md"><code>../../TESTING.md</code></a> if you haven't done it.</p>
+<p><strong>Goal of this act:</strong> follow <strong>one</strong> real request — a single chat message from one signed-in
+user — all the way from the browser, through the gateway, the LLM agent, and the MCP tools,
+out to Microsoft Graph, and back. You'll watch it cross all three gates in the logs. This is
+the thread everything else in the system is woven around.</p>
+<p>Sign in as the <strong>admin</strong> test user for this act (<code>AdeleV@…</code>, in the <code>AI-Agent-Admins</code>
+group). Admin passes every gate, so nothing gets in the way of seeing the happy path
+end-to-end. Denials come in Act 02.</p>
+<hr />
+<h2 id="11-start-the-services-and-confirm-theyre-up">1.1 — Start the services and confirm they're up</h2>
+<p>Four terminals, from the repo root:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Terminal 1 — MCP tools</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>mcp_server/server.py
+<span class="c1"># Terminal 2 — ADK agent (the LLM)</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>adk_agent/agent.py
+<span class="c1"># Terminal 3 — A2A gateway</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>a2a_server/server.py
+<span class="c1"># Terminal 4 — frontend</span>
+<span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>start
+</code></pre></div>
+
+<p><strong>Confirm the two services that have a health endpoint:</strong></p>
+<div class="codehilite"><pre><span></span><code>curl.exe<span class="w"> </span>http://localhost:10000/health
+curl.exe<span class="w"> </span>http://localhost:10001/health
+</code></pre></div>
+
+<p><strong>Expected output:</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="s2">&quot;healthy&quot;</span><span class="p">,</span><span class="nt">&quot;service&quot;</span><span class="p">:</span><span class="s2">&quot;a2a-gateway&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="s2">&quot;healthy&quot;</span><span class="p">,</span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="s2">&quot;identity_aware_agent&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>The MCP server has no <code>/health</code> endpoint</strong> — on purpose. It's a stateless
+streamable-HTTP MCP endpoint at <code>http://localhost:10002/mcp</code>, not a REST service. Confirm
+it's up a different way: when the ADK agent starts, it connects to MCP and lists the tools;
+watch <code>logs/adk_agent.log</code> for a successful tool-listing line, or just confirm the process
+is listening on 10002. Curling <code>/mcp</code> with a plain GET will <em>not</em> give you a health blob —
+that's expected, and Act 03 shows how to probe <code>/mcp</code> properly.</p>
+</blockquote>
+<p><strong>Read the code:</strong> the health handlers are <code>a2a_server/server.py:883-885</code> and
+<code>adk_agent/agent.py:444-447</code>. The MCP endpoint config — <code>path="/mcp"</code>, <code>stateless_http=True</code>
+— is <code>mcp_server/server.py:985-990</code>.</p>
+<hr />
+<h2 id="12-sign-in-and-look-at-your-own-identity-frontend">1.2 — Sign in, and look at your own identity (frontend)</h2>
+<p>Open <code>http://localhost:10003</code> and sign in with the admin account.</p>
+<p>Look at the <strong>Security Context</strong> panel in the sidebar. You should see, in order:</p>
+<ul>
+<li><strong>Provider:</strong> <code>ENTRA ID</code></li>
+<li><strong>User:</strong> your name / email</li>
+<li><strong>Role:</strong> a dropdown — <code>ADMIN</code>, <code>DEVELOPER</code>, <code>VIEWER</code> (highest available auto-selected, so
+  <code>ADMIN</code> here)</li>
+<li><strong>Groups:</strong> your group GUIDs</li>
+<li><strong>Token Scopes</strong>, <strong>Token Expiry</strong> (a live <code>M:SS</code> countdown), and <strong>Permissions</strong> (one row
+  per tool with <code>✓</code> / <code>✗</code>)</li>
+</ul>
+<p>Now open the <strong>Token Inspector</strong> and look at your raw token's decoded payload. Find these
+four claims — they're the ones the whole system keys off:</p>
+<ul>
+<li><strong><code>aud</code></strong> — the audience. Who this token was minted <em>for</em>. It names the gateway's app.</li>
+<li><strong><code>groups</code></strong> — your security-group GUIDs. This is what becomes your role.</li>
+<li><strong><code>exp</code></strong> — expiry, as a Unix timestamp. The countdown in the panel is this minus now.</li>
+<li><strong><code>scp</code></strong> — the scopes you consented to (e.g. <code>access_as_user</code>, <code>User.Read</code>).</li>
+</ul>
+<p>The Token Inspector is display-only — it decodes the JWT in your browser, it doesn't verify
+it. Verification is the gateway's job, which you'll see next.</p>
+<p><strong>Read the code:</strong> the panel is <code>frontend/src/components/SecurityContextPanel.js</code>; the
+decoder is <code>frontend/src/utils/tokenDecoder.js</code> and
+<code>frontend/src/components/TokenInspector.js</code>.</p>
+<hr />
+<h2 id="13-ask-the-gateway-what-it-made-of-you-backend">1.3 — Ask the gateway what it made of you (backend)</h2>
+<p>Copy your raw token from the Token Inspector. Then ask the gateway's <code>/me</code> endpoint what it
+<em>derived</em> from that token — this is Gate 1's view of you, without sending a chat message yet.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># PowerShell: put the token in a variable first to keep the command readable</span>
+<span class="nv">$TOKEN</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;&lt;paste your raw token&gt;&quot;</span>
+curl.exe<span class="w"> </span>-s<span class="w"> </span>http://localhost:10000/me<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span>
+</code></pre></div>
+
+<p><strong>Expected output</strong> (shape, with admin values):</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AdeleV@...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Adele Vance&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;oid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;security&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;entra&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;available_roles&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;admin&quot;</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;groups&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;&lt;admin-group-guid&gt;&quot;</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;group_names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;&lt;admin-group-guid&gt;&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;admin&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;token_scopes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;access_as_user&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;token_expiry&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1730000000</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;issuer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://login.microsoftonline.com/&lt;tenant&gt;/v2.0&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;get_user_profile&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;list_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;tool_scopes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Notice what happened: you sent a <em>token</em>, and the gateway handed back a <em>role</em>, a set of
+<em>available roles</em>, and a per-tool <em>permission map</em>. That translation — token → groups →
+role → permissions — is the gateway's whole job at Gate 1. The <code>permissions</code> block is
+literally "which tools would this role be allowed to call," computed here so the frontend can
+grey out the ones you can't use.</p>
+<p>Try it again with <code>-H "X-Assume-Role: viewer"</code> and watch <code>role</code> change to <code>viewer</code> and the
+<code>permissions</code> map shrink — but only because <code>admin</code> <em>can</em> step down to any role. In Act 02
+you'll see a viewer try to step <em>up</em> and get refused.</p>
+<p><strong>Read the code:</strong> <code>get_me</code> is <code>a2a_server/server.py:888-943</code>. Follow <code>_extract_user_info</code>
+(<code>:846</code>), <code>_get_available_roles</code>, and the <code>permissions</code> comprehension at <code>:923</code>.</p>
+<hr />
+<h2 id="14-send-one-message-and-watch-it-cross-all-three-gates-the-main-event">1.4 — Send one message, and watch it cross all three gates (the main event)</h2>
+<p>Set up four log tails first, so you can watch the request move through the services live.
+PowerShell:</p>
+<div class="codehilite"><pre><span></span><code><span class="c"># one per terminal, or use Windows Terminal panes</span>
+<span class="nb">Get-Content</span> <span class="n">-Wait</span> <span class="n">-Tail</span> <span class="n">5</span> <span class="n">logs</span><span class="p">/</span><span class="n">a2a_server</span><span class="p">.</span><span class="n">log</span>
+<span class="nb">Get-Content</span> <span class="n">-Wait</span> <span class="n">-Tail</span> <span class="n">5</span> <span class="n">logs</span><span class="p">/</span><span class="n">adk_agent</span><span class="p">.</span><span class="n">log</span>
+<span class="nb">Get-Content</span> <span class="n">-Wait</span> <span class="n">-Tail</span> <span class="n">5</span> <span class="n">logs</span><span class="p">/</span><span class="n">mcp_server</span><span class="p">.</span><span class="n">log</span>
+</code></pre></div>
+
+<p>(Bash: <code>tail -f logs/a2a_server.log</code>, etc.)</p>
+<p>Now, in the frontend chat, send exactly:</p>
+<blockquote>
+<p><strong>Show my Microsoft profile</strong></p>
+</blockquote>
+<p>Watch the thread move left to right across the logs:</p>
+<p><strong>Gate 1 — the gateway (<code>logs/a2a_server.log</code>)</strong> validates the token and lets a human in:</p>
+<div class="codehilite"><pre><span></span><code>Token validated for user: AdeleV@...
+Access control passed, storing claims in request state
+</code></pre></div>
+
+<p>Those two lines are <code>a2a_server/server.py:748</code> and <code>:756</code>. Between them the gateway ran the
+blocklist check and the group-membership check — both of which admin passes silently. Then it
+forwards your token and <code>X-Assume-Role</code> to the ADK agent.</p>
+<p><strong>The agent (<code>logs/adk_agent.log</code>)</strong> creates a session, stores your identity in session state
+under <code>user:</code> keys, and calls the LLM, which decides to call the <code>get_user_profile</code> tool. When
+it calls MCP, it injects your token via <code>mcp_header_provider</code>.</p>
+<p><strong>Gate 2 — the MCP server (<code>logs/mcp_server.log</code>)</strong> re-verifies your token from scratch (it
+does <em>not</em> trust the agent), resolves your role, and checks that role against the tool's
+requirement. <code>get_user_profile</code> allows all roles, so admin passes.</p>
+<p><strong>Gate 3 — the resource.</strong> For a Graph tool, the MCP server exchanges your token for a
+Graph-scoped one (OBO) and calls Microsoft Graph, which enforces the token's scopes. The
+profile comes back and flows all the way to your chat window.</p>
+<p>The reply appears with no denial badge — a clean pass through all three gates. Open the
+<strong>Audit Log</strong> panel and you'll see the request row: prompt, role, HTTP 200, <code>OK</code> in the
+Denial column, and a latency figure.</p>
+<p><strong>Read the code, in request order:</strong>
+1. <code>a2a_server/server.py:639</code> — <code>auth_middleware</code>, the gateway's entry point (Gate 1).
+2. <code>adk_agent/agent.py:209-213</code> — identity stored in session state as <code>user:access_token</code>,
+   <code>user:role</code>.
+3. <code>adk_agent/agent.py:99-127</code> — <code>mcp_header_provider</code>, which injects <code>Authorization</code> and
+   <code>X-Assume-Role</code> into every MCP call.
+4. <code>mcp_server/server.py</code> — <code>UserContextMiddleware</code> (Gate 2) and the <code>get_user_profile</code> tool
+   at <code>:527</code>.
+5. <code>mcp_server/graph_obo.py:54</code> — <code>get_graph_token</code>, the OBO exchange (Gate 3).</p>
+<hr />
+<h2 id="15-the-propagation-chain-named">1.5 — The propagation chain, named</h2>
+<p>The single most useful thing to hold in your head: <strong>the same identity is re-expressed in a
+different form at each tier, and each tier stores it in an async-safe <code>ContextVar</code></strong> so
+concurrent requests don't cross wires.</p>
+<div class="codehilite"><pre><span></span><code>Frontend        Bearer token + X-Assume-Role header
+   │
+Gateway         ContextVars: current_user_claims, current_access_token,
+   │            current_assumed_role, current_principal
+   │
+ADK Agent       session state: user:access_token, user:role, user:email, user:groups
+   │
+MCP Server      ContextVars: current_user_token, current_user_role, current_user_email,
+                current_user_provider, current_principal_type, current_agent_id
+</code></pre></div>
+
+<p>Six ContextVars on the MCP side, and every code path that sets one must set <em>all</em> of them —
+because the MCP server is stateless and reuses contexts between requests, so a stale value
+left behind by a previous request would misjudge the next one. That rule is in <code>CLAUDE.md</code>
+(convention 3) and you'll see why it matters in Act 03.</p>
+<hr />
+<h2 id="architecture-decision-contextvars-and-stateless-mcp">Architecture decision — ContextVars and stateless MCP</h2>
+<p><strong>What was chosen:</strong> propagate identity through <code>ContextVar</code>s at each tier, and run the MCP
+server in stateless HTTP mode (<code>stateless_http=True</code>) with no server-side session.</p>
+<p><strong>The alternatives:</strong> (a) thread identity explicitly through every function call as
+arguments; (b) keep a server-side session per user (stateful MCP) and look identity up by
+session id.</p>
+<p><strong>Why ContextVars:</strong> the async request handlers and the MCP tool functions are far apart in
+the call stack, with framework code in between that you don't control. Passing a token as an
+argument would mean touching every layer. A <code>ContextVar</code> is async-safe (unlike a thread-local
+or a global) — each concurrent request sees its own value — and it reads cleanly inside a
+tool function without plumbing.</p>
+<p><strong>Why stateless MCP:</strong> a stateless server scales horizontally with no shared session store
+and no session-affinity routing. The cost is that there's nowhere to stash per-user state
+between requests, which is exactly why identity must ride in on every request's headers and
+be re-resolved each time.</p>
+<p><strong>The trade-off you're accepting:</strong> stateless + ContextVars means the "set all six vars on
+every path" discipline is load-bearing. Miss one on one code path, and a reused context
+leaks a stale value into the next request. The code guards this by setting the full set in
+every branch; Act 03 shows the branch where a machine principal must reset the human-only
+vars for exactly this reason.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-01">Checkpoint — Act 01</h3>
+<p><strong>You have now proven:</strong> one real request crosses Gate 1 (gateway), Gate 2 (MCP role
+check), and Gate 3 (Graph scopes), and you can point at the log line where each fired.</p>
+<p><strong>You now understand:</strong> how identity is re-expressed at each tier (token → ContextVars →
+session <code>user:</code> state → ContextVars again), why MCP is stateless, and why <code>/me</code> returns a
+role and a permission map rather than just echoing your token.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"One signed-in user sends one message, and you can watch
+the same identity get re-verified three times by three different services on its way to the
+data and back."</em></p>
+</blockquote>
+<p>Next: <a href="02-denials-by-gate.html">Act 02 — denials by gate</a>. Now break it, one gate at a time.</p>
+</article>
+<footer class="pager"><a class="prev" href="00-big-picture.html">&larr; Act 00 — The big picture</a><a class="next" href="02-denials-by-gate.html">Act 02 — Denials by gate &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

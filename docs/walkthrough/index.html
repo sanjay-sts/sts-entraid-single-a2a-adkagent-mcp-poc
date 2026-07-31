@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walkthrough — Test and Understand the Whole System, Yourself</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li class="active"><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="walkthrough-test-and-understand-the-whole-system-yourself">Walkthrough — Test and Understand the Whole System, Yourself</h1>
+<p>This is a <strong>guided, hands-on path</strong> through the entire identity-aware agent system. You
+drive it. Each act is a self-contained session: you run something, watch it work (or watch
+it correctly refuse), read the exact code that made that happen, and learn the architecture
+decision behind it — so you can explain the system to someone else afterward.</p>
+<p>It is <strong>not</strong> a reference manual. When you want the exhaustive detail, the acts link out to
+the reference docs instead of repeating them:</p>
+<table>
+<thead>
+<tr>
+<th>Doc</th>
+<th>What it's for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../README.md"><code>../../README.md</code></a></td>
+<td>First-time setup of the four human-path services</td>
+</tr>
+<tr>
+<td><a href="../../TESTING.md"><code>../../TESTING.md</code></a></td>
+<td>Entra app registration + environment setup (deep)</td>
+</tr>
+<tr>
+<td><a href="../../MANUAL_TESTING.md"><code>../../MANUAL_TESTING.md</code></a></td>
+<td>Exhaustive per-component UI checklist</td>
+</tr>
+<tr>
+<td><a href="../ENTRA_AGENT_SETUP.md"><code>../ENTRA_AGENT_SETUP.md</code></a></td>
+<td>Agent-tier tenant-admin commands (Act 04 wraps this)</td>
+</tr>
+<tr>
+<td><a href="../../HANDOFF.md"><code>../../HANDOFF.md</code></a></td>
+<td>The complete system state, every seam and limitation</td>
+</tr>
+<tr>
+<td><a href="../../CLAUDE.md"><code>../../CLAUDE.md</code></a></td>
+<td>The load-bearing rules, in brief</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="the-one-idea-before-anything-else">The one idea, before anything else</h2>
+<p><strong>Every request carries proof of who is asking, and every layer re-verifies that proof
+itself instead of trusting the layer before it.</strong></p>
+<p>That is the whole system in one sentence. Six services, three access-control gates, two
+kinds of caller (a human, or a machine acting on its own) — all of it is elaboration on that
+one rule. If you remember nothing else, remember that no hop trusts a hop it cannot see.</p>
+<hr />
+<h2 id="the-acts-in-order">The acts, in order</h2>
+<p>Each act builds on the one before. Do them in sequence the first time.</p>
+<table>
+<thead>
+<tr>
+<th>Act</th>
+<th>Title</th>
+<th>Needs</th>
+<th>You can run it…</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="00-big-picture.html">00</a></td>
+<td>The big picture</td>
+<td>nothing</td>
+<td>now</td>
+</tr>
+<tr>
+<td><a href="01-golden-thread.html">01</a></td>
+<td>Golden thread — one user through A2A → agent → MCP</td>
+<td>4 services + Entra login</td>
+<td>now</td>
+</tr>
+<tr>
+<td><a href="02-denials-by-gate.html">02</a></td>
+<td>Denials — one at every gate</td>
+<td>same</td>
+<td>now</td>
+</tr>
+<tr>
+<td><a href="03-mcp-security.html">03</a></td>
+<td>MCP security up close</td>
+<td>same</td>
+<td>now</td>
+</tr>
+<tr>
+<td><a href="04-agent-tier-setup.html">04</a></td>
+<td>Agent-tier Entra setup</td>
+<td><strong>tenant admin</strong>, one-time</td>
+<td>when you have admin</td>
+</tr>
+<tr>
+<td><a href="05-machine-chain.html">05</a></td>
+<td>The machine chain — no human anywhere</td>
+<td>Act 04 done</td>
+<td>after 04</td>
+</tr>
+<tr>
+<td><a href="06-delegated-chain.html">06</a></td>
+<td>The delegated chain — your token rides the agents</td>
+<td>Act 04 done</td>
+<td>after 04</td>
+</tr>
+<tr>
+<td><a href="07-adversarial.html">07</a></td>
+<td>Adversarial — try to break the gates</td>
+<td>Act 04 done</td>
+<td>after 04</td>
+</tr>
+<tr>
+<td><a href="08-orchestration-security.html">08</a></td>
+<td>Orchestration security — the full flow, synthesized</td>
+<td>Acts 01–07 read</td>
+<td>after 07</td>
+</tr>
+<tr>
+<td><a href="09-cognito.html">09</a></td>
+<td>The second IdP — Cognito</td>
+<td>Cognito pool configured</td>
+<td>last, optional</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Companion:</strong> <a href="CODE-TOUR.html"><code>CODE-TOUR.md</code></a> — read the code in the right order, with a
+one-minute explanation script per file. Use it when you want to <em>teach</em> the system, not just
+run it.</p>
+<p><strong>Helper scripts:</strong> <a href="scripts/"><code>scripts/</code></a> — two small tools (mint an agent token; OBO-exchange
+a user token and dispatch) that Acts 06 and 07 use. They reuse the real <code>agent_common</code> code,
+so reading them is also a way to see how the library is meant to be called.</p>
+<hr />
+<h2 id="how-each-scenario-is-laid-out">How each scenario is laid out</h2>
+<p>Every scenario in every act uses the same shape, so you always know where to look:</p>
+<ul>
+<li><strong>Goal</strong> — one line: what you're about to do.</li>
+<li><strong>What it proves</strong> — the security property you'll have demonstrated.</li>
+<li><strong>Test it (frontend)</strong> — exact UI steps and what you'll see, with the real labels.</li>
+<li><strong>Test it (backend)</strong> — exact commands. PowerShell is called out where it differs from bash.</li>
+<li><strong>Expected output</strong> — near-verbatim: the log lines, JSON, or badges you should get.</li>
+<li><strong>Read the code</strong> — <code>file:line</code> references, in the order to read them.</li>
+<li><strong>Architecture decision</strong> — what was chosen, why, what the alternatives were, the trade-off.</li>
+<li><strong>If it fails</strong> — the likely causes.</li>
+<li><strong>Explain it in one sentence</strong> — the thing to say when you teach it.</li>
+</ul>
+<p>Each act ends with a <strong>checkpoint box</strong>: what you've now proven and now understand.</p>
+<hr />
+<h2 id="conventions">Conventions</h2>
+<ul>
+<li>Commands assume you're at the repo root and using <code>uv</code>. Windows note: this repo is
+  developed on Windows; where a bash idiom (<code>for</code> loops, <code>VAR=$(...)</code>) won't work in
+  PowerShell, the PowerShell form is given alongside.</li>
+<li><code>curl</code> examples use <code>curl.exe</code> on Windows PowerShell (plain <code>curl</code> there is an alias for
+  <code>Invoke-WebRequest</code> and takes different flags).</li>
+<li>Ports are the defaults: gateway 10000, ADK agent 10001, MCP 10002, frontend 10003,
+  orchestrator 10004, peer 10005.</li>
+<li>Logs live under <code>logs/</code> — one file per service. <code>tail -f</code> (bash) or
+  <code>Get-Content -Wait -Tail 20</code> (PowerShell) to follow them live.</li>
+</ul>
+<blockquote>
+<p><strong>One accuracy note you'll want.</strong> The top-level <code>README.md</code> has two small staleness bugs
+the acts deliberately do <strong>not</strong> copy: it mentions <code>ANTHROPIC_API_KEY</code> (the code uses
+<code>AWS_BEARER_TOKEN_BEDROCK</code>), and it says "four tiers" while listing three. The denial model
+is genuinely four tiers (AGENT / TOOL / SCOPE / RESOURCE); Act 02 shows all four.</p>
+</blockquote>
+</article>
+<footer class="pager"><span></span><a class="next" href="00-big-picture.html">Act 00 — The big picture &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>
