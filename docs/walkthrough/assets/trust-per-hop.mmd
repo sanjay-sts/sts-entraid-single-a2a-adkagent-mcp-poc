@@ -1,0 +1,14 @@
+%% What each hop independently verifies — no hop trusts a hop it cannot see.
+%% Source for the table/diagram embedded in Act 08.
+flowchart LR
+    subgraph caller["Every agent callee, on every inbound call"]
+        direction TB
+        S1["1. Signature / issuer / expiry<br/>EntraJWTValidator (JWKS)"]
+        S2["2. Audience — minted for ME?<br/>anti-replay"]
+        S3["3. idtyp == 'app'<br/>really a machine token?"]
+        S4["4. Caller in MY allow-list?<br/>registry call graph"]
+        S5["5. Caller holds Agent.Invoke?<br/>app role"]
+        S6["6. Rider user token (if present):<br/>is a user + not blocked"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    end
+    NOTE["Signature FIRST, claims second.<br/>azp / roles / aud are attacker-supplied<br/>strings until step 1 passes."]

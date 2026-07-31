@@ -1,0 +1,19 @@
+%% MCP MultiAuth verifier order — first success wins, so order is load-bearing.
+%% Source for the diagram embedded in Act 03.
+flowchart TD
+    TOK["Bearer token arrives at /mcp"]
+    V1{"1. Entra human verifier<br/>AzureJWTVerifier<br/>required_scopes = access_as_user"}
+    V2{"2. Cognito verifier<br/>JWTVerifier"}
+    V3{"3. Agent verifier<br/>_AgentTokenVerifier<br/>requires idtyp == 'app'"}
+    OK["Accepted → UserContextMiddleware<br/>resolves role"]
+    NO["401 — no verifier accepted it"]
+
+    TOK --> V1
+    V1 -->|"human token WITH access_as_user"| OK
+    V1 -->|"no"| V2
+    V2 -->|"valid Cognito token"| OK
+    V2 -->|"no"| V3
+    V3 -->|"app-only token (idtyp=app)"| OK
+    V3 -->|"no"| NO
+
+    WHY["Why the agent verifier is LAST and demands idtyp=app:<br/>if a no-scope verifier came first, a human token MISSING<br/>access_as_user could slip past the scope check. The agent<br/>verifier accepts only app-only tokens, which a human never has —<br/>so it can never be the thing that lets a human skip the scope gate."]

@@ -1,0 +1,15 @@
+%% Per-hop OBO narrowing — the human stays in `sub`, the audience changes each hop.
+%% Source for the diagram embedded in Act 06.
+sequenceDiagram
+    participant U as Human (browser)
+    participant GW as Gateway
+    participant ORCH as Orchestrator
+    participant PEER as Peer
+
+    U->>GW: user token<br/>aud = gateway, sub = human
+    Note over GW: A human is upstream.<br/>Exchange (OBO) for the next hop —<br/>never forward the received token.
+    GW->>ORCH: X-Delegated-User-Token<br/>aud = ORCHESTRATOR, sub = human
+    Note over ORCH: Exchange again, per callee.<br/>A token captured here cannot be<br/>replayed at the peer — wrong aud.
+    ORCH->>PEER: X-Delegated-User-Token<br/>aud = PEER, sub = human
+
+    Note over U,PEER: sub is the human at every hop (delegation, not impersonation).<br/>aud is narrowed to exactly the next callee (anti-replay).

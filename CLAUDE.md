@@ -65,6 +65,9 @@ The agent tier is optional — the human path runs without it. See "Multi-Agent 
 ├── pki/
 │   └── generate_certs.py      # Mini-CA + per-agent key pairs (pki/certs/ is gitignored)
 ├── event_trigger.py           # M2M entry point — CLI, no human, no user token
+├── docs/
+│   ├── ENTRA_AGENT_SETUP.md   # Agent-tier tenant-admin setup (Act 04 wraps this)
+│   └── walkthrough/           # Hands-on, scenario-by-scenario guide + CODE-TOUR + helper scripts
 ├── frontend/
 │   ├── src/
 │   │   ├── App.js             # Dashboard layout shell — sidebar + main area

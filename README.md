@@ -2,6 +2,12 @@
 
 A secure, multi-tier AI agent system where user identity propagates from frontend authentication through the agent layer down to resource APIs. The architecture enforces access control at three independent levels, providing defense in depth.
 
+> **New here, or want to test the whole thing yourself?** Start with the hands-on
+> [**walkthrough**](docs/walkthrough/README.md) — a guided, scenario-by-scenario path (human
+> login → agents → adversarial tests) that you run yourself, with the exact commands, expected
+> output, code references, and the architecture decision behind each mechanism. A companion
+> [code tour](docs/walkthrough/CODE-TOUR.md) reads the code in the order that makes it click.
+
 ## Table of Contents
 
 - [System Design](#system-design)

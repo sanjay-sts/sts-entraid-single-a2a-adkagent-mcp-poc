@@ -1,0 +1,32 @@
+%% Request flow — 6 services, 3 gates, human vs machine path.
+%% Renders on GitHub natively. Source of truth for the diagram embedded in Act 00.
+flowchart LR
+    subgraph human["HUMAN PATH"]
+        FE["React Frontend<br/>:10003<br/>(MSAL / Amplify)"]
+    end
+    subgraph machine["MACHINE PATH"]
+        EV["event_trigger.py<br/>(CLI, no human)"]
+    end
+
+    GW["A2A Gateway<br/>:10000"]
+    ORCH["Orchestrator<br/>:10004"]
+    PEER["Peer Agent<br/>:10005"]
+    ADK["ADK Agent<br/>:10001<br/>(LLM)"]
+    MCP["MCP Tools<br/>:10002"]
+    GRAPH["Microsoft Graph"]
+    S3["AWS S3"]
+
+    FE -->|"Bearer user token"| GW
+    EV -->|"Bearer agent token<br/>(no user token)"| ORCH
+    ORCH -->|"agent token + optional<br/>X-Delegated-User-Token"| PEER
+    ORCH -->|"agent token + optional<br/>X-Delegated-User-Token"| GW
+    PEER -->|"agent token + optional<br/>X-Delegated-User-Token"| GW
+
+    GW -->|"user token + X-Assume-Role"| ADK
+    ADK -->|"Authorization + X-Assume-Role"| MCP
+    MCP -->|"OBO-exchanged token"| GRAPH
+    MCP -->|"server-side AWS creds"| S3
+
+    GW -. "GATE 1: may this principal enter?<br/>(signature, blocklist, group / app-role)" .- GW
+    MCP -. "GATE 2: may this role use this tool?" .- MCP
+    GRAPH -. "GATE 3: may this token touch this data?" .- GRAPH
