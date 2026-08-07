@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 08 — Orchestration Security: The Full Flow, Synthesized</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li class="active"><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-08-orchestration-security-the-full-flow-synthesized">Act 08 — Orchestration Security: The Full Flow, Synthesized</h1>
+<p><strong>Needs:</strong> Acts 01–07 read and, ideally, run. This act has little new to <em>type</em> — it's where
+everything you've tested becomes one coherent model you can defend on a whiteboard.</p>
+<p><strong>Goal of this act:</strong> assemble the per-hop trust story, map every attack class to the scenario
+that proved it's blocked, be honest about what's still open, and hand you the
+explain-it-to-others cheat sheet.</p>
+<hr />
+<h2 id="81-the-trust-table-what-every-hop-independently-verifies">8.1 — The trust table: what every hop independently verifies</h2>
+<p>Every agent callee, on every inbound call, runs the same sequence — and it runs it itself, not
+on the word of the caller.</p>
+<figure class="diagram" title="Click to open zoomable view"><pre class="mermaid">flowchart LR
+    subgraph caller[&quot;Every agent callee, on every inbound call&quot;]
+        direction TB
+        S1[&quot;1. Signature / issuer / expiry&lt;br/&gt;EntraJWTValidator (JWKS)&quot;]
+        S2[&quot;2. Audience — minted for ME?&quot;]
+        S3[&quot;3. idtyp == &#x27;app&#x27;&lt;br/&gt;really a machine token?&quot;]
+        S4[&quot;4. Caller in MY allow-list?&quot;]
+        S5[&quot;5. Caller holds Agent.Invoke?&quot;]
+        S6[&quot;6. Rider user token (if present):&lt;br/&gt;is a user + not blocked&quot;]
+        S1 --&gt; S2 --&gt; S3 --&gt; S4 --&gt; S5 --&gt; S6
+    end
+</pre><figcaption>click diagram to zoom</figcaption></figure>
+<p><em>(Source: <a href="assets/trust-per-hop.mmd"><code>assets/trust-per-hop.mmd</code></a>.)</em></p>
+<p>Laid out across the two chains you built:</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Human path (Gate 1, gateway)</th>
+<th>Machine / delegated path (each agent hop)</th>
+<th>Code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Signature / issuer / expiry</td>
+<td><code>TokenValidator.validate</code></td>
+<td><code>EntraJWTValidator.validate</code></td>
+<td><code>a2a_server/server.py</code>, <code>agent_common/jwt_validator.py</code></td>
+</tr>
+<tr>
+<td>Audience minted for me</td>
+<td>(gateway audience)</td>
+<td><code>_audience_matches</code> + validator</td>
+<td><code>agent_common/principal.py</code>, <code>jwt_validator.py</code></td>
+</tr>
+<tr>
+<td>Machine vs human</td>
+<td><code>is_app_token</code> fork</td>
+<td><code>is_app_token</code></td>
+<td><code>agent_common/principal.py:45</code></td>
+</tr>
+<tr>
+<td>Caller is known</td>
+<td>group membership</td>
+<td><code>allowed_callers_for</code></td>
+<td><code>a2a_server/server.py</code>, <code>agent_common/registry.py</code></td>
+</tr>
+<tr>
+<td>Caller is authorized</td>
+<td>allowed group</td>
+<td><code>Agent.Invoke</code> app role</td>
+<td><code>verify_agent_claims</code></td>
+</tr>
+<tr>
+<td>Rider user is real + allowed</td>
+<td>n/a (they <em>are</em> the user)</td>
+<td><code>verify_delegated_user</code></td>
+<td><code>agent_common/principal.py:152</code></td>
+</tr>
+<tr>
+<td>Blocklist</td>
+<td><code>authorize_human_claims</code></td>
+<td><code>verify_delegated_user</code> (every hop)</td>
+<td>both</td>
+</tr>
+</tbody>
+</table>
+<p>The point of the table: there is no row that one hop does and another skips because "an earlier
+hop already checked." The blocklist is checked at the gateway <em>and</em> at every agent hop, against
+each hop's own copy of <code>BLOCKED_USERS</code>. Duplicated on purpose — no hop trusts a hop it cannot
+see.</p>
+<hr />
+<h2 id="82-threat-model-each-attack-the-scenario-that-proved-it-blocked">8.2 — Threat model: each attack → the scenario that proved it blocked</h2>
+<table>
+<thead>
+<tr>
+<th>Attack class</th>
+<th>What the attacker tries</th>
+<th>Blocked by</th>
+<th>Proven in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cross-hop replay</strong></td>
+<td>reuse a token from hop N at hop N+1</td>
+<td>per-hop audience narrowing; validator checks <code>aud</code></td>
+<td>Act 07.1 (401) + Act 06.3 (aud narrows)</td>
+</tr>
+<tr>
+<td><strong>Fabricated human</strong></td>
+<td>app-only token in the user slot to invent a human</td>
+<td><code>verify_delegated_user</code> → <code>is_app_token</code> guard</td>
+<td>Act 07.2 (403 <code>delegated_token_not_a_user</code>)</td>
+</tr>
+<tr>
+<td><strong>Privilege self-grant</strong></td>
+<td>agent presents a <code>groups</code> claim to grab a role</td>
+<td>machine role from app id only, group claims ignored</td>
+<td>Act 05.3 / design (get_agent_roles)</td>
+</tr>
+<tr>
+<td><strong>Raw-token forwarding</strong></td>
+<td>a captured token replayable everywhere the gateway reaches</td>
+<td>exchange-not-forward (<code>build_agent_headers</code>)</td>
+<td>Act 06 (exchange) + 07.1 (replay fails)</td>
+</tr>
+<tr>
+<td><strong>Downgrade on failed exchange</strong></td>
+<td>make a delegated call silently proceed as machine</td>
+<td>a failed exchange is a <em>failure</em>, not a fallback</td>
+<td>Act 07 design (fail-closed)</td>
+</tr>
+<tr>
+<td><strong>Uninvited caller</strong></td>
+<td>a genuine agent calls one it's not allowed to</td>
+<td>call-graph allow-list</td>
+<td>Act 07.3 (403 <code>unknown_agent</code>)</td>
+</tr>
+<tr>
+<td><strong>Outright forgery</strong></td>
+<td><code>alg=none</code>, HS256 key-confusion</td>
+<td>signature-first, RS256-pinned, JWKS</td>
+<td>Act 07.4 (tests pass = forgeries rejected)</td>
+</tr>
+<tr>
+<td><strong>Human blocklist bypass via agent</strong></td>
+<td>route a blocked user through an agent</td>
+<td>blocklist re-checked at every hop</td>
+<td>Act 06.4 / Act 02.1</td>
+</tr>
+</tbody>
+</table>
+<p>If you can walk this table out loud, pointing at the scenario that demonstrates each row, you
+understand the system's security model as well as anyone who built it.</p>
+<hr />
+<h2 id="83-whats-honestly-still-open">8.3 — What's honestly still open</h2>
+<p>A walkthrough that only shows strengths is marketing. These are the real gaps, all documented
+in <code>CLAUDE.md</code> and <code>HANDOFF.md</code>:</p>
+<ul>
+<li><strong>No mTLS between agent hops — the largest open gap.</strong> Agent-to-agent calls run over plain
+  HTTP. A rogue process that squats a callee's port could harvest bearer tokens and replay them
+  at the real callee. Per-hop audience narrowing <em>limits</em> the blast radius (a harvested token is
+  only good for that one callee), which is exactly why narrowing matters so much while this is
+  open. Closed in Phase 2 with the certs you already generated.</li>
+<li><strong>MCP shares the gateway's app registration</strong> (Act 03.4). Per-hop narrowing stops one hop
+  short of the MCP server. Confused-deputy gap, predates the agent work, Phase 2 fix is MCP's
+  own registration.</li>
+<li><strong>Plain HTTP everywhere in the mesh</strong> — no transport encryption locally. Fine for a laptop
+  testbed, not for anywhere real.</li>
+<li><strong>No rate limiting</strong> — nothing throttles a caller hammering a hop.</li>
+<li><strong>Two JWT validators</strong> — the gateway's multi-IdP <code>TokenValidator</code> (no JWKS TTL) and
+  <code>agent_common/jwt_validator.py</code> (Entra-only, has a TTL). They differ in behaviour, not just
+  code; don't assume one when reading the other.</li>
+<li><strong>Integration tests written but (as of this walkthrough) never run against a live tenant</strong> —
+  Act 07.5 is where that changes.</li>
+</ul>
+<p>None of these is hidden; the value of writing them down is that the next person doesn't discover
+them as a surprise.</p>
+<hr />
+<h2 id="84-the-six-load-bearing-rules-the-cheat-sheet">8.4 — The six load-bearing rules (the cheat sheet)</h2>
+<p>These are from <code>CLAUDE.md</code>'s <strong>Multi-Agent Identity</strong> section. Each is a rule that must not be
+quietly relaxed; each maps to a code location and to a scenario you ran. This is the thing to
+memorize for explaining the system.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Rule</th>
+<th>Where</th>
+<th>You saw it in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Signature first, claims second.</strong> <code>azp</code>/<code>roles</code>/<code>aud</code> are attacker strings until the JWT is verified.</td>
+<td><code>jwt_validator.py:89</code></td>
+<td>Act 07.4</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong><code>is_app_token()</code> fails closed.</strong> Reads <code>idtyp=="app"</code> and nothing else; missing → refuse. No "no username, therefore machine" fallback.</td>
+<td><code>principal.py:45</code></td>
+<td>Act 04 §4, Act 05.3</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>Machine role resolution ignores group claims.</strong> An app controls its own claims, so a group-promotable agent could grant itself any role.</td>
+<td><code>policy.py get_agent_roles</code></td>
+<td>Act 05.3</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>A failed token exchange is a failure, not a fallback.</strong> Proceeding without the user token silently downgrades the hop to machine.</td>
+<td><code>outbound.py</code>, <code>orchestrator ._dispatch_to</code></td>
+<td>Act 07 design</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>Build outbound headers with <code>build_agent_headers()</code>.</strong> Don't hand-roll the two-header contract in a new caller.</td>
+<td><code>outbound.py</code></td>
+<td>Act 06</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Authenticate before parsing the body.</strong> An unauthenticated request never reaches a parser.</td>
+<td>orchestrator/peer <code>dispatch</code>/<code>invoke</code></td>
+<td>Act 07 (all attacks refused pre-parse)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="architecture-decision-the-whole-trust-model-and-where-its-edges-are">Architecture decision — the whole trust model, and where its edges are</h2>
+<p><strong>What was chosen:</strong> a first-party mesh where identity (human or agent) is a signed token
+re-verified independently at every hop, principal type is derived from tokens present, authority
+comes from an out-of-band source the caller can't influence (human groups; agent app-id role),
+and every hop narrows what it hands onward.</p>
+<p><strong>The alternative:</strong> a perimeter model — authenticate hard at the edge, trust the interior. Or a
+mesh with mutual TLS as the <em>only</em> identity (the network proves who you are).</p>
+<p><strong>Why this model:</strong> the requirement is that <em>a specific human's identity</em> reaches the tool and
+the resource, through agents, with per-user authorization decisions at each gate — and that a
+compromise of any one component doesn't cascade. A perimeter model fails the cascade requirement
+(interior trust is a single point of failure). mTLS-as-identity proves <em>which service</em> is
+calling but carries no <em>user</em> identity and no audience/expiry semantics, so it can't make the
+per-user decisions this system exists for. Token-based per-hop verification carries the user,
+narrows per hop, and re-checks everywhere.</p>
+<p><strong>Where its edges are:</strong> the model <em>assumes</em> a closed set of known callers (the registry) and a
+shared trust in the same IdP(s). It is not built to onboard untrusted third-party callers (that's
+the OAuth/DCR world from Act 03.3). And it currently leans on audience narrowing to compensate
+for the absence of transport security (no mTLS yet) — which is a coherent Phase-1 position
+precisely <em>because</em> narrowing is real and tested, but it's a position with a known expiry date:
+Phase 2's mTLS is what lets the model stop depending on "a harvested token is only good for one
+hop" and start depending on "you can't harvest it in the first place."</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-08">Checkpoint — Act 08</h3>
+<p><strong>You have now assembled:</strong> the per-hop trust table, the threat-model mapping, the honest
+open-gaps list, and the six-rule cheat sheet.</p>
+<p><strong>You now understand:</strong> the complete model well enough to defend each decision and name each
+limitation without looking it up.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"It's a closed mesh where a signed identity is re-verified and
+re-narrowed at every hop, authority can't be self-granted, and the one thing holding the line
+until mTLS ships is that a stolen token is only ever valid for a single next hop."</em></p>
+</blockquote>
+<p>Next: <a href="09-cognito.html">Act 09 — the second IdP, Cognito</a>. Optional, and last.</p>
+</article>
+<footer class="pager"><a class="prev" href="07-adversarial.html">&larr; Act 07 — Adversarial</a><a class="next" href="09-cognito.html">Act 09 — Cognito &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

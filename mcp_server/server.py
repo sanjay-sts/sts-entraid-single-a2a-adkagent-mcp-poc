@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
 from policy import TomlPolicyEvaluator
 from graph_obo import init_obo_exchanger, get_obo_exchanger
+from agent_common.principal import is_app_token
 
 # Context variables for passing auth info from middleware to tools (works in stateless mode)
 # Removed current_user_scopes — IdP scopes are no longer checked at tool level.
@@ -37,6 +38,14 @@ current_user_token: ContextVar[str] = ContextVar("current_user_token", default="
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="none")
 current_user_email: ContextVar[str] = ContextVar("current_user_email", default="")
 current_user_provider: ContextVar[str] = ContextVar("current_user_provider", default="")
+
+# Multi-agent: is the caller acting for a human ("delegated") or on its own
+# behalf ("machine")? Derived by the middleware from the token, never declared
+# by the caller. Every code path that sets the vars above must also set these
+# two — stateless HTTP reuses contexts, and a stale "machine" left behind by a
+# previous request would refuse a human's Graph call for no visible reason.
+current_principal_type: ContextVar[str] = ContextVar("current_principal_type", default="delegated")
+current_agent_id: ContextVar[str] = ContextVar("current_agent_id", default="")
 
 # Load environment variables
 load_dotenv()
@@ -123,6 +132,31 @@ def _extract_groups(claims: dict) -> list[str]:
 
 # --- Auth setup: trusted provider verification ---
 
+class _AgentTokenVerifier(AzureJWTVerifier):
+    """Accepts Entra app-only (agent) tokens, and nothing else.
+
+    Why this exists: an app-only token carries `roles` and never `scp`. FastMCP
+    reads scopes from `scope`/`scp` only, so the human verifier's
+    `required_scopes=["access_as_user"]` can never be satisfied by an agent
+    token — every machine call would be refused at the door with a bare 401,
+    and the machine branch in UserContextMiddleware would be unreachable.
+
+    Why it is safe to require no scope here: MultiAuth tries verifiers in order
+    and the first success wins, so a verifier with no scope requirement would
+    otherwise be a way for a *human* token that lacks `access_as_user` to skip
+    that check entirely. This one refuses anything without idtyp='app', which
+    a delegated token never has. That refusal is the only thing keeping the
+    delegated scope check meaningful — it is not redundant with the verifier
+    above it, and removing it silently drops a check for every human.
+    """
+
+    async def verify_token(self, token: str):
+        access_token = await super().verify_token(token)
+        if access_token is None or not is_app_token(access_token.claims):
+            return None
+        return access_token
+
+
 def _build_auth():
     """Configure trusted IdP verifiers. Only tokens from these providers are accepted.
 
@@ -156,6 +190,14 @@ def _build_auth():
             audience=[CLIENT_ID, f"api://{CLIENT_ID}"],
             algorithm="RS256",
             required_scopes=["access_as_user"],
+        ))
+
+        # Agent tokens — see _AgentTokenVerifier. Ordered last so a delegated
+        # token always meets the scope-checked verifiers first; it would be
+        # refused here anyway, but the ordering makes the intent legible.
+        verifiers.append(_AgentTokenVerifier(
+            client_id=CLIENT_ID,
+            tenant_id=TENANT_ID,
         ))
 
     # Cognito verifier — User Pool JWT validation
@@ -222,7 +264,59 @@ class UserContextMiddleware(Middleware):
             assumed_role = ""
         role = assumed_role or dev_cfg.get("default_role", "admin")
         current_user_role.set(role)
+        current_principal_type.set("delegated")
+        current_agent_id.set("")
         logger.warning("AUTH BYPASSED - role: %s", role)
+
+    def _resolve_machine_context(self, token, provider: str, raise_on_error: bool) -> None:
+        """Resolve the role of an agent calling on its own behalf.
+
+        Deliberately does NOT consult group rules or the user table. An app
+        registration controls its own optional claims, so an agent that could
+        be promoted by a `groups` claim would be able to grant itself any role
+        in the tenant. Its role comes from its app id alone (see
+        `TomlPolicyEvaluator.get_agent_roles`), which only an operator editing
+        permissions.toml can change.
+
+        This is also where X-Assume-Role is finally enforced for machines. The
+        gateway forwards that header without checking it — it is not the role
+        enforcement point — so if this tier trusted it, an agent could name any
+        role and be granted it.
+        """
+        agent_id = token.claims.get("azp") or token.claims.get("appid", "")
+        available_roles = self.policy_evaluator.get_agent_roles(agent_id, provider)
+
+        headers = get_http_headers()
+        assumed_role = headers.get("x-assume-role", "")
+
+        if assumed_role:
+            if assumed_role not in available_roles:
+                raise ToolError(
+                    f"[TOOL_DENIAL] Agent '{agent_id}' cannot assume role "
+                    f"'{assumed_role}'. Available roles: {available_roles}"
+                )
+        elif not available_roles and raise_on_error:
+            raise ToolError(
+                f"[TOOL_DENIAL] No roles available for agent '{agent_id}'. "
+                f"Add it to [agent_rules.{provider}] in permissions.toml."
+            )
+        else:
+            # No [ROLE_SELECTION] prompt here, unlike the human path: there is
+            # nobody to ask, and get_agent_roles returns at most one role, so
+            # there is nothing to choose between.
+            assumed_role = available_roles[0] if available_roles else "none"
+
+        current_user_token.set(token.token)
+        current_user_email.set("")
+        current_user_role.set(assumed_role)
+        current_user_provider.set(provider)
+        current_principal_type.set("machine")
+        current_agent_id.set(agent_id)
+
+        logger.info(
+            "Agent %s assumed role '%s' (available: %s)",
+            agent_id, assumed_role, available_roles,
+        )
 
     def _resolve_context(self, raise_on_error: bool = True) -> None:
         """Extract claims from validated token and resolve role.
@@ -246,6 +340,17 @@ class UserContextMiddleware(Middleware):
                 raise ToolError(
                     f"[TOOL_DENIAL] Invalid Cognito client_id: {token_client_id}"
                 )
+
+        # Machine principal: an agent calling on its own behalf. It has no email
+        # and no groups, so its role comes from its app id via [agent_rules].
+        # Placed after the Cognito check so that check can never be skipped by a
+        # token that claims to be an app.
+        if is_app_token(token.claims):
+            self._resolve_machine_context(token, provider, raise_on_error)
+            return
+
+        current_principal_type.set("delegated")
+        current_agent_id.set("")
 
         email = _extract_email(token.claims, provider)
         groups = _extract_groups(token.claims)
@@ -336,7 +441,15 @@ async def _get_graph_token(scopes: list[str] | None = None) -> str | None:
       - Non-Entra provider (OBO is Entra-only)
       - ENTRA_CLIENT_SECRET not configured (exchanger not initialized)
       - OBO exchange fails (logged, not raised)
+      - The caller is a machine principal
     """
+    # OBO exchanges a *user* assertion for a Graph token. A machine principal
+    # has none, and sending the agent's own token would ask Entra to treat the
+    # agent as the subject — a different flow with different consent, reached
+    # by accident. Refuse before the request is built.
+    if current_principal_type.get() == "machine":
+        return None
+
     provider = current_user_provider.get()
     if provider != "entra":
         return None
@@ -364,6 +477,27 @@ def _require_entra_provider() -> dict | None:
             "error": "provider_not_supported",
             "provider": provider,
             "note": f"Graph API is not available for {provider} users. Use Entra ID for Graph access.",
+        }
+    return None
+
+
+def _require_delegated_user() -> dict | None:
+    """Return an error dict if the caller is a machine principal, else None.
+
+    Graph's /me endpoints are meaningless without a human: there is nobody for
+    the agent to be "on behalf of". An app-only Graph token would read the
+    *application's* mailbox and drive, which is emphatically not what these
+    tools mean. Refuse rather than silently return the wrong identity's data.
+    """
+    if current_principal_type.get() == "machine":
+        return {
+            "error": "no_delegated_user",
+            "agent_id": current_agent_id.get(),
+            "note": (
+                "This tool acts on behalf of a signed-in user. The caller is an "
+                "agent with no user context (event-triggered). Invoke it through "
+                "a user session instead."
+            ),
         }
     return None
 
@@ -396,6 +530,10 @@ async def get_user_profile() -> dict:
     user_email = current_user_email.get()
     user_role = current_user_role.get()
 
+    delegation_error = _require_delegated_user()
+    if delegation_error:
+        return delegation_error
+
     provider_error = _require_entra_provider()
     if provider_error:
         provider_error.update(email=user_email, role=user_role)
@@ -427,6 +565,10 @@ async def get_user_profile() -> dict:
 @mcp.tool(auth=require_role("admin", "developer"))
 async def list_files(folder_path: str = "/") -> dict:
     """List files in user's OneDrive."""
+    delegation_error = _require_delegated_user()
+    if delegation_error:
+        return delegation_error
+
     provider_error = _require_entra_provider()
     if provider_error:
         return provider_error
@@ -468,6 +610,10 @@ async def send_email(
     body: str,
 ) -> dict:
     """Send an email via Microsoft Graph (admin only)."""
+    delegation_error = _require_delegated_user()
+    if delegation_error:
+        return delegation_error
+
     provider_error = _require_entra_provider()
     if provider_error:
         return provider_error

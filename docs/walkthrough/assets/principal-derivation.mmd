@@ -1,0 +1,14 @@
+%% Principal type is DERIVED from which tokens are present — never declared.
+%% Source for the diagram embedded in Acts 00 and 05.
+flowchart TD
+    START["An authenticated request arrives<br/>Authorization: Bearer &lt;token&gt;"]
+    APP{"is_app_token(claims)?<br/>idtyp == 'app'"}
+    RIDER{"X-Delegated-User-Token<br/>present AND valid?"}
+
+    START --> APP
+    APP -->|"no (a human's token)"| HUMAN["DELEGATED principal<br/>authorized by the human's groups"]
+    APP -->|"yes (an agent's token)"| RIDER
+    RIDER -->|"yes"| DELEG["DELEGATED principal<br/>human in sub, agent is actor<br/>Graph tools allowed"]
+    RIDER -->|"no"| MACH["MACHINE principal<br/>authorized by the agent's app role<br/>Graph tools refuse: no_delegated_user"]
+
+    NOTE["Nothing on the wire sets the principal type.<br/>A caller cannot declare 'I am a machine' or<br/>'I act for a human' — only tokens exist, and<br/>the type falls out of which tokens are present."]

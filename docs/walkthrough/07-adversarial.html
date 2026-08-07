@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 07 — Adversarial: Try to Break the Gates</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li class="active"><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-07-adversarial-try-to-break-the-gates">Act 07 — Adversarial: Try to Break the Gates</h1>
+<p><strong>Needs:</strong> Act 04 complete; peer + orchestrator + gateway running.</p>
+<p><strong>Goal of this act:</strong> stop being a well-behaved caller and <em>attack</em>. Each scenario is an attempt
+to defeat one guarantee from the earlier acts, and each one should fail in a specific,
+observable way. A guarantee you've only seen hold for cooperative input isn't a guarantee yet.</p>
+<p>You'll use the second helper script, <code>scripts/mint_agent_token.py</code>, which mints a real
+agent token for a callee you name — the same capability an attacker with one agent's cert would
+have.</p>
+<hr />
+<h2 id="71-replay-a-token-at-the-wrong-hop">7.1 — Replay a token at the wrong hop</h2>
+<p><strong>Attack:</strong> mint a token for the <strong>orchestrator</strong>, then present it to the <strong>peer</strong>. If audience
+narrowing is real, the peer must refuse a token that was minted for someone else.</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># mint a token whose audience is the orchestrator</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>docs/walkthrough/scripts/mint_agent_token.py<span class="w"> </span>--as<span class="w"> </span>event-trigger<span class="w"> </span>--for<span class="w"> </span>orchestrator<span class="w"> </span>--print-token
+<span class="c1"># then POST it to the peer&#39;s /invoke with that token as the Bearer</span>
+curl.exe<span class="w"> </span>-s<span class="w"> </span>-i<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:10005/invoke<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;the minted token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;action&quot;:&quot;status&quot;,&quot;params&quot;:{}}&#39;</span>
+</code></pre></div>
+
+<p><strong>Expected:</strong> HTTP <strong>401</strong>, body <code>denial_reason: validation_failed</code>.</p>
+<p><strong>The subtlety worth understanding — why 401, not 403.</strong> You might expect <code>403 wrong_audience</code>,
+since the problem <em>is</em> the audience. But the peer checks audience <strong>twice</strong>: once inside the JWT
+signature validator (<code>EntraJWTValidator.validate</code>, which is handed the peer's expected audience
+and rejects a mismatch as part of validation), and once in the claim-level
+<code>verify_agent_claims</code> (which would raise <code>wrong_audience</code>). The signature validator runs
+<strong>first</strong>, so a live cross-hop token is caught there and surfaces as <code>validation_failed</code> — the
+claim-level check never gets to run. That second check isn't redundant: it's the backstop that
+still holds if the validator is ever swapped out. But against the real system, this attack is a
+401. (A test asserting 403 here would be wrong — and the integration suite deliberately asserts
+401. This exact trap is documented in <code>CLAUDE.md</code>.)</p>
+<p><strong>Read the code:</strong> <code>agent_common/jwt_validator.py:89-136</code> — <code>validate</code> takes <code>expected_audience</code>
+and rejects a mismatch (<code>InvalidAudienceError</code> → <code>TokenVerificationError</code>). The claim-level
+backstop is <code>_audience_matches</code> + the <code>wrong_audience</code> raise in
+<code>agent_common/principal.py:91-135</code>.</p>
+<hr />
+<h2 id="72-put-an-agent-token-in-the-user-slot-fabricate-a-human">7.2 — Put an agent token in the user slot (fabricate a human)</h2>
+<p><strong>Attack:</strong> call the orchestrator with a valid agent token as <code>Authorization</code> (fine), but also
+put an <strong>app-only</strong> token in <code>X-Delegated-User-Token</code> — trying to make a machine call look
+delegated, inventing a human who isn't there.</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>docs/walkthrough/scripts/mint_agent_token.py<span class="w"> </span>--as<span class="w"> </span>event-trigger<span class="w"> </span>--for<span class="w"> </span>orchestrator<span class="w"> </span>--print-token<span class="w">   </span><span class="c1"># the caller token</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>docs/walkthrough/scripts/mint_agent_token.py<span class="w"> </span>--as<span class="w"> </span>peer<span class="w"> </span>--for<span class="w"> </span>orchestrator<span class="w"> </span>--print-token<span class="w">             </span><span class="c1"># an app token to abuse as the &quot;user&quot;</span>
+curl.exe<span class="w"> </span>-s<span class="w"> </span>-i<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:10004/dispatch<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;caller token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-Delegated-User-Token: &lt;app token in the user slot&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;task&quot;:&quot;status&quot;}&#39;</span>
+</code></pre></div>
+
+<p><strong>Expected:</strong> HTTP <strong>403</strong>, <code>denial_reason: delegated_token_not_a_user</code>.</p>
+<p><strong>Why it holds:</strong> the rider-token check runs <code>is_app_token</code> on the delegated token and refuses
+anything with <code>idtyp=app</code>. A user token never has that claim, so an app-only token can't
+masquerade as one. You cannot fabricate a human out of a token that says, on its face, that
+it's an app.</p>
+<p><strong>Read the code:</strong> <code>verify_delegated_user</code> (<code>agent_common/principal.py:152-180</code>) — the
+<code>is_app_token</code> guard that raises <code>delegated_token_not_a_user</code>, then the blocklist check. The
+gateway calls this same shared function (Act 06's reuse point).</p>
+<hr />
+<h2 id="73-call-an-agent-that-doesnt-know-you">7.3 — Call an agent that doesn't know you</h2>
+<p><strong>Attack:</strong> the gateway is <em>not</em> in the orchestrator's allowed-callers list (the call graph is
+event-trigger→orchestrator, not gateway→orchestrator). Mint a gateway-identity token for the
+orchestrator and call it.</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>docs/walkthrough/scripts/mint_agent_token.py<span class="w"> </span>--as<span class="w"> </span>gateway<span class="w"> </span>--for<span class="w"> </span>orchestrator<span class="w"> </span>--print-token
+curl.exe<span class="w"> </span>-s<span class="w"> </span>-i<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:10004/dispatch<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;gateway-as-caller token&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;task&quot;:&quot;status&quot;}&#39;</span>
+</code></pre></div>
+
+<p><strong>Expected:</strong> HTTP <strong>403</strong>, <code>denial_reason: unknown_agent</code> — assuming the gateway even <em>can</em>
+mint a token for the orchestrator. (If gateway→orchestrator was never granted <code>Agent.Invoke</code> in
+Act 04 §5, Entra won't mint the token at all and you'll get a minting error instead — also a
+correct refusal, one layer earlier.)</p>
+<p><strong>Why it holds:</strong> even a perfectly valid, correctly-audienced agent token is refused if the
+caller isn't on the callee's allow-list. Identity being genuine is not the same as being
+authorized. The allow-list is <code>registry.allowed_callers_for("orchestrator")</code>, which returns
+only <code>event-trigger</code>.</p>
+<p><strong>Read the code:</strong> <code>verify_agent_claims</code> (<code>agent_common/principal.py:91-149</code>) — the
+<code>caller not in allowed_callers</code> check raising <code>unknown_agent</code>; the list comes from
+<code>registry.allowed_callers_for</code> (<code>agent_common/registry.py:89-101</code>).</p>
+<hr />
+<h2 id="74-forge-a-token-outright">7.4 — Forge a token outright</h2>
+<p><strong>Attack:</strong> the classic JWT forgeries — <code>alg=none</code> (a token with no signature), and HS256
+key-confusion (signing with the provider's <em>public</em> key as if it were an HMAC secret). These
+are the attacks that break systems which check claims before signatures.</p>
+<p>You don't need to hand-craft these; the unit suite already does, adversarially. Run them
+targeted and read them:</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/test_agent_registry.py<span class="w"> </span>-v<span class="w"> </span>-k<span class="w"> </span><span class="s2">&quot;alg_none or hs256 or forged&quot;</span>
+</code></pre></div>
+
+<p><strong>Expected:</strong> all pass — meaning the forgeries are all <strong>rejected</strong> before any claim is read.</p>
+<p><strong>Why it holds:</strong> the validator pins <code>algorithms=["RS256"]</code> and verifies the signature against
+the provider's JWKS public keys <em>first</em>. <code>alg=none</code> is refused because no signature verifies;
+HS256-with-public-key is refused because the token wasn't signed with the private key. This is
+the "signature first, claims second" rule — <code>azp</code>/<code>roles</code>/<code>aud</code> are attacker-supplied strings
+until the signature check passes, so the check must come first.</p>
+<p><strong>Read the code:</strong> <code>agent_common/jwt_validator.py:114-136</code> — <code>jwt.decode(..., algorithms=["RS256"], ...)</code>
+and the per-key retry loop. The tests are in <code>tests/test_agent_registry.py</code> (search for
+<code>alg_none</code>, <code>hs256_confusion</code>, <code>forged</code>).</p>
+<hr />
+<h2 id="75-run-the-whole-integration-suite">7.5 — Run the whole integration suite</h2>
+<p>Everything above is a spot-check. The 14-test integration suite is the systematic version — it
+exercises the machine chain, the delegated chain, OBO narrowing, and the replay refusal against
+your <strong>real tenant</strong>.</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span>integration<span class="w"> </span>-v
+</code></pre></div>
+
+<p><strong>Expected:</strong> with Act 04 fully done, these run and pass. If something's unconfigured, they
+<strong>skip with a reason</strong> rather than fail — e.g. "AGENT_ORCHESTRATOR_CLIENT_ID not set" or
+"orchestrator not running at :10004" or "TEST_ADMIN_TOKEN has expired." Read the skip messages;
+they're written to point you at the exact missing piece.</p>
+<p><strong>One honest caveat</strong> (from <code>CLAUDE.md</code>): these integration tests were written but, at least as
+of this walkthrough, had never been run against a live tenant — nothing had yet <em>proven</em> Entra
+accepts a certificate assertion from these registrations. When you run them, you are closing
+that gap for real. The open <code>groups</code> question from Act 06 is one of the things they settle.</p>
+<p><strong>Read the code:</strong> <code>tests/test_multi_agent_integration.py</code> — every test is marked
+<code>pytest.mark.integration</code>; the module docstring is candid that these can't be mutation-tested,
+and each assertion is cross-checked against the code it exercises.</p>
+<hr />
+<h2 id="architecture-decision-signature-first-and-fail-closed-everywhere">Architecture decision — signature-first, and fail-closed everywhere</h2>
+<p><strong>What was chosen:</strong> verify the cryptographic signature before reading any claim, and make every
+ambiguous case a refusal rather than an admission.</p>
+<p><strong>The alternative:</strong> read claims first for a fast-path decision (e.g. "if <code>azp</code> isn't a known
+agent, reject early without the expensive signature check"), and treat missing/ambiguous data
+leniently to avoid false denials.</p>
+<p><strong>Why signature-first:</strong> before the signature is verified, every claim is just bytes the
+attacker chose. A fast-path that reads <code>azp</code> first is reading an attacker-controlled string; any
+decision made on it is meaningless, and worse, it can leak information (timing, different error
+messages) about what the system would accept. Signature-first means the <em>only</em> thing you act on
+before verification is "does this verify," and everything else waits behind it.</p>
+<p><strong>Why fail-closed:</strong> the recurring temptation in identity code is a helpful fallback — "no
+<code>idtyp</code>, probably a machine"; "OBO failed, proceed without the user token"; "unknown agent, give
+it the default role." Each one turns a <em>failure</em> into a silent <em>downgrade</em> to a different, often
+weaker, security posture — with a 200 and nothing to say so. This system refuses instead:
+missing <code>idtyp</code> → treat as human and refuse the agent call; failed exchange → the hop fails;
+unknown agent → no role. You occasionally pay for it with a denial that needs a config fix (the
+whole of Act 04's checkpoints exist to surface those early), but you never pay for it with a
+guarantee that quietly stopped holding.</p>
+<p><strong>The trade-off:</strong> stricter, louder, more setup, more denials-that-are-really-misconfigurations.
+In exchange, there is no input — forged, replayed, fabricated, or merely malformed — that
+converts into a smaller-than-intended set of checks.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-07">Checkpoint — Act 07</h3>
+<p><strong>You have now proven:</strong> cross-hop replay → 401 <code>validation_failed</code> (and you know why not
+403); fabricated human → 403 <code>delegated_token_not_a_user</code>; uninvited caller → 403
+<code>unknown_agent</code>; and outright forgeries rejected before claims are read.</p>
+<p><strong>You now understand:</strong> signature-first ordering, fail-closed as a deliberate posture, and why
+a genuine identity still isn't authorization.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"Every attack — replay, fabrication, impersonation, forgery —
+hits a check that runs before the thing it's trying to exploit, and every ambiguous case is a
+refusal, so there's no input that buys you fewer checks than intended."</em></p>
+</blockquote>
+<p>Next: <a href="08-orchestration-security.html">Act 08 — orchestration security, synthesized</a>. Put the whole
+picture together.</p>
+</article>
+<footer class="pager"><a class="prev" href="06-delegated-chain.html">&larr; Act 06 — Delegated chain</a><a class="next" href="08-orchestration-security.html">Act 08 — Orchestration security &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

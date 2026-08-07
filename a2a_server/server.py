@@ -21,10 +21,27 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from dev_config import is_auth_disabled, get_section, DEV_BYPASS_TOKEN
 
+from agent_common import registry
+from agent_common.config import load_blocked_users
+from agent_common.principal import (
+    AgentAuthError,
+    Principal,
+    derive_principal,
+    is_app_token,
+    verify_agent_claims,
+    verify_delegated_user,
+)
+
 # Context variables for passing auth data to agent executor
 current_user_claims: ContextVar[dict] = ContextVar("current_user_claims", default={})
 current_access_token: ContextVar[str] = ContextVar("current_access_token", default="")
 current_assumed_role: ContextVar[str] = ContextVar("current_assumed_role", default="")
+# Multi-agent: who is calling, and on whose behalf. Set for every authenticated
+# request — machine or human — so downstream code has one thing to branch on
+# rather than inferring principal type from the shape of the claims.
+current_principal: ContextVar[Principal | None] = ContextVar(
+    "current_principal", default=None
+)
 
 # Configure logging
 LOG_DIR = Path(__file__).parent.parent / "logs"
@@ -74,8 +91,10 @@ A2A_SERVER_PORT = int(os.getenv("A2A_SERVER_PORT", 10000))
 ADK_SERVER_URL = f"http://localhost:{os.getenv('ADK_SERVER_PORT', 10001)}"
 FRONTEND_PORT = os.getenv("FRONTEND_PORT", 10003)
 
-# Access control configuration
-BLOCKED_USERS = [u.strip() for u in os.getenv("BLOCKED_USERS", "").split(",") if u.strip()]
+# Access control configuration. The peer agent and orchestrator each read the
+# same list and check it themselves — see agent_common/config.py for why the
+# check is duplicated but the parsing is not.
+BLOCKED_USERS = load_blocked_users()
 ALLOWED_GROUPS = [
     os.getenv("ADMIN_GROUP_ID"),
     os.getenv("DEVELOPER_GROUP_ID"),
@@ -539,6 +558,72 @@ def _auth_error(request: Request, status_code: int, error: str, message: str,
     )
 
 
+def authorize_agent_caller(claims: dict) -> None:
+    """Authorize a machine caller. Raises AgentAuthError on any failure.
+
+    Agent tokens carry no group claims — they are authorized by app role and
+    audience instead. This is the branch that lets an agent past the gateway's
+    group check.
+
+    The claims must already have had their signature, issuer and expiry
+    verified by `token_validator.validate` — everything here is a check on the
+    contents of an already-authentic token.
+    """
+    gateway = registry.get_agent("gateway")
+    verify_agent_claims(
+        claims=claims,
+        expected_audience=gateway.audience,
+        allowed_callers=registry.allowed_callers_for("gateway"),
+        required_role=registry.REQUIRED_ROLE,
+    )
+
+
+class HumanDenial:
+    """A refusal of a human principal, in a form both entry paths can return."""
+
+    def __init__(self, status_code: int, error: str, message: str, denial_reason: str):
+        self.status_code = status_code
+        self.error = error
+        self.message = message
+        self.denial_reason = denial_reason
+
+
+def authorize_human_claims(claims: dict) -> HumanDenial | None:
+    """The gateway's ACL for a human principal. None when authorized.
+
+    Called from BOTH entry paths — a human presenting their own token, and a
+    human whose token rides along with an agent's in X-Delegated-User-Token.
+    Sharing one implementation is the point: if the delegated path had its own
+    (or none), an agent holding Agent.Invoke would become a way around the
+    gateway's blocklist and group rules for every user in the tenant.
+    """
+    user_id = claims.get("sub", "")
+    if user_id in BLOCKED_USERS:
+        logger.warning("Blocked user attempted access: %s", user_id)
+        return HumanDenial(403, "access_denied",
+                           "Your account has been blocked", "blocked_user")
+
+    provider = _detect_provider(claims)
+    if provider == "cognito":
+        user_groups = claims.get("cognito:groups", [])
+        allowed = COGNITO_ALLOWED_GROUPS
+    else:
+        user_groups = claims.get("groups", [])
+        allowed = ALLOWED_GROUPS
+    logger.debug("User groups (%s): %s", provider, user_groups)
+
+    if not allowed:
+        logger.warning("No allowed groups configured for provider %s — denying access", provider)
+        return HumanDenial(403, "access_denied",
+                           "Agent access control not configured", "no_group_configuration")
+    if not any(g in allowed for g in user_groups):
+        logger.warning("User %s not in allowed groups. Has: %s, Allowed: %s",
+                       user_id, user_groups, allowed)
+        return HumanDenial(403, "access_denied",
+                           "Not a member of any authorized group", "no_group_membership")
+    return None
+
+
 # Paths that don't require authentication
 PUBLIC_PATHS = frozenset([
     "/.well-known/agent.json",
@@ -598,45 +683,86 @@ async def auth_middleware(request: Request, call_next):
     token = auth_header[7:]
     logger.debug("Extracted Bearer token (length: %d)", len(token))
 
+    # NOTE: this try/except covers TOKEN VALIDATION ONLY. `call_next` is
+    # deliberately outside it — running the downstream handler in here would
+    # turn any application error into a 401 with a denial_reason, sending
+    # whoever reads the log to debug authentication instead of the real crash.
     try:
         claims = await token_validator.validate(token)
-        user_id = claims.get("sub", "")
-        logger.info("Token validated for user: %s", claims.get('preferred_username', user_id))
 
-        # Check if user is blocked
-        if user_id in BLOCKED_USERS:
-            logger.warning("Blocked user attempted access: %s", user_id)
-            return _auth_error(request, 403, "access_denied",
-                               "Your account has been blocked", "blocked_user")
+        # Machine caller: an agent acting on its own or on a user's behalf. It
+        # has no group claims, so the human check below cannot apply — it is
+        # authorized by app role and audience instead.
+        if is_app_token(claims):
+            try:
+                authorize_agent_caller(claims)
+            except AgentAuthError as e:
+                logger.warning("Agent caller rejected (%s): %s", e.denial_reason, e.message)
+                return _auth_error(request, 403, "access_denied", e.message, e.denial_reason)
 
-        # Check group membership (provider-aware)
-        provider = _detect_provider(claims)
-        if provider == "cognito":
-            user_groups = claims.get("cognito:groups", [])
-            allowed = COGNITO_ALLOWED_GROUPS
+            # A delegated user token may ride alongside. It is validated with
+            # the same machinery as any user token — an agent cannot fabricate
+            # one — and then held to exactly the ACL that user would face
+            # presenting it directly.
+            delegated_token = request.headers.get("X-Delegated-User-Token", "")
+            delegated_claims = None
+            if delegated_token:
+                try:
+                    delegated_claims = await token_validator.validate(delegated_token)
+                except Exception as e:
+                    logger.warning("Delegated user token invalid: %s", e)
+                    return _auth_error(request, 401, "auth_failed",
+                                       "Delegated user token is invalid", "validation_failed")
+
+                # The two rider-token checks every agent enforces (it is a
+                # user at all; the user is not blocked) — the same shared
+                # implementation the orchestrator and peer call, so the three
+                # services cannot drift apart.
+                try:
+                    verify_delegated_user(delegated_claims, BLOCKED_USERS)
+                except AgentAuthError as e:
+                    logger.warning("Delegated user token refused (%s): %s",
+                                   e.denial_reason, e.message)
+                    return _auth_error(request, 403, "access_denied",
+                                       e.message, e.denial_reason)
+
+                denial = authorize_human_claims(delegated_claims)
+                if denial is not None:
+                    return _auth_error(request, denial.status_code, denial.error,
+                                       denial.message, denial.denial_reason)
+
+            principal = derive_principal(claims, delegated_claims, delegated_token or None)
+            logger.info("Agent %s authorized (principal=%s)",
+                        principal.agent_id, principal.principal_type)
+
+            current_principal.set(principal)
+            current_user_claims.set(delegated_claims or claims)
+            current_access_token.set(delegated_token or token)
+            current_assumed_role.set(request.headers.get("X-Assume-Role", ""))
+            request.state.user_claims = delegated_claims or claims
+            request.state.access_token = delegated_token or token
+
         else:
-            user_groups = claims.get("groups", [])
-            allowed = ALLOWED_GROUPS
-        logger.debug("User groups (%s): %s", provider, user_groups)
+            # Human caller: authorized by group membership, as before.
+            user_id = claims.get("sub", "")
+            logger.info("Token validated for user: %s",
+                        claims.get('preferred_username', user_id))
 
-        if not allowed:
-            logger.warning("No allowed groups configured for provider %s — denying access", provider)
-            return _auth_error(request, 403, "access_denied",
-                               "Agent access control not configured", "no_group_configuration")
-        if not any(g in allowed for g in user_groups):
-            logger.warning("User %s not in allowed groups. Has: %s, Allowed: %s", user_id, user_groups, allowed)
-            return _auth_error(request, 403, "access_denied",
-                               "Not a member of any authorized group", "no_group_membership")
+            denial = authorize_human_claims(claims)
+            if denial is not None:
+                return _auth_error(request, denial.status_code, denial.error,
+                                   denial.message, denial.denial_reason)
 
-        logger.debug("Access control passed, storing claims in request state")
-        # Store claims in request state for the agent executor
-        request.state.user_claims = claims
-        request.state.access_token = token
+            logger.debug("Access control passed, storing claims in request state")
+            # Store claims in request state for the agent executor
+            request.state.user_claims = claims
+            request.state.access_token = token
 
-        # Also set context variables for the agent executor
-        current_user_claims.set(claims)
-        current_access_token.set(token)
-        current_assumed_role.set(request.headers.get("X-Assume-Role", ""))
+            # Also set context variables for the agent executor
+            current_principal.set(derive_principal({}, claims, token))
+            current_user_claims.set(claims)
+            current_access_token.set(token)
+            current_assumed_role.set(request.headers.get("X-Assume-Role", ""))
 
     except jwt.ExpiredSignatureError:
         logger.warning("Token has expired")

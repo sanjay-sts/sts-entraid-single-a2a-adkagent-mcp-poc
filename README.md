@@ -2,6 +2,12 @@
 
 A secure, multi-tier AI agent system where user identity propagates from frontend authentication through the agent layer down to resource APIs. The architecture enforces access control at three independent levels, providing defense in depth.
 
+> **New here, or want to test the whole thing yourself?** Start with the hands-on
+> [**walkthrough**](docs/walkthrough/README.md) — a guided, scenario-by-scenario path (human
+> login → agents → adversarial tests) that you run yourself, with the exact commands, expected
+> output, code references, and the architecture decision behind each mechanism. A companion
+> [code tour](docs/walkthrough/CODE-TOUR.md) reads the code in the order that makes it click.
+
 ## Table of Contents
 
 - [System Design](#system-design)
@@ -808,11 +814,35 @@ uv run python a2a_server/server.py
 cd frontend && npm start
 ```
 
+#### Multi-agent testbed (optional)
+
+Requires the one-time Entra setup in `docs/ENTRA_AGENT_SETUP.md` and generated
+certificates. Without them the services still start, but every agent-to-agent
+call is refused.
+
+```bash
+# Terminal 5: Peer agent (subagent 2)
+uv run python peer_agent/server.py
+
+# Terminal 6: Orchestrator
+uv run python orchestrator_agent/server.py
+
+# Fire a machine-to-machine (event-triggered) dispatch — no human involved
+uv run python event_trigger.py --task status
+```
+
+`event_trigger.py` exits `0` only if the chain resolved a *machine* principal.
+It exits `1` if it could not run, `2` if the orchestrator refused the dispatch,
+and `3` if the dispatch succeeded but a human turned up in a chain that is
+supposed to have none.
+
 ### 5. Access Application
 
 - Frontend: http://localhost:10003
 - A2A Gateway: http://localhost:10000
 - Agent Card: http://localhost:10000/.well-known/agent-card.json
+- Orchestrator: http://localhost:10004 (multi-agent testbed)
+- Peer agent: http://localhost:10005 (multi-agent testbed)
 
 ---
 

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 03 — MCP Security Up Close</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li class="active"><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-03-mcp-security-up-close">Act 03 — MCP Security Up Close</h1>
+<p><strong>Needs:</strong> the same four services and login as Act 01.</p>
+<p><strong>Goal of this act:</strong> stop going through the frontend and talk to the <strong>MCP server directly</strong>.
+You'll prove it doesn't trust the agent that normally calls it, see exactly how it's secured
+today (bearer JWT, several verifiers in a deliberate order), understand the honest trade-offs
+versus the alternatives (a static API key; the MCP spec's OAuth 2.1 + PKCE + Dynamic Client
+Registration), and see the one real gap that this design leaves open.</p>
+<p>This is the act where "no hop trusts a hop it cannot see" stops being a slogan and becomes
+something you can poke with <code>curl</code>.</p>
+<hr />
+<h2 id="31-attack-the-mcp-server-directly">3.1 — Attack the MCP server directly</h2>
+<p>The MCP endpoint is <code>http://localhost:10002/mcp</code> — a stateless streamable-HTTP endpoint. The
+ADK agent normally calls it, but nothing stops <em>you</em> from calling it. That's the point: MCP
+must defend itself, because in a real deployment the network is not a trust boundary.</p>
+<p><strong>No token → refused.</strong> An MCP call needs a session-initialising <code>initialize</code> request. Send
+one with no <code>Authorization</code> header:</p>
+<div class="codehilite"><pre><span></span><code>curl.exe<span class="w"> </span>-s<span class="w"> </span>-i<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:10002/mcp<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Accept: application/json, text/event-stream&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;initialize&quot;,&quot;params&quot;:{&quot;protocolVersion&quot;:&quot;2024-11-05&quot;,&quot;capabilities&quot;:{},&quot;clientInfo&quot;:{&quot;name&quot;:&quot;probe&quot;,&quot;version&quot;:&quot;0&quot;}}}&#39;</span>
+</code></pre></div>
+
+<p><strong>Expected:</strong> an HTTP <strong>401</strong>. No token, no entry — the request never reaches a tool.</p>
+<p><strong>Garbage token → refused.</strong> Same call with <code>-H "Authorization: Bearer not-a-real-token"</code> →
+still <strong>401</strong>. The token fails signature verification against the provider JWKS; a
+made-up string has no valid signature.</p>
+<p><strong>A real token → accepted.</strong> Take the admin token you copied in Act 01, and add both
+<code>-H "Authorization: Bearer $TOKEN"</code> and <code>-H "X-Assume-Role: admin"</code>. Now the <code>initialize</code>
+succeeds and you can go on to <code>tools/list</code>. You just did, by hand, what the ADK agent does on
+every call — and the MCP server treated your call exactly as it treats the agent's, because
+it re-verifies from scratch either way.</p>
+<p><strong>What you've proven:</strong> the MCP server does not trust the ADK agent. It re-validates the
+token itself. If the agent were compromised and tried to call a tool with a forged or absent
+token, MCP would refuse it at the door — the same door it just refused <em>you</em> at.</p>
+<p><strong>Read the code:</strong> the endpoint config is <code>mcp_server/server.py:985-990</code>; the auth stack that
+produced those 401s is <code>_build_auth</code> at <code>:160</code>.</p>
+<hr />
+<h2 id="32-how-mcp-is-secured-today-verifiers-in-a-deliberate-order">3.2 — How MCP is secured today: verifiers in a deliberate order</h2>
+<p>MCP uses FastMCP's <code>MultiAuth</code>, which holds a list of verifiers and accepts a token if <strong>any
+one</strong> of them accepts it — <em>first success wins</em>. That "first wins" is why the order is not
+cosmetic; it's a security property.</p>
+<figure class="diagram" title="Click to open zoomable view"><pre class="mermaid">flowchart TD
+    TOK[&quot;Bearer token arrives at /mcp&quot;]
+    V1{&quot;1. Entra human verifier&lt;br/&gt;AzureJWTVerifier&lt;br/&gt;required_scopes = access_as_user&quot;}
+    V2{&quot;2. Cognito verifier&lt;br/&gt;JWTVerifier&quot;}
+    V3{&quot;3. Agent verifier&lt;br/&gt;_AgentTokenVerifier&lt;br/&gt;requires idtyp == &#x27;app&#x27;&quot;}
+    OK[&quot;Accepted → UserContextMiddleware resolves role&quot;]
+    NO[&quot;401 — no verifier accepted it&quot;]
+
+    TOK --&gt; V1
+    V1 --&gt;|&quot;human token WITH access_as_user&quot;| OK
+    V1 --&gt;|&quot;no&quot;| V2
+    V2 --&gt;|&quot;valid Cognito token&quot;| OK
+    V2 --&gt;|&quot;no&quot;| V3
+    V3 --&gt;|&quot;app-only token (idtyp=app)&quot;| OK
+    V3 --&gt;|&quot;no&quot;| NO
+</pre><figcaption>click diagram to zoom</figcaption></figure>
+<p><em>(Source: <a href="assets/mcp-auth-order.mmd"><code>assets/mcp-auth-order.mmd</code></a>. The real list has a fourth
+verifier — an Entra </em><em>v1.0</em><em> fallback right after the v2.0 one — for the case where Graph
+returns a <code>sts.windows.net</code> v1.0 token. It's omitted above to keep the idea clear.)</em></p>
+<p>The genuinely clever piece is the <strong>agent verifier, ordered last, that demands <code>idtyp=app</code></strong>.
+Here's why it has to be exactly that:</p>
+<ul>
+<li>The human verifiers require the scope <code>access_as_user</code>. That scope check is a real gate — a
+  human token without it should be refused.</li>
+<li>An <em>agent</em> (app-only) token never has <code>scp</code> at all — it carries <code>roles</code>, not scopes. So it
+  can never satisfy the human verifiers, and would be refused with a bare 401, and the whole
+  machine path into MCP would be dead.</li>
+<li>So you add a verifier that accepts app-only tokens. But if that verifier had <em>no</em> scope
+  requirement and came <em>first</em>, a <strong>human</strong> token that's missing <code>access_as_user</code> could slip
+  through it and skip the scope gate entirely.</li>
+<li>The fix: the agent verifier accepts <strong>only</strong> tokens with <code>idtyp=app</code>, which a human token
+  never has. It therefore cannot be the thing that lets a human dodge the scope check. It's
+  not redundant with the verifiers above it — removing it silently drops a check for every
+  human.</li>
+</ul>
+<p><strong>Read the code:</strong> <code>_AgentTokenVerifier</code> is <code>mcp_server/server.py:135-158</code> — it calls the
+parent Azure verifier, then rejects anything that isn't <code>is_app_token</code>. The ordering and the
+comment explaining it are in <code>_build_auth</code> at <code>:195-201</code>.</p>
+<hr />
+<h2 id="33-architecture-decision-bearer-jwt-forwarding-vs-api-key-vs-oauth-21-pkce-dcr">3.3 — Architecture decision: bearer-JWT-forwarding vs API key vs OAuth 2.1 + PKCE + DCR</h2>
+<p>This is the big one, and the honest framing matters: <strong>this repo forwards upstream-verified
+JWTs. It does not implement PKCE or Dynamic Client Registration.</strong> This section compares the
+three approaches so you can explain <em>why</em> the repo chose what it did — not walk you through a
+PKCE flow that isn't here.</p>
+<p><strong>Option A — a static API key on the MCP server.</strong> The agent holds a secret; MCP checks it.</p>
+<ul>
+<li><em>Buys you:</em> dead-simple. One string to configure.</li>
+<li><em>Costs you:</em> the key proves the <em>caller service</em> is allowed, and nothing else. It carries
+  <strong>no user identity</strong> — so the whole reason this system exists (a specific human's identity
+  reaching the tool and the resource) is gone. A leaked key is a full compromise with no
+  per-user blast-radius limit and nothing to revoke short of rotating for everyone. There's
+  no audience, no expiry semantics, no "on behalf of."</li>
+</ul>
+<p><strong>Option B — the MCP spec's OAuth 2.1 + PKCE + Dynamic Client Registration.</strong> The MCP
+authorization spec envisions an MCP server as an OAuth <em>resource server</em> with its own
+<em>authorization server</em>: unknown clients register themselves at runtime (DCR), run an
+authorization-code flow with PKCE (the proof-key extension that stops an intercepted auth code
+from being redeemed by anyone but the original client), and present the resulting access
+token.</p>
+<ul>
+<li><em>Buys you:</em> the right model when <strong>third-party, untrusted MCP clients</strong> you didn't write
+  need to discover your server and get themselves authorized without a human pre-registering
+  each one. PKCE protects public clients (desktop apps, SPAs) that can't hold a secret. DCR
+  removes the manual "an admin registers every client" step.</li>
+<li><em>Costs you:</em> you're now running an authorization server (or delegating to one) with client
+  registration, consent, and token issuance. That's a lot of surface for a closed system where
+  you already know every caller.</li>
+</ul>
+<p><strong>Option C — what this repo does: forward upstream-verified JWTs.</strong> The user authenticates
+once at the frontend against Entra (or Cognito). That token — or, deeper in, a token
+audience-narrowed for the specific callee — is forwarded, and each service re-verifies it
+against the provider's JWKS.</p>
+<ul>
+<li><em>Buys you:</em> the user's identity propagates end to end, so Gate 2 and Gate 3 can make
+  <em>per-user</em> decisions. Every service is a resource server validating a signature it can check
+  offline against cached JWKS — no shared secret, no central token-issuing service of your own,
+  no runtime client registration. Every hop can narrow the audience so a captured token can't
+  be replayed elsewhere.</li>
+<li><em>Costs you:</em> it assumes a <strong>first-party, closed</strong> mesh — every service trusts the same
+  identity provider(s), and callers are known ahead of time (the agent registry, Act 04). It is
+  <em>not</em> the model for letting arbitrary third-party MCP clients show up; for that you'd want
+  Option B.</li>
+</ul>
+<p><strong>The decision:</strong> this is a first-party internal system whose entire purpose is propagating a
+known user's identity through known services. Option C fits that exactly; Option A throws away
+the identity; Option B solves a problem (untrusted client onboarding) this system doesn't
+have. If the requirement ever changes to "third-party clients integrate with our MCP server,"
+that's when Option B earns its complexity — and it's a separate build, not a config flag.</p>
+<hr />
+<h2 id="34-the-gap-this-design-leaves-open-see-it-for-yourself">3.4 — The gap this design leaves open (see it for yourself)</h2>
+<p>Option C's superpower is per-hop audience narrowing — but here it stops one hop short, and
+you can watch it happen.</p>
+<p>Decode the token the MCP server actually accepts (the admin token from Act 01, in the Token
+Inspector or any JWT decoder) and look at <code>aud</code>. It names the <strong>gateway's</strong> app registration —
+because the MCP server <em>shares the gateway's app registration</em> rather than having its own.</p>
+<p>So the token MCP validates was minted for the gateway, not for MCP. Per-hop narrowing —
+"every callee gets a token minted for exactly itself" — is what stops a captured token from
+being replayed at the next service. Because MCP doesn't have its own identity, the narrowing
+chain doesn't extend to it: the token that reaches MCP is the same audience the gateway holds.
+This is a <strong>confused-deputy gap</strong> — it predates the agent work and is documented as a known
+limitation in <code>CLAUDE.md</code> and <code>HANDOFF.md</code>. The Phase 2 fix is to give the MCP server its own
+app registration so the gateway→MCP hop narrows like every other hop.</p>
+<p><strong>Why it isn't catastrophic today:</strong> MCP still fully verifies signature, issuer, audience and
+expiry, and still enforces role at Gate 2. The gap is specifically that the <em>anti-replay</em>
+property is weaker for this one hop — not that the hop is unauthenticated.</p>
+<p><strong>Read the code / docs:</strong> the shared-registration fact is visible in <code>_build_auth</code> using the
+same <code>CLIENT_ID</code> as the gateway; the limitation is written up in <code>CLAUDE.md</code> (Known
+Limitations) and <code>HANDOFF.md</code> (#22).</p>
+<hr />
+<h2 id="architecture-decision-stateless-mcp-the-six-contextvar-rule-revisited">Architecture decision — stateless MCP + the six-ContextVar rule, revisited</h2>
+<p>Act 01 introduced the six MCP <code>ContextVar</code>s. Act 03 is where the <em>machine</em> branch makes the
+"set them all, every path" rule concrete. When a machine principal calls MCP,
+<code>_resolve_machine_context</code> (<code>mcp_server/server.py</code>) must set <code>current_principal_type</code> to
+<code>"machine"</code> and <code>current_agent_id</code>, <strong>and</strong> blank out the human-only vars (<code>current_user_email</code>
+etc.). If it set only its own two vars, a leftover <code>current_user_email</code> from a previous human
+request — remember, stateless HTTP reuses contexts — would make a machine call look like it
+had a human's email attached. Every branch sets the full set for exactly this reason.</p>
+<p>You'll exercise that machine branch directly in Act 05.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-03">Checkpoint — Act 03</h3>
+<p><strong>You have now proven:</strong> the MCP server re-verifies every token itself (no token → 401,
+garbage → 401, real token → in), independent of who's calling.</p>
+<p><strong>You now understand:</strong> the verifier ordering and why the <code>idtyp=app</code> agent verifier keeps
+the human scope-check honest; the three ways to secure an MCP server and why this one chose
+JWT-forwarding; and the confused-deputy gap from MCP sharing the gateway's app registration.</p>
+<p><strong>Explain it in one sentence:</strong> <em>"The MCP server is its own resource server — it trusts a
+signature from the identity provider, not the service that called it — which is why a leaked
+API key model wouldn't do and why every hop re-checks the JWT."</em></p>
+</blockquote>
+<p>Next: <a href="04-agent-tier-setup.html">Act 04 — agent-tier setup</a>. Time to give the agents their own
+identities. This one needs tenant admin.</p>
+</article>
+<footer class="pager"><a class="prev" href="02-denials-by-gate.html">&larr; Act 02 — Denials by gate</a><a class="next" href="04-agent-tier-setup.html">Act 04 — Agent-tier setup &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>

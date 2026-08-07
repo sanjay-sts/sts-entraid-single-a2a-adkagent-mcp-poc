@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 06 — The Delegated Chain (A Human Rides the Agents)</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+<p class="sidebar-title">Walkthrough</p>
+<ul>
+<li><a href="index.html">Home — start here</a></li>
+<li><a href="00-big-picture.html">Act 00 — The big picture</a></li>
+<li><a href="01-golden-thread.html">Act 01 — Golden thread</a></li>
+<li><a href="02-denials-by-gate.html">Act 02 — Denials by gate</a></li>
+<li><a href="03-mcp-security.html">Act 03 — MCP security</a></li>
+<li><a href="04-agent-tier-setup.html">Act 04 — Agent-tier setup</a></li>
+<li><a href="05-machine-chain.html">Act 05 — Machine chain</a></li>
+<li class="active"><a href="06-delegated-chain.html">Act 06 — Delegated chain</a></li>
+<li><a href="07-adversarial.html">Act 07 — Adversarial</a></li>
+<li><a href="08-orchestration-security.html">Act 08 — Orchestration security</a></li>
+<li><a href="09-cognito.html">Act 09 — Cognito</a></li>
+<li><a href="CODE-TOUR.html">Code tour</a></li>
+</ul>
+</nav>
+<main class="content">
+<article>
+<h1 id="act-06-the-delegated-chain-a-human-rides-the-agents">Act 06 — The Delegated Chain (A Human Rides the Agents)</h1>
+<p><strong>Needs:</strong> Act 04 complete, including §6 (OBO enabled). The peer + orchestrator running.</p>
+<p><strong>Goal of this act:</strong> put a human back in — but this time behind the <em>agents</em>. You'll take a
+real user token, have the orchestrator carry that human's identity to its subagents by
+<strong>exchanging</strong> it per hop (never forwarding it), and watch the gateway confirm it still sees
+the <em>human</em>, not the agent. This is the hardest and most interesting path in the system, and
+the one carrying the project's last open question.</p>
+<hr />
+<h2 id="61-send-a-humans-identity-through-the-orchestrator">6.1 — Send a human's identity through the orchestrator</h2>
+<p>First, get a real user token: sign in to the frontend as admin (Act 01), open the Token
+Inspector, copy the raw token, and put it in <code>.env</code> as <code>TEST_ADMIN_TOKEN</code> (it lasts ~1 hour).</p>
+<p>Then run the helper script this walkthrough ships:</p>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>docs/walkthrough/scripts/delegated_dispatch.py
+</code></pre></div>
+
+<p>What it does (and what you should read it to see): it takes your user token, uses the
+<strong>gateway's</strong> <code>DelegatedTokenExchanger</code> to OBO-exchange it into a token narrowed for the
+<strong>orchestrator</strong>, then calls the orchestrator's <code>/dispatch</code> with two headers —
+<code>Authorization: Bearer &lt;the event-trigger agent token&gt;</code> and
+<code>X-Delegated-User-Token: &lt;the exchanged user token&gt;</code>.</p>
+<p><strong>Expected output</strong> — the orchestrator now reports a <em>delegated</em> principal:</p>
+<div class="codehilite"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;principal_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delegated&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;acting_agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;AGENT_ORCHESTRATOR_CLIENT_ID&gt;&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;on_behalf_of&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AdeleV@...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;subagents&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;peer&quot;</span><span class="p">:</span><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;principal_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delegated&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;on_behalf_of&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AdeleV@...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;gateway&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Compare this side by side with Act 05's output. Same chain, same agents, same code — the <em>only</em>
+difference is that a user token rode along, and that alone flipped <code>principal_type</code> from
+<code>machine</code> to <code>delegated</code> and filled in <code>on_behalf_of</code>. That's the derived-principal rule paying
+off: you didn't configure a mode, you added a token.</p>
+<hr />
+<h2 id="62-the-gateway-leg-sees-the-human-not-the-agent">6.2 — The gateway leg sees the human, not the agent</h2>
+<p>Look at the <code>gateway</code> subagent leg. The orchestrator called the gateway's <code>/me</code> on the human's
+behalf, and <code>/me</code> reports whichever principal the <em>gateway</em> resolved. It names <strong>the human</strong> —
+<code>AdeleV@…</code> — even though the immediate caller on the wire was the orchestrator agent.</p>
+<p>That's the whole delegation guarantee in one observable fact: three services deep, through two
+agent hops, the gateway still correctly attributes the request to the original human. The agent
+is the <em>actor</em>; the human is the <em>subject</em>.</p>
+<p><strong>Read the code:</strong> <code>orchestrator_agent/server.py</code> — <code>_authenticate</code> derives the principal
+(agent claims + optional rider user claims), and <code>_dispatch_to</code> calls <code>build_agent_headers</code> to
+produce the two headers for each callee. The peer's mirror is <code>peer_agent/server.py</code>
+<code>_authenticate</code> / <code>_call_gateway</code>.</p>
+<hr />
+<h2 id="63-decode-the-exchanged-token-narrowed-audience-same-human">6.3 — Decode the exchanged token: narrowed audience, same human</h2>
+<p>This is the payoff. Take the <code>X-Delegated-User-Token</code> the script sent to the orchestrator
+(print it from the script, or capture it) and decode it. Compare it to your original token:</p>
+<table>
+<thead>
+<tr>
+<th>Claim</th>
+<th>Your original token</th>
+<th>The exchanged token</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aud</code></td>
+<td>the <strong>gateway</strong> app</td>
+<td>the <strong>orchestrator</strong> app (<code>api://&lt;orch&gt;</code> or bare)</td>
+</tr>
+<tr>
+<td><code>sub</code></td>
+<td>the human</td>
+<td><strong>the same human</strong></td>
+</tr>
+<tr>
+<td><code>iss</code></td>
+<td>your tenant</td>
+<td>your tenant</td>
+</tr>
+</tbody>
+</table>
+<figure class="diagram" title="Click to open zoomable view"><pre class="mermaid">sequenceDiagram
+    participant U as Human (browser)
+    participant GW as Gateway
+    participant ORCH as Orchestrator
+    participant PEER as Peer
+    U-&gt;&gt;GW: user token — aud = gateway, sub = human
+    Note over GW: Exchange (OBO) for the next hop — never forward
+    GW-&gt;&gt;ORCH: X-Delegated-User-Token — aud = ORCHESTRATOR, sub = human
+    Note over ORCH: Exchange again, per callee
+    ORCH-&gt;&gt;PEER: X-Delegated-User-Token — aud = PEER, sub = human
+</pre><figcaption>click diagram to zoom</figcaption></figure>
+<p><em>(Source: <a href="assets/token-exchange.mmd"><code>assets/token-exchange.mmd</code></a>.)</em></p>
+<p>Two properties, both visible in that table:</p>
+<ul>
+<li><strong><code>aud</code> changed</strong> — the token is narrowed to exactly the next callee. A token captured at the
+  orchestrator hop can't be replayed at the peer, because its audience names the orchestrator
+  and the peer checks audience. This is the anti-replay property, per hop.</li>
+<li><strong><code>sub</code> did not change</strong> — the human stays the subject through every exchange. The agent
+  never <em>becomes</em> the user; it acts <em>for</em> them. Delegation, not impersonation.</li>
+</ul>
+<p><strong>Read the code:</strong> <code>agent_common/tokens.py</code> — <code>DelegatedTokenExchanger.exchange_for</code> (the OBO
+call that produces the narrowed token), and <code>agent_common/outbound.py</code>
+<code>build_agent_headers</code> — the single place that decides to <em>exchange</em> rather than <em>forward</em>, with
+the reasoning in its docstring.</p>
+<hr />
+<h2 id="64-the-open-question-this-act-answers-does-the-exchanged-token-carry-groups">6.4 — The open question this act answers: does the exchanged token carry <code>groups</code>?</h2>
+<p>Here is the one thing the project genuinely didn't know until someone ran this on a real tenant
+— and now you can settle it. Decode the exchanged user token and look for a <strong><code>groups</code></strong> claim.</p>
+<p><strong>Why it matters:</strong> the gateway authorizes a <em>human</em> by group membership (Gate 1). When the
+orchestrator calls the gateway on the human's behalf, the gateway runs the human through
+<code>authorize_human_claims</code>, which reads <code>groups</code>. If the OBO-exchanged token <strong>carries <code>groups</code></strong>,
+the delegated call sails through Gate 1. If OBO <strong>drops <code>groups</code></strong>, the gateway sees a
+group-less human and denies with <code>no_group_membership</code> — and the delegated-through-agents path
+is blocked until you fix it.</p>
+<p><strong>Both outcomes, and what to do:</strong></p>
+<ul>
+<li><strong><code>groups</code> present</strong> → nothing to do; the delegated chain is complete. Note it in your run
+  log so the limitation can be closed.</li>
+<li><strong><code>groups</code> absent</strong> → the fix is to add the <strong><code>groups</code> optional claim</strong> to the <em>agent</em> app
+  registrations (the ones minting the exchanged token), so the OBO token carries group
+  membership forward. This is a §4-style optional-claim edit, applied to the agent apps.</li>
+</ul>
+<p><strong>Read the code:</strong> <code>authorize_human_claims</code> (<code>a2a_server/server.py:591-628</code>) is what consumes
+<code>groups</code> on the delegated leg — the same function the human path uses in Act 02, called here
+for the rider token. That reuse is deliberate: if the delegated path had its own ACL, an agent
+holding <code>Agent.Invoke</code> would become a way around the gateway's group rules for every user.</p>
+<hr />
+<h2 id="architecture-decision-exchange-per-hop-never-forward">Architecture decision — exchange per hop, never forward</h2>
+<p><strong>What was chosen:</strong> at each hop, the calling agent <strong>exchanges</strong> the inbound user token for a
+new one audience-narrowed to the specific callee (<code>build_agent_headers</code> → <code>exchange_for</code>). It
+never forwards the token it received.</p>
+<p><strong>The alternative:</strong> forward the inbound user token unchanged. Simpler — no OBO call, no extra
+Entra round-trip per hop.</p>
+<p><strong>Why exchange:</strong> the token the gateway received was minted for the <em>gateway</em>. If the gateway
+forwarded it to the orchestrator, and the orchestrator forwarded it to the peer, then a single
+captured token would be replayable at <em>every service the gateway can reach</em> — its audience says
+"gateway," and anything that accepts gateway-audience tokens would take it. Exchanging narrows
+the audience to exactly one callee at each step, so a captured token is useless one hop over.
+It also bounds a compromised callee: it can't walk a user's token any further than the single
+hop it was granted.</p>
+<p><strong>The trade-off:</strong> an OBO exchange per hop is a real Entra round-trip (cached per
+(user-token, callee) pair to soften it — the <code>DelegatedTokenExchanger</code> LRU). More latency and
+more moving parts than forwarding a string. You're buying per-hop replay containment for the
+cost of a cached token exchange. This is the single most important anti-replay mechanism in the
+agent tier, and it's why the "largest open gap" (no mTLS, Act 08) matters less than it would
+if tokens were forwarded raw.</p>
+<hr />
+<blockquote>
+<h3 id="checkpoint-act-06">Checkpoint — Act 06</h3>
+<p><strong>You have now proven:</strong> a human's identity travels through two agent hops as an
+<em>exchanged</em>, audience-narrowed token; the principal is <code>delegated</code> with the human in
+<code>on_behalf_of</code>; the gateway three services deep still attributes the request to the human;
+and you've decoded a token to see <code>aud</code> narrow while <code>sub</code> stays.</p>
+<p><strong>You now understand:</strong> exchange-not-forward and why it's the anti-replay backbone; delegation
+vs impersonation; and the answer to whether OBO carries <code>groups</code> (and the fix if it doesn't).</p>
+<p><strong>Explain it in one sentence:</strong> <em>"An agent carries a human's identity to the next agent by
+minting a fresh token scoped to just that callee, keeping the human as the subject — so the
+human's identity propagates without any single token being replayable beyond one hop."</em></p>
+</blockquote>
+<p>Next: <a href="07-adversarial.html">Act 07 — adversarial</a>. Now try to break every one of these guarantees.</p>
+</article>
+<footer class="pager"><a class="prev" href="05-machine-chain.html">&larr; Act 05 — Machine chain</a><a class="next" href="07-adversarial.html">Act 07 — Adversarial &rarr;</a></footer>
+</main>
+</div>
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bar">
+    <span>scroll to zoom &middot; drag to pan &middot; Esc to close</span>
+    <button id="lightbox-close" type="button">&times; close</button>
+  </div>
+  <div class="lightbox-stage" id="lightbox-stage"></div>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/walkthrough.js"></script>
+</body>
+</html>
